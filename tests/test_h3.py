@@ -16,7 +16,7 @@ from aioquic.h3.events import (
     DataReceived,
     HeadersReceived,
     PushCanceled,
-    PushPromiseReceived
+    PushPromiseReceived,
 )
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
