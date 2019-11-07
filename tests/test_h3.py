@@ -11,7 +11,7 @@ from aioquic.h3.connection import (
     StreamType,
     encode_frame,
 )
-from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived, PushCanceled, ConnectionShutdownInitiated
+from aioquic.h3.events import ConnectionShutdownInitiated, DataReceived, HeadersReceived, PushCanceled, PushPromiseReceived
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived

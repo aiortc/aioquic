@@ -6,13 +6,13 @@ import pylsqpack
 
 from aioquic.buffer import Buffer, BufferReadError, encode_uint_var
 from aioquic.h3.events import (
+    ConnectionShutdownInitiated
     DataReceived,
     H3Event,
     Headers,
     HeadersReceived,
-    PushPromiseReceived,
     PushCanceled,
-    ConnectionShutdownInitiated
+    PushPromiseReceived,
 )
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
