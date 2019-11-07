@@ -11,7 +11,7 @@ from aioquic.h3.connection import (
     StreamType,
     encode_frame,
 )
-from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived
+from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived, PushCanceled, ConnectionShutdownInitiated
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
@@ -744,6 +744,8 @@ class H3ConnectionTest(TestCase):
                 ],
             )
             self.assertEqual(push_stream_id_css, 15)
+            self.assertEqual(h3_server.get_latest_push_id (), 0)
+
 
             push_stream_id_js = h3_server.send_push_promise(
                 stream_id=stream_id,
@@ -755,6 +757,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
             self.assertEqual(push_stream_id_js, 19)
+            self.assertEqual(h3_server.get_latest_push_id (), 1)
 
             # send response
             h3_server.send_headers(
@@ -862,6 +865,208 @@ class H3ConnectionTest(TestCase):
                         stream_ended=True,
                     ),
                 ],
+            )
+
+    def test_send_goaway(self):
+        with client_and_server(
+            client_options={"alpn_protocols": H3_ALPN},
+            server_options={"alpn_protocols": H3_ALPN},
+        ) as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            h3_server.send_goaway ()
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual (
+                events,
+                [ConnectionShutdownInitiated (stream_id=0)]
+            )
+
+            h3_client.send_goaway ()
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual (
+                events,
+                [ConnectionShutdownInitiated (stream_id=0)]
+            )
+
+    def test_request_with_server_push(self):
+        with client_and_server(
+            client_options={"alpn_protocols": H3_ALPN},
+            server_options={"alpn_protocols": H3_ALPN},
+        ) as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # send request
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+                end_stream=True,
+            )
+
+            # receive request
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual(
+                events,
+                [
+                    HeadersReceived(
+                        headers=[
+                            (b":method", b"GET"),
+                            (b":scheme", b"https"),
+                            (b":authority", b"localhost"),
+                            (b":path", b"/"),
+                        ],
+                        stream_id=stream_id,
+                        stream_ended=True,
+                    )
+                ],
+            )
+
+            # send push promises
+            push_stream_id_css = h3_server.send_push_promise(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/app.css"),
+                ],
+            )
+            self.assertEqual(push_stream_id_css, 15)
+            self.assertEqual(h3_server.get_latest_push_id (), 0)
+
+            push_stream_id_js = h3_server.send_push_promise(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/app.js"),
+                ],
+            )
+            self.assertEqual(push_stream_id_js, 19)
+            self.assertEqual(h3_server.get_latest_push_id (), 1)
+
+            # send response
+            h3_server.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":status", b"200"),
+                    (b"content-type", b"text/html; charset=utf-8"),
+                ],
+                end_stream=False,
+            )
+            h3_server.send_data(
+                stream_id=stream_id,
+                data=b"<html><body>hello</body></html>",
+                end_stream=True,
+            )
+
+            #  fulfill push promises
+            h3_server.send_headers(
+                stream_id=push_stream_id_css,
+                headers=[(b":status", b"200"), (b"content-type", b"text/css")],
+                end_stream=False,
+            )
+            h3_server.send_data(
+                stream_id=push_stream_id_css,
+                data=b"body { color: pink }",
+                end_stream=True,
+            )
+
+            h3_server.send_headers(
+                stream_id=push_stream_id_js,
+                headers=[
+                    (b":status", b"200"),
+                    (b"content-type", b"application/javascript"),
+                ],
+                end_stream=False,
+            )
+            h3_server.send_data(
+                stream_id=push_stream_id_js, data=b"alert('howdee');", end_stream=True
+            )
+
+            # receive push promises, response and push responses
+
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual(
+                events,
+                [
+                    PushPromiseReceived(
+                        headers=[
+                            (b":method", b"GET"),
+                            (b":scheme", b"https"),
+                            (b":authority", b"localhost"),
+                            (b":path", b"/app.css"),
+                        ],
+                        push_id=0,
+                        stream_id=stream_id,
+                    ),
+                    PushPromiseReceived(
+                        headers=[
+                            (b":method", b"GET"),
+                            (b":scheme", b"https"),
+                            (b":authority", b"localhost"),
+                            (b":path", b"/app.js"),
+                        ],
+                        push_id=1,
+                        stream_id=stream_id,
+                    ),
+                    HeadersReceived(
+                        headers=[
+                            (b":status", b"200"),
+                            (b"content-type", b"text/html; charset=utf-8"),
+                        ],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    DataReceived(
+                        data=b"<html><body>hello</body></html>",
+                        stream_id=stream_id,
+                        stream_ended=True,
+                    ),
+                    HeadersReceived(
+                        headers=[(b":status", b"200"), (b"content-type", b"text/css")],
+                        push_id=0,
+                        stream_id=push_stream_id_css,
+                        stream_ended=False,
+                    ),
+                    DataReceived(
+                        data=b"body { color: pink }",
+                        push_id=0,
+                        stream_id=push_stream_id_css,
+                        stream_ended=True,
+                    ),
+                    HeadersReceived(
+                        headers=[
+                            (b":status", b"200"),
+                            (b"content-type", b"application/javascript"),
+                        ],
+                        push_id=1,
+                        stream_id=push_stream_id_js,
+                        stream_ended=False,
+                    ),
+                    DataReceived(
+                        data=b"alert('howdee');",
+                        push_id=1,
+                        stream_id=push_stream_id_js,
+                        stream_ended=True,
+                    ),
+                ],
+            )
+
+            h3_client.send_cancel_push (0)
+            h3_client.send_cancel_push (1)
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual (
+                events,
+                [PushCanceled(push_id=0), PushCanceled(push_id=1)]
             )
 
     def test_request_with_server_push_max_push_id(self):

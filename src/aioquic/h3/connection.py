@@ -11,7 +11,8 @@ from aioquic.h3.events import (
     Headers,
     HeadersReceived,
     PushPromiseReceived,
-    PushCanceled
+    PushCanceled,
+    ConnectionShutdownInitiated
 )
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
@@ -381,6 +382,9 @@ class H3Connection:
             encode_frame(FrameType.CANCEL_PUSH, encode_uint_var(push_id)),
         )
 
+    def get_latest_push_id (self):
+        return self._next_push_id - 1
+
     def _create_uni_stream(self, stream_type: int) -> int:
         """
         Create an unidirectional stream of the given type.
@@ -441,6 +445,8 @@ class H3Connection:
         elif frame_type == FrameType.CANCEL_PUSH:
             _push_id = parse_max_push_id(frame_data)
             http_events.append (PushCanceled(push_id = _push_id))
+        elif frame_type == FrameType.GOAWAY:
+            http_events.append (ConnectionShutdownInitiated (stream_id = 0))
         elif frame_type in (
             FrameType.DATA,
             FrameType.HEADERS,
