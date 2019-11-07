@@ -885,11 +885,11 @@ class H3ConnectionTest(TestCase):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
 
-            h3_server.send_goaway()
+            h3_server.close_connection()
             events = h3_transfer(quic_server, h3_client)
             self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=0)])
 
-            h3_client.send_goaway()
+            h3_client.close_connection()
             events = h3_transfer(quic_client, h3_server)
             self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=0)])
 

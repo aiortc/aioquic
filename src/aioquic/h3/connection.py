@@ -362,15 +362,6 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
-    def send_goaway(self):
-        """
-        Send GOAWAY control frame.
-        """
-        self._quic.send_stream_data(
-            self._local_control_stream_id,
-            encode_frame(FrameType.GOAWAY, encode_uint_var(0)),
-        )
-
     def send_cancel_push(self, push_id):
         """
         Send CANCEL_PUSH control frame for cancellation of a server push.
@@ -384,6 +375,15 @@ class H3Connection:
 
     def get_latest_push_id(self):
         return self._next_push_id - 1
+
+    def close_connection(self):
+        """
+        Close a connection, emitting a GOAWAY frame.
+        """
+        self._quic.send_stream_data(
+            self._local_control_stream_id,
+            encode_frame(FrameType.GOAWAY, encode_uint_var(0)),
+        )
 
     def _create_uni_stream(self, stream_type: int) -> int:
         """
