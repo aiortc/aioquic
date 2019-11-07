@@ -446,7 +446,7 @@ class H3Connection:
             _push_id = parse_max_push_id(frame_data)
             http_events.append(PushCanceled(push_id=_push_id))
         elif frame_type == FrameType.GOAWAY:
-            http_events.append (ConnectionShutdownInitiated (stream_id=0))
+            http_events.append(ConnectionShutdownInitiated(stream_id=0))
         elif frame_type in (
             FrameType.DATA,
             FrameType.HEADERS,

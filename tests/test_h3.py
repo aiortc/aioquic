@@ -879,12 +879,12 @@ class H3ConnectionTest(TestCase):
             client_options={"alpn_protocols": H3_ALPN},
             server_options={"alpn_protocols": H3_ALPN},
         ) as (quic_client, quic_server):
-            h3_client=H3Connection(quic_client)
-            h3_server=H3Connection(quic_server)
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
 
-            h3_server.send_goaway ()
+            h3_server.send_goaway()
             events = h3_transfer(quic_server, h3_client)
-            self.assertEqual (
+            self.assertEqual(
                 events,
                 [ConnectionShutdownInitiated(stream_id=0)]
             )
@@ -893,9 +893,8 @@ class H3ConnectionTest(TestCase):
             events = h3_transfer(quic_client, h3_server)
             self.assertEqual(
                 events,
-                [ConnectionShutdownInitiated (stream_id=0)]
+                [ConnectionShutdownInitiated(stream_id=0)]
             )
-
 
     def test_request_with_server_push_max_push_id(self):
         with client_and_server(
