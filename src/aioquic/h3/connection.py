@@ -6,7 +6,7 @@ import pylsqpack
 
 from aioquic.buffer import Buffer, BufferReadError, encode_uint_var
 from aioquic.h3.events import (
-    ConnectionShutdownInitiated
+    ConnectionShutdownInitiated,
     DataReceived,
     H3Event,
     Headers,
