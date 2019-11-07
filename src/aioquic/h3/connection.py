@@ -425,7 +425,9 @@ class H3Connection:
             self._stream[stream_id] = H3Stream(stream_id)
         return self._stream[stream_id]
 
-    def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> List[H3Event]:
+    def _handle_control_frame(
+        self, frame_type: int, frame_data: bytes
+    ) -> List[H3Event]:
         """
         Handle a frame received on the peer's control stream.
         """

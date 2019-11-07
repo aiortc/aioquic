@@ -875,10 +875,7 @@ class H3ConnectionTest(TestCase):
             h3_client.send_cancel_push(0)
             h3_client.send_cancel_push(1)
             events = h3_transfer(quic_client, h3_server)
-            self.assertEqual(
-                events,
-                [PushCanceled(push_id=0), PushCanceled(push_id=1)]
-            )
+            self.assertEqual(events, [PushCanceled(push_id=0), PushCanceled(push_id=1)])
 
     def test_send_goaway(self):
         with client_and_server(
@@ -890,17 +887,11 @@ class H3ConnectionTest(TestCase):
 
             h3_server.send_goaway()
             events = h3_transfer(quic_server, h3_client)
-            self.assertEqual(
-                events,
-                [ConnectionShutdownInitiated(stream_id=0)]
-            )
+            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=0)])
 
             h3_client.send_goaway()
             events = h3_transfer(quic_client, h3_server)
-            self.assertEqual(
-                events,
-                [ConnectionShutdownInitiated(stream_id=0)]
-            )
+            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=0)])
 
     def test_request_with_server_push_max_push_id(self):
         with client_and_server(

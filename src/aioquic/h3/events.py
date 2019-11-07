@@ -71,6 +71,7 @@ class PushCanceled(H3Event):
     """
     The PushCanceled event is fired when remote peer cancels server push.
     """
+
     push_id: int
     "The Push ID"
 
@@ -80,5 +81,6 @@ class ConnectionShutdownInitiated(H3Event):
     """
     The PushCanceled event is fired when remote peer cancels server push.
     """
+
     stream_id: int
     "The Strem ID of client-initialized bidirectional stream"
