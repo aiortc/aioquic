@@ -123,7 +123,8 @@ AEAD_decrypt(AEADObject *self, PyObject *args)
     }
 
     memcpy(self->nonce, self->iv, AEAD_NONCE_LENGTH);
-    for (int i = 0; i < 8; ++i) {
+    int i = 0;
+    for (; i < 8; ++i) {
         self->nonce[AEAD_NONCE_LENGTH - 1 - i] ^= (uint8_t)(pn >> 8 * i);
     }
 
@@ -165,7 +166,8 @@ AEAD_encrypt(AEADObject *self, PyObject *args)
     }
 
     memcpy(self->nonce, self->iv, AEAD_NONCE_LENGTH);
-    for (int i = 0; i < 8; ++i) {
+    int i = 0;
+    for (; i < 8; ++i) {
         self->nonce[AEAD_NONCE_LENGTH - 1 - i] ^= (uint8_t)(pn >> 8 * i);
     }
 
@@ -323,7 +325,8 @@ HeaderProtection_apply(HeaderProtectionObject *self, PyObject *args)
         self->buffer[0] ^= self->mask[0] & 0x1F;
     }
 
-    for (int i = 0; i < pn_length; ++i) {
+    int i = 0;
+    for (; i < pn_length; ++i) {
         self->buffer[pn_offset + i] ^= self->mask[1 + i];
     }
 
@@ -353,7 +356,8 @@ HeaderProtection_remove(HeaderProtectionObject *self, PyObject *args)
 
     int pn_length = (self->buffer[0] & 0x03) + 1;
     uint32_t pn_truncated = 0;
-    for (int i = 0; i < pn_length; ++i) {
+    int i = 0;
+    for (; i < pn_length; ++i) {
         self->buffer[pn_offset + i] ^= self->mask[1 + i];
         pn_truncated = self->buffer[pn_offset + i] | (pn_truncated << 8);
     }
