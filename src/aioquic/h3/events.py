@@ -82,4 +82,3 @@ class ConnectionShutdownInitiated(H3Event):
     """
     stream_id: int
     "The Strem ID of client-initialized bidirectional stream"
-

@@ -362,7 +362,7 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
-    def send_goaway (self):
+    def send_goaway(self):
         """
         Send GOAWAY control frame.
         """
@@ -371,7 +371,7 @@ class H3Connection:
             encode_frame(FrameType.GOAWAY, encode_uint_var(0)),
         )
 
-    def send_cancel_push (self, push_id):
+    def send_cancel_push(self, push_id):
         """
         Send CANCEL_PUSH control frame for cancellation of a server push.
 
@@ -382,7 +382,7 @@ class H3Connection:
             encode_frame(FrameType.CANCEL_PUSH, encode_uint_var(push_id)),
         )
 
-    def get_latest_push_id (self):
+    def get_latest_push_id(self):
         return self._next_push_id - 1
 
     def _create_uni_stream(self, stream_type: int) -> int:
@@ -444,9 +444,9 @@ class H3Connection:
             self._max_push_id = parse_max_push_id(frame_data)
         elif frame_type == FrameType.CANCEL_PUSH:
             _push_id = parse_max_push_id(frame_data)
-            http_events.append (PushCanceled(push_id = _push_id))
+            http_events.append(PushCanceled(push_id=_push_id))
         elif frame_type == FrameType.GOAWAY:
-            http_events.append (ConnectionShutdownInitiated (stream_id = 0))
+            http_events.append (ConnectionShutdownInitiated (stream_id=0))
         elif frame_type in (
             FrameType.DATA,
             FrameType.HEADERS,
@@ -744,7 +744,7 @@ class H3Connection:
                     break
                 consumed = buf.tell()
 
-                http_events.extend (self._handle_control_frame(frame_type, frame_data))
+                http_events.extend(self._handle_control_frame(frame_type, frame_data))
             elif stream.stream_type == StreamType.PUSH:
                 # fetch push id
                 if stream.push_id is None:
