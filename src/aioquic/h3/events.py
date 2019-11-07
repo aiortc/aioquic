@@ -64,3 +64,12 @@ class PushPromiseReceived(H3Event):
 
     stream_id: int
     "The Stream ID of the stream that the push is related to."
+
+
+@dataclass
+class PushCanceled(H3Event):
+    """
+    The PushCanceled event is fired when remote peer cancels server push.
+    """
+    push_id: int
+    "The Push ID"

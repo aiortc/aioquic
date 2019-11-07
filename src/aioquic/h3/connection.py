@@ -11,6 +11,7 @@ from aioquic.h3.events import (
     Headers,
     HeadersReceived,
     PushPromiseReceived,
+    PushCanceled
 )
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
@@ -360,6 +361,26 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
+    def send_goaway (self):
+        """
+        Send GOAWAY control frame.
+        """
+        self._quic.send_stream_data(
+            self._local_control_stream_id,
+            encode_frame(FrameType.GOAWAY, encode_uint_var(0)),
+        )
+
+    def send_cancel_push (self, push_id):
+        """
+        Send CANCEL_PUSH control frame for cancellation of a server push.
+
+        :param push_id: server push id to cancel
+        """
+        self._quic.send_stream_data(
+            self._local_control_stream_id,
+            encode_frame(FrameType.CANCEL_PUSH, encode_uint_var(push_id)),
+        )
+
     def _create_uni_stream(self, stream_type: int) -> int:
         """
         Create an unidirectional stream of the given type.
@@ -400,10 +421,12 @@ class H3Connection:
             self._stream[stream_id] = H3Stream(stream_id)
         return self._stream[stream_id]
 
-    def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> None:
+    def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> List[H3Event]:
         """
         Handle a frame received on the peer's control stream.
         """
+        http_events: List[H3Event] = []
+
         if frame_type == FrameType.SETTINGS:
             settings = parse_settings(frame_data)
             encoder = self._encoder.apply_settings(
@@ -415,6 +438,9 @@ class H3Connection:
             if self._is_client:
                 raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
             self._max_push_id = parse_max_push_id(frame_data)
+        elif frame_type == FrameType.CANCEL_PUSH:
+            _push_id = parse_max_push_id(frame_data)
+            http_events.append (PushCanceled(push_id = _push_id))
         elif frame_type in (
             FrameType.DATA,
             FrameType.HEADERS,
@@ -422,6 +448,7 @@ class H3Connection:
             FrameType.DUPLICATE_PUSH,
         ):
             raise FrameUnexpected("Invalid frame type on control stream")
+        return http_events
 
     def _handle_request_or_push_frame(
         self,
@@ -711,7 +738,7 @@ class H3Connection:
                     break
                 consumed = buf.tell()
 
-                self._handle_control_frame(frame_type, frame_data)
+                http_events.extend (self._handle_control_frame(frame_type, frame_data))
             elif stream.stream_type == StreamType.PUSH:
                 # fetch push id
                 if stream.push_id is None:
