@@ -322,7 +322,7 @@ class H3Connection:
         try:
             return self._push_map[stream_id]
         except KeyError:
-            raise AssertionError('No such stream ID')
+            raise AssertionError("No such stream ID")
 
     def send_cancel_push(self, push_id: int) -> None:
         """

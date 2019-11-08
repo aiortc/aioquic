@@ -898,7 +898,11 @@ class H3ConnectionTest(TestCase):
             events = h3_transfer(quic_server, h3_client)
             self.assertEqual(
                 events,
-                [DuplicatePushReceived(push_id=0, stream_id=stream_id, stream_ended=True)],
+                [
+                    DuplicatePushReceived(
+                        push_id=0, stream_id=stream_id, stream_ended=True
+                    )
+                ],
             )
 
             # send duplicate push previous canceled push
