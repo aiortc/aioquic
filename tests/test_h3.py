@@ -940,6 +940,8 @@ class H3ConnectionTest(TestCase):
             # send duplicate push never sent
             with self.assertRaises(AssertionError):
                 h3_server.send_duplicate_push(stream_id, 100, end_stream=False)
+            with self.assertRaises(FrameUnexpected):
+                h3_server._handle_control_frame(FrameType.DUPLICATE_PUSH, b"0x08")
 
     def test_close_connection(self):
         with client_and_server(
