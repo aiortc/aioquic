@@ -130,11 +130,11 @@ def encode_settings(settings: Dict[int, int]) -> bytes:
     return buf.data
 
 
-def parse_max_push_id(data: bytes) -> int:
+def parse_id(data: bytes) -> int:
     buf = Buffer(data=data)
-    max_push_id = buf.pull_uint_var()
+    _id = buf.pull_uint_var()
     assert buf.eof()
-    return max_push_id
+    return _id
 
 
 def parse_settings(data: bytes) -> Dict[int, int]:
@@ -454,14 +454,15 @@ class H3Connection:
         elif frame_type == FrameType.MAX_PUSH_ID:
             if self._is_client:
                 raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
-            self._max_push_id = parse_max_push_id(frame_data)
+            self._max_push_id = parse_id(frame_data)
         elif frame_type == FrameType.CANCEL_PUSH:
-            _push_id = parse_max_push_id(frame_data)
-            http_events.append(PushCanceled(push_id=_push_id))
+            http_events.append(PushCanceled(push_id=parse_id(frame_data)))
         elif frame_type == FrameType.GOAWAY:
             if not self._is_client:
                 raise FrameUnexpected("Clients must not send GOAWAY")
-            http_events.append(ConnectionShutdownInitiated(stream_id=0))
+            http_events.append(
+                ConnectionShutdownInitiated(stream_id=parse_id(frame_data))
+            )
         elif frame_type in (
             FrameType.DATA,
             FrameType.HEADERS,
@@ -502,11 +503,6 @@ class H3Connection:
             if stream.headers_recv_state == HeadersState.AFTER_TRAILERS:
                 raise FrameUnexpected("HEADERS frame is not allowed in this state")
 
-            if not self._is_client and stream.push_id is None:
-                self._max_client_init_bi_stream_id = max(
-                    stream.stream_id, self._max_client_init_bi_stream_id
-                )
-
             # try to decode HEADERS, may raise pylsqpack.StreamBlocked
             headers = self._decode_headers(stream.stream_id, frame_data)
 
@@ -537,6 +533,11 @@ class H3Connection:
                     stream_ended=stream_ended,
                 )
             )
+            if not self._is_client and stream.push_id is None:
+                self._max_client_init_bi_stream_id = max(
+                    stream.stream_id, self._max_client_init_bi_stream_id
+                )
+
         elif stream.frame_type == FrameType.PUSH_PROMISE and stream.push_id is None:
             if not self._is_client:
                 raise FrameUnexpected("Clients must not send PUSH_PROMISE")

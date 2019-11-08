@@ -885,15 +885,19 @@ class H3ConnectionTest(TestCase):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
 
+            # make requests
+            for i in range (5):
+                self._make_request(h3_client, h3_server)
             h3_server.close_connection()
             events = h3_transfer(quic_server, h3_client)
-            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=0)])
+            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=5*4-4)])
+
             h3_client.close_connection()
             events = h3_transfer(quic_client, h3_server)
             self.assertEqual(events, [])
             # Client need not send GOAWAY
             with self.assertRaises(FrameUnexpected):
-                h3_server._handle_control_frame(FrameType.GOAWAY, b"0x00")
+                h3_server._handle_control_frame(FrameType.GOAWAY, b"0x08")
 
     def test_request_with_server_push_max_push_id(self):
         with client_and_server(
