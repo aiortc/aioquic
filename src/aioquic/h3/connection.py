@@ -226,6 +226,7 @@ class H3Connection:
         self._stream: Dict[int, H3Stream] = {}
 
         self._max_push_id: Optional[int] = 8 if self._is_client else None
+        self._max_client_init_bi_stream_id: int = 0 if not self._is_client else None
         self._next_push_id: int = 0
 
         self._local_control_stream_id: Optional[int] = None
@@ -292,6 +293,23 @@ class H3Connection:
         self._quic.send_stream_data(push_stream_id, encode_uint_var(push_id))
 
         return push_stream_id
+
+    def get_latest_push_id(self) -> int:
+        """
+        Get latest push ID.
+        """
+        return self._next_push_id - 1
+
+    def send_cancel_push(self, push_id: int) -> None:
+        """
+        Send CANCEL_PUSH control frame for cancellation of a server push.
+
+        :param push_id: Server push ID to cancel
+        """
+        self._quic.send_stream_data(
+            self._local_control_stream_id,
+            encode_frame(FrameType.CANCEL_PUSH, encode_uint_var(push_id)),
+        )
 
     def send_data(self, stream_id: int, data: bytes, end_stream: bool) -> None:
         """
@@ -362,30 +380,18 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
-    def send_cancel_push(self, push_id):
-        """
-        Send CANCEL_PUSH control frame for cancellation of a server push.
-
-        :param push_id: server push id to cancel
-        """
-        self._quic.send_stream_data(
-            self._local_control_stream_id,
-            encode_frame(FrameType.CANCEL_PUSH, encode_uint_var(push_id)),
-        )
-
-    def get_latest_push_id(self):
-        return self._next_push_id - 1
-
-    def close_connection(self):
+    def close_connection(self) -> None:
         """
         Close a connection, emitting a GOAWAY frame.
+
+        :param stream_id: client-initailized latest stream ID
         """
         # client need not send GOAWAY
         if self._is_client:
             return
         self._quic.send_stream_data(
             self._local_control_stream_id,
-            encode_frame(FrameType.GOAWAY, encode_uint_var(0)),
+            encode_frame(FrameType.GOAWAY, encode_uint_var(self._max_client_init_bi_stream_id)),
         )
 
     def _create_uni_stream(self, stream_type: int) -> int:
@@ -493,6 +499,9 @@ class H3Connection:
             # check HEADERS frame is allowed
             if stream.headers_recv_state == HeadersState.AFTER_TRAILERS:
                 raise FrameUnexpected("HEADERS frame is not allowed in this state")
+
+            if not self._is_client and stream.push_id is None:
+                self._max_client_init_bi_stream_id = max(stream.stream_id, self._max_client_init_bi_stream_id)
 
             # try to decode HEADERS, may raise pylsqpack.StreamBlocked
             headers = self._decode_headers(stream.stream_id, frame_data)
