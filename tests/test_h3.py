@@ -877,7 +877,7 @@ class H3ConnectionTest(TestCase):
             events = h3_transfer(quic_client, h3_server)
             self.assertEqual(events, [PushCanceled(push_id=0), PushCanceled(push_id=1)])
 
-    def test_send_goaway(self):
+    def test_close_connection(self):
         with client_and_server(
             client_options={"alpn_protocols": H3_ALPN},
             server_options={"alpn_protocols": H3_ALPN},
@@ -888,10 +888,9 @@ class H3ConnectionTest(TestCase):
             h3_server.close_connection()
             events = h3_transfer(quic_server, h3_client)
             self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=0)])
-
-            h3_client.close_connection()
-            events = h3_transfer(quic_client, h3_server)
-            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=0)])
+            # Client need not send GOAWAY
+            with self.assertRaises(FrameUnexpected):
+                h3_server._handle_control_frame(FrameType.GOAWAY, b'0x00')
 
     def test_request_with_server_push_max_push_id(self):
         with client_and_server(

@@ -380,6 +380,8 @@ class H3Connection:
         """
         Close a connection, emitting a GOAWAY frame.
         """
+        if self._is_client: # client need not send GOAWAY
+            return
         self._quic.send_stream_data(
             self._local_control_stream_id,
             encode_frame(FrameType.GOAWAY, encode_uint_var(0)),
@@ -448,6 +450,8 @@ class H3Connection:
             _push_id = parse_max_push_id(frame_data)
             http_events.append(PushCanceled(push_id=_push_id))
         elif frame_type == FrameType.GOAWAY:
+            if not self._is_client:
+                raise FrameUnexpected("Clients must not send GOAWAY")
             http_events.append(ConnectionShutdownInitiated(stream_id=0))
         elif frame_type in (
             FrameType.DATA,
