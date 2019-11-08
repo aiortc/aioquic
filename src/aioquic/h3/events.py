@@ -79,7 +79,8 @@ class PushCanceled(H3Event):
 @dataclass
 class ConnectionShutdownInitiated(H3Event):
     """
-    The PushCanceled event is fired when remote peer cancels server push.
+    The ConnectionShutdownInitiated event is fired when server
+    sends GOAWAY control frame to a client.
     """
 
     stream_id: int
