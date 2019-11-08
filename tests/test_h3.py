@@ -894,48 +894,19 @@ class H3ConnectionTest(TestCase):
 
             # send duplicate push
             # send response
-            h3_server.send_duplicate_push(stream_id, 0, end_stream=False)
-            h3_server.send_headers(
-                stream_id=stream_id,
-                headers=[
-                    (b":status", b"200"),
-                    (b"content-type", b"text/html; charset=utf-8"),
-                ],
-                end_stream=False,
-            )
-            h3_server.send_data(
-                stream_id=stream_id,
-                data=b"<html><body>hello</body></html>",
-                end_stream=True,
-            )
-
+            h3_server.send_duplicate_push(stream_id, 0)
             events = h3_transfer(quic_server, h3_client)
             self.assertEqual(
                 events,
-                [
-                    DuplicatePushReceived(push_id=0, stream_id=stream_id, stream_ended=False),
-                    HeadersReceived(
-                        headers=[
-                            (b":status", b"200"),
-                            (b"content-type", b"text/html; charset=utf-8"),
-                        ],
-                        stream_id=stream_id,
-                        stream_ended=False,
-                    ),
-                    DataReceived(
-                        data=b"<html><body>hello</body></html>",
-                        stream_id=stream_id,
-                        stream_ended=True,
-                    ),
-                ],
+                [DuplicatePushReceived(push_id=0, stream_id=stream_id, stream_ended=True)],
             )
 
             # send duplicate push previous canceled push
             with self.assertRaises(AssertionError):
-                h3_server.send_duplicate_push(stream_id, 1, end_stream=False)
+                h3_server.send_duplicate_push(stream_id, 1)
             # send duplicate push never sent
             with self.assertRaises(AssertionError):
-                h3_server.send_duplicate_push(stream_id, 100, end_stream=False)
+                h3_server.send_duplicate_push(stream_id, 100)
             # client must not send DUPLICATE_PUSH
             with self.assertRaises(FrameUnexpected):
                 h3_server._handle_control_frame(FrameType.DUPLICATE_PUSH, b"0x08")

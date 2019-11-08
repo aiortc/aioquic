@@ -297,9 +297,7 @@ class H3Connection:
         self._push_map [push_stream_id] = push_id
         return push_stream_id
 
-    def send_duplicate_push(
-        self, stream_id: int, push_id: int, end_stream: bool = False
-    ) -> None:
+    def send_duplicate_push(self, stream_id: int, push_id: int) -> None:
         """
         Send a duplicate push ID.
 
@@ -314,7 +312,7 @@ class H3Connection:
         self._quic.send_stream_data(
             stream_id,
             encode_frame(FrameType.DUPLICATE_PUSH, encode_uint_var(push_id)),
-            end_stream,
+            True,
         )
 
     def get_push_id(self, stream_id: int) -> int:
