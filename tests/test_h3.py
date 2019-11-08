@@ -886,7 +886,7 @@ class H3ConnectionTest(TestCase):
             h3_server = H3Connection(quic_server)
 
             # make requests
-            for i in range (5):
+            for i in range(5):
                 self._make_request(h3_client, h3_server)
             h3_server.close_connection()
             events = h3_transfer(quic_server, h3_client)
