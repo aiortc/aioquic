@@ -296,7 +296,7 @@ class H3Connection:
 
         return push_stream_id
 
-    def send_duplicate_push(self, stream_id: int, push_id: int, end_stream: bool) -> None:
+    def send_duplicate_push(self, stream_id: int, push_id: int, end_stream: bool = False) -> None:
         """
         Send a duplicate push ID.
 
