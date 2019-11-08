@@ -296,7 +296,9 @@ class H3Connection:
 
         return push_stream_id
 
-    def send_duplicate_push(self, stream_id: int, push_id: int, end_stream: bool = False) -> None:
+    def send_duplicate_push(
+        self, stream_id: int, push_id: int, end_stream: bool = False
+    ) -> None:
         """
         Send a duplicate push ID.
 
@@ -304,7 +306,9 @@ class H3Connection:
         """
         assert not self._is_client, "Only servers may send a duplicate push."
         assert push_id < self._max_push_id, "Given push ID is never sent"
-        assert push_id not in self._canceled_push_ids, "Given push ID is canceled by client"
+        assert (
+            push_id not in self._canceled_push_ids
+        ), "Given push ID is canceled by client"
 
         self._quic.send_stream_data(
             stream_id,

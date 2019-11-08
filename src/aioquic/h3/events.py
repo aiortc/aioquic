@@ -72,6 +72,7 @@ class DuplicatePushReceived(H3Event):
     The DuplicatedPushReceived event is fired whenever a duplicated push ID has been
     received from the remote peer.
     """
+
     stream_id: int
     "The Stream ID of the stream that the push is related to."
 

@@ -913,11 +913,7 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(
                 events,
                 [
-                    DuplicatePushReceived(
-                        push_id=0,
-                        stream_id=stream_id,
-                        stream_ended=False,
-                    ),
+                    DuplicatePushReceived(push_id=0, stream_id=stream_id, stream_ended=False),
                     HeadersReceived(
                         headers=[
                             (b":status", b"200"),
@@ -940,6 +936,7 @@ class H3ConnectionTest(TestCase):
             # send duplicate push never sent
             with self.assertRaises(AssertionError):
                 h3_server.send_duplicate_push(stream_id, 100, end_stream=False)
+            # client must not send DUPLICATE_PUSH
             with self.assertRaises(FrameUnexpected):
                 h3_server._handle_control_frame(FrameType.DUPLICATE_PUSH, b"0x08")
 
