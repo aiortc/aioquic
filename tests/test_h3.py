@@ -890,7 +890,7 @@ class H3ConnectionTest(TestCase):
                 self._make_request(h3_client, h3_server)
             h3_server.close_connection()
             events = h3_transfer(quic_server, h3_client)
-            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=5*4-4)])
+            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=5 * 4 - 4)])
 
             h3_client.close_connection()
             events = h3_transfer(quic_client, h3_server)
