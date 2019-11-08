@@ -890,7 +890,7 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=0)])
             # Client need not send GOAWAY
             with self.assertRaises(FrameUnexpected):
-                h3_server._handle_control_frame(FrameType.GOAWAY, b'0x00')
+                h3_server._handle_control_frame(FrameType.GOAWAY, b"0x00")
 
     def test_request_with_server_push_max_push_id(self):
         with client_and_server(
