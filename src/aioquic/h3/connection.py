@@ -391,7 +391,9 @@ class H3Connection:
             return
         self._quic.send_stream_data(
             self._local_control_stream_id,
-            encode_frame(FrameType.GOAWAY, encode_uint_var(self._max_client_init_bi_stream_id)),
+            encode_frame(
+                FrameType.GOAWAY, encode_uint_var(self._max_client_init_bi_stream_id)
+            )
         )
 
     def _create_uni_stream(self, stream_type: int) -> int:
@@ -501,7 +503,9 @@ class H3Connection:
                 raise FrameUnexpected("HEADERS frame is not allowed in this state")
 
             if not self._is_client and stream.push_id is None:
-                self._max_client_init_bi_stream_id = max(stream.stream_id, self._max_client_init_bi_stream_id)
+                self._max_client_init_bi_stream_id = max(
+                    stream.stream_id, self._max_client_init_bi_stream_id
+                )
 
             # try to decode HEADERS, may raise pylsqpack.StreamBlocked
             headers = self._decode_headers(stream.stream_id, frame_data)
