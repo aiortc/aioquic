@@ -294,7 +294,7 @@ class H3Connection:
         #  create push stream
         push_stream_id = self._create_uni_stream(StreamType.PUSH)
         self._quic.send_stream_data(push_stream_id, encode_uint_var(push_id))
-        self._push_map [push_stream_id] = push_id
+        self._push_map[push_stream_id] = push_id
         return push_stream_id
 
     def send_duplicate_push(self, stream_id: int, push_id: int) -> None:
@@ -319,7 +319,10 @@ class H3Connection:
         """
         Get push ID by push stream ID.
         """
-        return self._push_map.get(stream_id)
+        try:
+            return self._push_map[stream_id]
+        except KeyError:
+            raise AssertionError('No such stream ID')
 
     def send_cancel_push(self, push_id: int) -> None:
         """
@@ -408,8 +411,7 @@ class H3Connection:
         :param stream_id: client-initailized latest stream ID
         """
         # client need not send GOAWAY
-        if self._is_client:
-            return
+        assert not self._is_client, "Client must no send a goaway frame"
         self._quic.send_stream_data(
             self._local_control_stream_id,
             encode_frame(
