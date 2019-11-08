@@ -380,7 +380,8 @@ class H3Connection:
         """
         Close a connection, emitting a GOAWAY frame.
         """
-        if self._is_client: # client need not send GOAWAY
+        # client need not send GOAWAY
+        if self._is_client:
             return
         self._quic.send_stream_data(
             self._local_control_stream_id,
