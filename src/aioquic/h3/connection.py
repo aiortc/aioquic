@@ -393,7 +393,7 @@ class H3Connection:
             self._local_control_stream_id,
             encode_frame(
                 FrameType.GOAWAY, encode_uint_var(self._max_client_init_bi_stream_id)
-            )
+            ),
         )
 
     def _create_uni_stream(self, stream_type: int) -> int:
