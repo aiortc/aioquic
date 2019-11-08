@@ -14,6 +14,7 @@ from aioquic.h3.connection import (
 from aioquic.h3.events import (
     ConnectionShutdownInitiated,
     DataReceived,
+    DuplicatePushReceived,
     HeadersReceived,
     PushCanceled,
     PushPromiseReceived,
@@ -872,10 +873,73 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-            h3_client.send_cancel_push(0)
             h3_client.send_cancel_push(1)
             events = h3_transfer(quic_client, h3_server)
-            self.assertEqual(events, [PushCanceled(push_id=0), PushCanceled(push_id=1)])
+            self.assertEqual(events, [PushCanceled(push_id=1)])
+
+            # send 2nd request
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+                end_stream=True,
+            )
+            # receive request
+            h3_transfer(quic_client, h3_server)
+
+            # send duplicate push
+            # send response
+            h3_server.send_duplicate_push(stream_id, 0, end_stream=False)
+            h3_server.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":status", b"200"),
+                    (b"content-type", b"text/html; charset=utf-8"),
+                ],
+                end_stream=False,
+            )
+            h3_server.send_data(
+                stream_id=stream_id,
+                data=b"<html><body>hello</body></html>",
+                end_stream=True,
+            )
+
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual(
+                events,
+                [
+                    DuplicatePushReceived(
+                        push_id=0,
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    HeadersReceived(
+                        headers=[
+                            (b":status", b"200"),
+                            (b"content-type", b"text/html; charset=utf-8"),
+                        ],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    DataReceived(
+                        data=b"<html><body>hello</body></html>",
+                        stream_id=stream_id,
+                        stream_ended=True,
+                    ),
+                ],
+            )
+
+            # send duplicate push previous canceled push
+            with self.assertRaises(AssertionError):
+                h3_server.send_duplicate_push(stream_id, 1, end_stream=False)
+            # send duplicate push never sent
+            with self.assertRaises(AssertionError):
+                h3_server.send_duplicate_push(stream_id, 100, end_stream=False)
 
     def test_close_connection(self):
         with client_and_server(

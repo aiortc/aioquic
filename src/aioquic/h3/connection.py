@@ -8,6 +8,7 @@ from aioquic.buffer import Buffer, BufferReadError, encode_uint_var
 from aioquic.h3.events import (
     ConnectionShutdownInitiated,
     DataReceived,
+    DuplicatePushReceived,
     H3Event,
     Headers,
     HeadersReceived,
@@ -228,6 +229,7 @@ class H3Connection:
         self._max_push_id: Optional[int] = 8 if self._is_client else None
         self._max_client_init_bi_stream_id: int = 0 if not self._is_client else None
         self._next_push_id: int = 0
+        self._canceled_push_ids: Set[int] = set()
 
         self._local_control_stream_id: Optional[int] = None
         self._local_decoder_stream_id: Optional[int] = None
@@ -293,6 +295,22 @@ class H3Connection:
         self._quic.send_stream_data(push_stream_id, encode_uint_var(push_id))
 
         return push_stream_id
+
+    def send_duplicate_push(self, stream_id: int, push_id: int, end_stream: bool) -> None:
+        """
+        Send a duplicate push ID.
+
+        :param push_id: The push ID previous snet push ID.
+        """
+        assert not self._is_client, "Only servers may send a duplicate push."
+        assert push_id < self._max_push_id, "Given push ID is never sent"
+        assert push_id not in self._canceled_push_ids, "Given push ID is canceled by client"
+
+        self._quic.send_stream_data(
+            stream_id,
+            encode_frame(FrameType.DUPLICATE_PUSH, encode_uint_var(push_id)),
+            end_stream,
+        )
 
     def get_latest_push_id(self) -> int:
         """
@@ -456,7 +474,9 @@ class H3Connection:
                 raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
             self._max_push_id = parse_id(frame_data)
         elif frame_type == FrameType.CANCEL_PUSH:
-            http_events.append(PushCanceled(push_id=parse_id(frame_data)))
+            _push_id = parse_id(frame_data)
+            http_events.append(PushCanceled(push_id=_push_id))
+            self._canceled_push_ids.add(_push_id)
         elif frame_type == FrameType.GOAWAY:
             if not self._is_client:
                 raise FrameUnexpected("Clients must not send GOAWAY")
@@ -566,6 +586,18 @@ class H3Connection:
                     headers=headers, push_id=push_id, stream_id=stream.stream_id
                 )
             )
+
+        elif frame_type == FrameType.DUPLICATE_PUSH:
+            if not self._is_client:
+                raise FrameUnexpected("Clients must not send DUPLICATE_PUSH")
+            http_events.append(
+                DuplicatePushReceived(
+                    stream_id=stream.stream_id,
+                    push_id=parse_id(frame_data),
+                    stream_ended=stream_ended,
+                )
+            )
+
         elif frame_type in (
             FrameType.PRIORITY,
             FrameType.CANCEL_PUSH,
@@ -573,7 +605,6 @@ class H3Connection:
             FrameType.PUSH_PROMISE,
             FrameType.GOAWAY,
             FrameType.MAX_PUSH_ID,
-            FrameType.DUPLICATE_PUSH,
         ):
             raise FrameUnexpected(
                 "Invalid frame type on request stream"

@@ -67,6 +67,22 @@ class PushPromiseReceived(H3Event):
 
 
 @dataclass
+class DuplicatePushReceived(H3Event):
+    """
+    The DuplicatedPushReceived event is fired whenever a duplicated push ID has been
+    received from the remote peer.
+    """
+    stream_id: int
+    "The Stream ID of the stream that the push is related to."
+
+    push_id: int
+    "The Push ID of the push promise."
+
+    stream_ended: bool
+    "Whether the STREAM frame had the FIN bit set."
+
+
+@dataclass
 class PushCanceled(H3Event):
     """
     The PushCanceled event is fired when remote peer cancels server push.
