@@ -229,6 +229,7 @@ class H3Connection:
         self._max_push_id: Optional[int] = 8 if self._is_client else None
         self._max_client_init_bi_stream_id: int = 0 if not self._is_client else None
         self._next_push_id: int = 0
+        self._push_map: Dict[int, int] = {}
         self._canceled_push_ids: Set[int] = set()
 
         self._local_control_stream_id: Optional[int] = None
@@ -293,7 +294,7 @@ class H3Connection:
         #  create push stream
         push_stream_id = self._create_uni_stream(StreamType.PUSH)
         self._quic.send_stream_data(push_stream_id, encode_uint_var(push_id))
-
+        self._push_map [push_stream_id] = push_id
         return push_stream_id
 
     def send_duplicate_push(
@@ -316,11 +317,11 @@ class H3Connection:
             end_stream,
         )
 
-    def get_latest_push_id(self) -> int:
+    def get_push_id(self, stream_id: int) -> int:
         """
-        Get latest push ID.
+        Get push ID by push stream ID.
         """
-        return self._next_push_id - 1
+        return self._push_map.get(stream_id)
 
     def send_cancel_push(self, push_id: int) -> None:
         """

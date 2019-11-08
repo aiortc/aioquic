@@ -751,7 +751,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
             self.assertEqual(push_stream_id_css, 15)
-            self.assertEqual(h3_server.get_latest_push_id(), 0)
+            self.assertEqual(h3_server.get_push_id(push_stream_id_css), 0)
 
             push_stream_id_js = h3_server.send_push_promise(
                 stream_id=stream_id,
@@ -763,7 +763,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
             self.assertEqual(push_stream_id_js, 19)
-            self.assertEqual(h3_server.get_latest_push_id(), 1)
+            self.assertEqual(h3_server.get_push_id(push_stream_id_js), 1)
 
             # send response
             h3_server.send_headers(
