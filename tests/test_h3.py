@@ -752,6 +752,8 @@ class H3ConnectionTest(TestCase):
             )
             self.assertEqual(push_stream_id_css, 15)
             self.assertEqual(h3_server.get_push_id(push_stream_id_css), 0)
+            with self.assertRaises(AssertionError):
+                h3_server.get_push_id(100)
 
             push_stream_id_js = h3_server.send_push_promise(
                 stream_id=stream_id,
@@ -914,6 +916,12 @@ class H3ConnectionTest(TestCase):
             # client must not send DUPLICATE_PUSH
             with self.assertRaises(AssertionError):
                 h3_client.send_duplicate_push(stream_id, 0)
+            with self.assertRaises(FrameUnexpected):
+                h3_server._handle_request_or_push_frame(
+                    FrameType.DUPLICATE_PUSH, b'0x00', None, True
+                )
+            with self.assertRaises(FrameUnexpected):
+                h3_server._handle_control_frame(FrameType.GOAWAY, b'0x0')
 
     def test_close_connection(self):
         with client_and_server(

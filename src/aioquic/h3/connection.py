@@ -563,7 +563,7 @@ class H3Connection:
                     stream.stream_id, self._max_client_init_bi_stream_id
                 )
 
-        elif stream.frame_type == FrameType.PUSH_PROMISE and stream.push_id is None:
+        elif frame_type == FrameType.PUSH_PROMISE and stream.push_id is None:
             if not self._is_client:
                 raise FrameUnexpected("Clients must not send PUSH_PROMISE")
             frame_buf = Buffer(data=frame_data)
@@ -591,7 +591,6 @@ class H3Connection:
                     headers=headers, push_id=push_id, stream_id=stream.stream_id
                 )
             )
-
         elif frame_type == FrameType.DUPLICATE_PUSH:
             if not self._is_client:
                 raise FrameUnexpected("Clients must not send DUPLICATE_PUSH")
