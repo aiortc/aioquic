@@ -420,9 +420,7 @@ class H3Connection:
             ), "Unknown stream ID"
         self._quic.send_stream_data(
             self._local_control_stream_id,
-            encode_frame(
-                FrameType.GOAWAY, encode_uint_var(last_stream_id)
-            ),
+            encode_frame(FrameType.GOAWAY, encode_uint_var(last_stream_id)),
         )
 
     def _create_uni_stream(self, stream_type: int) -> int:

@@ -918,7 +918,7 @@ class H3ConnectionTest(TestCase):
                 h3_client.send_duplicate_push(stream_id, 0)
             with self.assertRaises(FrameUnexpected):
                 h3_server._handle_request_or_push_frame(
-                    FrameType.DUPLICATE_PUSH, b'0x00', None, True
+                    FrameType.DUPLICATE_PUSH, b"0x00", None, True
                 )
 
     def test_close_connection(self):
@@ -946,7 +946,7 @@ class H3ConnectionTest(TestCase):
             with self.assertRaises(AssertionError):
                 h3_client.close_connection()
             with self.assertRaises(FrameUnexpected):
-                h3_server._handle_control_frame(FrameType.GOAWAY, b'0x0')
+                h3_server._handle_control_frame(FrameType.GOAWAY, b"0x0")
 
     def test_request_with_server_push_max_push_id(self):
         with client_and_server(
