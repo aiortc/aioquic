@@ -101,4 +101,4 @@ class ConnectionShutdownInitiated(H3Event):
     """
 
     stream_id: int
-    "The Strem ID of client-initialized bidirectional stream"
+    "The Stream ID of client-initialized bi-directional stream that can be received before connection is closed"
