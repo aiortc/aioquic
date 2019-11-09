@@ -408,7 +408,7 @@ class H3Connection:
         """
         Close a connection, emitting a GOAWAY frame.
 
-        :param last_stream: Client-initailized stream ID that can be responsed before connection is closed.
+        :param last_stream_id: Client-initailized stream ID that can be responsed before connection is closed.
         """
         # client need not send GOAWAY
         assert not self._is_client, "Client must no send a goaway frame"
