@@ -591,6 +591,7 @@ class H3Connection:
                     headers=headers, push_id=push_id, stream_id=stream.stream_id
                 )
             )
+
         elif frame_type == FrameType.DUPLICATE_PUSH:
             if not self._is_client:
                 raise FrameUnexpected("Clients must not send DUPLICATE_PUSH")
