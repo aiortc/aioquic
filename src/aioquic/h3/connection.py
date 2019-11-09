@@ -404,24 +404,24 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
-    def close_connection(self, last_stream: int = None) -> None:
+    def close_connection(self, last_stream_id: int = None) -> None:
         """
         Close a connection, emitting a GOAWAY frame.
 
-        :param stream_id: client-initailized latest stream ID
+        :param last_stream: Client-initailized stream ID that can be responsed before connection is closed.
         """
         # client need not send GOAWAY
         assert not self._is_client, "Client must no send a goaway frame"
-        if last_stream is None:
-            last_stream = self._max_client_init_bi_stream_id
+        if last_stream_id is None:
+            last_stream_id = self._max_client_init_bi_stream_id
         else:
             assert (
-                last_stream <= self._max_client_init_bi_stream_id
+                last_stream_id <= self._max_client_init_bi_stream_id
             ), "Unknown stream ID"
         self._quic.send_stream_data(
             self._local_control_stream_id,
             encode_frame(
-                FrameType.GOAWAY, encode_uint_var(last_stream)
+                FrameType.GOAWAY, encode_uint_var(last_stream_id)
             ),
         )
 
