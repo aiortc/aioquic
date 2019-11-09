@@ -404,7 +404,7 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
-    def close_connection(self) -> None:
+    def close_connection(self, last_stream: int = None) -> None:
         """
         Close a connection, emitting a GOAWAY frame.
 
@@ -412,10 +412,16 @@ class H3Connection:
         """
         # client need not send GOAWAY
         assert not self._is_client, "Client must no send a goaway frame"
+        if last_stream is None:
+            last_stream = self._max_client_init_bi_stream_id
+        else:
+            assert (
+                last_stream <= self._max_client_init_bi_stream_id
+            ), "Unknown stream ID"
         self._quic.send_stream_data(
             self._local_control_stream_id,
             encode_frame(
-                FrameType.GOAWAY, encode_uint_var(self._max_client_init_bi_stream_id)
+                FrameType.GOAWAY, encode_uint_var(last_stream)
             ),
         )
 
@@ -591,6 +597,7 @@ class H3Connection:
                     headers=headers, push_id=push_id, stream_id=stream.stream_id
                 )
             )
+
         elif frame_type == FrameType.DUPLICATE_PUSH:
             if not self._is_client:
                 raise FrameUnexpected("Clients must not send DUPLICATE_PUSH")

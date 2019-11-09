@@ -936,6 +936,12 @@ class H3ConnectionTest(TestCase):
             events = h3_transfer(quic_server, h3_client)
             self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=5 * 4 - 4)])
 
+            h3_server.close_connection(4)
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=4)])
+            with self.assertRaises(AssertionError):
+                h3_server.close_connection(100)
+
             # client need not send GOAWAY
             with self.assertRaises(AssertionError):
                 h3_client.close_connection()
