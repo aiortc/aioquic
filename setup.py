@@ -31,10 +31,13 @@ setuptools.setup(
         "Topic :: Internet :: WWW/HTTP",
     ],
     ext_modules=[
-        setuptools.Extension("aioquic._buffer", sources=["src/aioquic/_buffer.c"]),
+        setuptools.Extension("aioquic._buffer", sources=["src/aioquic/_buffer.c"],
+            extra_compile_args=["-std=c99"]
+            ),
         setuptools.Extension(
-            "aioquic._crypto", libraries=["crypto"], sources=["src/aioquic/_crypto.c"]
-        ),
+            "aioquic._crypto", libraries=["crypto"], sources=["src/aioquic/_crypto.c"],
+            extra_compile_args=["-std=c99"]
+            ),
     ],
     package_dir={"": "src"},
     package_data={"aioquic": ["py.typed", "_buffer.pyi", "_crypto.pyi"]},
