@@ -64,3 +64,14 @@ class PushPromiseReceived(H3Event):
 
     stream_id: int
     "The Stream ID of the stream that the push is related to."
+
+
+@dataclass
+class ConnectionShutdownInitiated(H3Event):
+    """
+    The ConnectionShutdownInitiated event is fired when server
+    sends GOAWAY control frame to a client.
+    """
+
+    stream_id: int
+    "The Stream ID of client-initialized bi-directional stream that can be received before connection is closed"

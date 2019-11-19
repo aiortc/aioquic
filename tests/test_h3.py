@@ -11,7 +11,12 @@ from aioquic.h3.connection import (
     StreamType,
     encode_frame,
 )
-from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived
+from aioquic.h3.events import (
+    ConnectionShutdownInitiated,
+    DataReceived,
+    HeadersReceived,
+    PushPromiseReceived
+)
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
@@ -926,6 +931,33 @@ class H3ConnectionTest(TestCase):
                         (b":path", b"/8.css"),
                     ],
                 )
+
+    def test_close_connection(self):
+        with client_and_server(
+            client_options={"alpn_protocols": H3_ALPN},
+            server_options={"alpn_protocols": H3_ALPN},
+        ) as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # make requests
+            for i in range(5):
+                self._make_request(h3_client, h3_server)
+            h3_server.close_connection()
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=5 * 4 - 4)])
+
+            h3_server.close_connection(4)
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=4)])
+            with self.assertRaises(AssertionError):
+                h3_server.close_connection(100)
+
+            # client need not send GOAWAY
+            with self.assertRaises(AssertionError):
+                h3_client.close_connection()
+            with self.assertRaises(FrameUnexpected):
+                h3_server._handle_control_frame(FrameType.GOAWAY, b"0x4")
 
     def test_send_data_after_trailers(self):
         """

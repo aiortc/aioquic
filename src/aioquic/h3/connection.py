@@ -6,6 +6,7 @@ import pylsqpack
 
 from aioquic.buffer import Buffer, BufferReadError, encode_uint_var
 from aioquic.h3.events import (
+    ConnectionShutdownInitiated,
     DataReceived,
     H3Event,
     Headers,
@@ -128,11 +129,11 @@ def encode_settings(settings: Dict[int, int]) -> bytes:
     return buf.data
 
 
-def parse_max_push_id(data: bytes) -> int:
+def parse_id(data: bytes) -> int:
     buf = Buffer(data=data)
-    max_push_id = buf.pull_uint_var()
+    _id = buf.pull_uint_var()
     assert buf.eof()
-    return max_push_id
+    return _id
 
 
 def parse_settings(data: bytes) -> Dict[int, int]:
@@ -224,6 +225,7 @@ class H3Connection:
         self._stream: Dict[int, H3Stream] = {}
 
         self._max_push_id: Optional[int] = 8 if self._is_client else None
+        self._max_client_init_bi_stream_id: int = 0 if not self._is_client else None
         self._next_push_id: int = 0
 
         self._local_control_stream_id: Optional[int] = None
@@ -360,6 +362,24 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
+    def close_connection(self, last_stream_id: int = None) -> None:
+        """
+        Close a connection, emitting a GOAWAY frame.
+        :param last_stream_id: Client-initailized stream ID that can be responsed before connection is closed.
+        """
+        # client need not send GOAWAY frame
+        assert not self._is_client, "Client must not send a goaway frame"
+        if last_stream_id is None:
+            last_stream_id = self._max_client_init_bi_stream_id
+        else:
+            assert (
+                last_stream_id <= self._max_client_init_bi_stream_id
+            ), "Unknown stream ID"
+        self._quic.send_stream_data(
+            self._local_control_stream_id,
+            encode_frame(FrameType.GOAWAY, encode_uint_var(last_stream_id)),
+        )
+
     def _create_uni_stream(self, stream_type: int) -> int:
         """
         Create an unidirectional stream of the given type.
@@ -400,10 +420,13 @@ class H3Connection:
             self._stream[stream_id] = H3Stream(stream_id)
         return self._stream[stream_id]
 
-    def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> None:
+    def _handle_control_frame(
+        self, frame_type: int, frame_data: bytes
+    ) -> List[H3Event]:
         """
         Handle a frame received on the peer's control stream.
         """
+        http_events: List[H3Event] = []
         if frame_type == FrameType.SETTINGS:
             settings = parse_settings(frame_data)
             encoder = self._encoder.apply_settings(
@@ -414,7 +437,13 @@ class H3Connection:
         elif frame_type == FrameType.MAX_PUSH_ID:
             if self._is_client:
                 raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
-            self._max_push_id = parse_max_push_id(frame_data)
+            self._max_push_id = parse_id(frame_data)
+        elif frame_type == FrameType.GOAWAY:
+            if not self._is_client:
+                raise FrameUnexpected("Clients must not send GOAWAY")
+            http_events.append(
+                ConnectionShutdownInitiated(stream_id=parse_id(frame_data))
+            )
         elif frame_type in (
             FrameType.DATA,
             FrameType.HEADERS,
@@ -422,6 +451,7 @@ class H3Connection:
             FrameType.DUPLICATE_PUSH,
         ):
             raise FrameUnexpected("Invalid frame type on control stream")
+        return http_events
 
     def _handle_request_or_push_frame(
         self,
@@ -456,6 +486,11 @@ class H3Connection:
 
             # try to decode HEADERS, may raise pylsqpack.StreamBlocked
             headers = self._decode_headers(stream.stream_id, frame_data)
+
+            if not self._is_client and stream.push_id is None:
+                self._max_client_init_bi_stream_id = max(
+                    stream.stream_id, self._max_client_init_bi_stream_id
+                )
 
             # log frame
             if self._quic_logger is not None:
@@ -710,8 +745,7 @@ class H3Connection:
                 except BufferReadError:
                     break
                 consumed = buf.tell()
-
-                self._handle_control_frame(frame_type, frame_data)
+                http_events.extend(self._handle_control_frame(frame_type, frame_data))
             elif stream.stream_type == StreamType.PUSH:
                 # fetch push id
                 if stream.push_id is None:
