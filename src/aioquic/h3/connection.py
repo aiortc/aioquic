@@ -17,7 +17,6 @@ from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
 from aioquic.quic.events import QuicEvent, StreamDataReceived
 from aioquic.quic.logger import QuicLoggerTrace
-from aioquic.quic.packet import QuicErrorCode
 
 logger = logging.getLogger("http3")
 
