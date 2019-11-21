@@ -17,6 +17,7 @@ from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
 from aioquic.quic.events import QuicEvent, StreamDataReceived
 from aioquic.quic.logger import QuicLoggerTrace
+from aioquic.quic.packet import QuicErrorCode
 
 logger = logging.getLogger("http3")
 
@@ -129,7 +130,7 @@ def encode_settings(settings: Dict[int, int]) -> bytes:
     return buf.data
 
 
-def parse_id(data: bytes) -> int:
+def parse_uint_var(data: bytes) -> int:
     buf = Buffer(data=data)
     _id = buf.pull_uint_var()
     assert buf.eof()
@@ -225,7 +226,7 @@ class H3Connection:
         self._stream: Dict[int, H3Stream] = {}
 
         self._max_push_id: Optional[int] = 8 if self._is_client else None
-        self._max_client_init_bi_stream_id: int = 0 if not self._is_client else None
+        self._max_client_bidi_stream_id: int = 0 if not self._is_client else None
         self._next_push_id: int = 0
 
         self._local_control_stream_id: Optional[int] = None
@@ -362,19 +363,19 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
-    def close_connection(self, last_stream_id: int = None) -> None:
+    def shutdown(self, last_stream_id: int = None) -> None:
         """
-        Close a connection, emitting a GOAWAY frame.
-        :param last_stream_id: Client-initailized stream ID that can be responsed before connection is closed.
+        Send a GOAWAY frame to client from server.
+        :param last_stream_id: Client-initiated stream ID that can be served before connection is closed.
         """
         # client need not send GOAWAY frame
         assert not self._is_client, "Client must not send a goaway frame"
         if last_stream_id is None:
-            last_stream_id = self._max_client_init_bi_stream_id
+            last_stream_id = self._max_client_bidi_stream_id
         else:
             assert (
-                last_stream_id <= self._max_client_init_bi_stream_id
-            ), "Unknown stream ID"
+                last_stream_id <= self._max_client_bidi_stream_id
+            ), "Unissued stream ID"
         self._quic.send_stream_data(
             self._local_control_stream_id,
             encode_frame(FrameType.GOAWAY, encode_uint_var(last_stream_id)),
@@ -437,12 +438,12 @@ class H3Connection:
         elif frame_type == FrameType.MAX_PUSH_ID:
             if self._is_client:
                 raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
-            self._max_push_id = parse_id(frame_data)
+            self._max_push_id = parse_uint_var(frame_data)
         elif frame_type == FrameType.GOAWAY:
             if not self._is_client:
                 raise FrameUnexpected("Clients must not send GOAWAY")
             http_events.append(
-                ConnectionShutdownInitiated(stream_id=parse_id(frame_data))
+                ConnectionShutdownInitiated(last_stream_id=parse_uint_var(frame_data))
             )
         elif frame_type in (
             FrameType.DATA,
@@ -488,8 +489,8 @@ class H3Connection:
             headers = self._decode_headers(stream.stream_id, frame_data)
 
             if not self._is_client and stream.push_id is None:
-                self._max_client_init_bi_stream_id = max(
-                    stream.stream_id, self._max_client_init_bi_stream_id
+                self._max_client_bidi_stream_id = max(
+                    stream.stream_id, self._max_client_bidi_stream_id
                 )
 
             # log frame

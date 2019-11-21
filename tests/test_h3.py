@@ -37,8 +37,10 @@ def h3_transfer(quic_sender, h3_receiver):
     http_events = []
     event = quic_receiver.next_event()
     while event is not None:
+        print (event)
         http_events.extend(h3_receiver.handle_event(event))
         event = quic_receiver.next_event()
+    print ('---------', http_events)
     return http_events
 
 
@@ -932,7 +934,7 @@ class H3ConnectionTest(TestCase):
                     ],
                 )
 
-    def test_close_connection(self):
+    def test_shutdown(self):
         with client_and_server(
             client_options={"alpn_protocols": H3_ALPN},
             server_options={"alpn_protocols": H3_ALPN},
@@ -943,19 +945,19 @@ class H3ConnectionTest(TestCase):
             # make requests
             for i in range(5):
                 self._make_request(h3_client, h3_server)
-            h3_server.close_connection()
+            h3_server.shutdown()
             events = h3_transfer(quic_server, h3_client)
-            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=5 * 4 - 4)])
+            self.assertEqual(events, [ConnectionShutdownInitiated(last_stream_id=5 * 4 - 4)])
 
-            h3_server.close_connection(4)
+            h3_server.shutdown(4)
             events = h3_transfer(quic_server, h3_client)
-            self.assertEqual(events, [ConnectionShutdownInitiated(stream_id=4)])
+            self.assertEqual(events, [ConnectionShutdownInitiated(last_stream_id=4)])
             with self.assertRaises(AssertionError):
-                h3_server.close_connection(100)
+                h3_server.shutdown(100)
 
             # client need not send GOAWAY
             with self.assertRaises(AssertionError):
-                h3_client.close_connection()
+                h3_client.shutdown()
             with self.assertRaises(FrameUnexpected):
                 h3_server._handle_control_frame(FrameType.GOAWAY, b"0x0")
 

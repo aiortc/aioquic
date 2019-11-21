@@ -73,5 +73,5 @@ class ConnectionShutdownInitiated(H3Event):
     sends GOAWAY control frame to a client.
     """
 
-    stream_id: int
+    last_stream_id: int
     "The Stream ID of client-initialized bi-directional stream that can be received before connection is closed"
