@@ -959,7 +959,7 @@ class H3ConnectionTest(TestCase):
             with self.assertRaises(AssertionError):
                 h3_client.shutdown()
             with self.assertRaises(FrameUnexpected):
-                h3_server._handle_control_frame(FrameType.GOAWAY, b"0x0")
+                h3_server._handle_control_frame(FrameType.GOAWAY, b"0x4")
 
     def test_send_data_after_trailers(self):
         """
