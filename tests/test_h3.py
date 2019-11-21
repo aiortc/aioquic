@@ -37,10 +37,8 @@ def h3_transfer(quic_sender, h3_receiver):
     http_events = []
     event = quic_receiver.next_event()
     while event is not None:
-        print (event)
         http_events.extend(h3_receiver.handle_event(event))
         event = quic_receiver.next_event()
-    print ('---------', http_events)
     return http_events
 
 
