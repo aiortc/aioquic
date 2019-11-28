@@ -40,7 +40,6 @@ class QuicErrorCode(IntEnum):
 
 class QuicProtocolVersion(IntEnum):
     NEGOTIATION = 0
-    DRAFT_23 = 0xFF000017
     DRAFT_24 = 0xFF000018
 
 

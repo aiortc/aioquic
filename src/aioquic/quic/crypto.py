@@ -3,7 +3,7 @@ from typing import Optional, Tuple
 
 from .._crypto import AEAD, CryptoError, HeaderProtection
 from ..tls import CipherSuite, cipher_suite_hash, hkdf_expand_label, hkdf_extract
-from .packet import QuicProtocolVersion, decode_packet_number, is_long_header
+from .packet import decode_packet_number, is_long_header
 
 CIPHER_SUITES = {
     CipherSuite.AES_128_GCM_SHA256: (b"aes-128-ecb", b"aes-128-gcm"),
@@ -118,16 +118,11 @@ def apply_key_phase(self: CryptoContext, crypto: CryptoContext) -> None:
 def next_key_phase(self: CryptoContext) -> CryptoContext:
     algorithm = cipher_suite_hash(self.cipher_suite)
 
-    if self.version < QuicProtocolVersion.DRAFT_24:
-        label = b"traffic upd"
-    else:
-        label = b"quic ku"
-
     crypto = CryptoContext(key_phase=int(not self.key_phase))
     crypto.setup(
         cipher_suite=self.cipher_suite,
         secret=hkdf_expand_label(
-            algorithm, self.secret, label, b"", algorithm.digest_size
+            algorithm, self.secret, b"quic ku", b"", algorithm.digest_size
         ),
         version=self.version,
     )

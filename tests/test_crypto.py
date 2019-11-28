@@ -12,6 +12,8 @@ from aioquic.quic.crypto import (
 from aioquic.quic.packet import PACKET_FIXED_BIT, QuicProtocolVersion
 from aioquic.tls import CipherSuite
 
+PROTOCOL_VERSION = QuicProtocolVersion.DRAFT_24
+
 CHACHA20_CLIENT_PACKET_NUMBER = 2
 CHACHA20_CLIENT_PLAIN_HEADER = binascii.unhexlify(
     "e1ff0000160880b57c7b70d8524b0850fc2a28e240fd7640170002"
@@ -114,12 +116,12 @@ class CryptoTest(TestCase):
     https://tools.ietf.org/html/draft-ietf-quic-tls-18#appendix-A
     """
 
-    def create_crypto(self, is_client, version=QuicProtocolVersion.DRAFT_24):
+    def create_crypto(self, is_client):
         pair = CryptoPair()
         pair.setup_initial(
             cid=binascii.unhexlify("8394c8f03e515708"),
             is_client=is_client,
-            version=version,
+            version=PROTOCOL_VERSION,
         )
         return pair
 
@@ -150,7 +152,7 @@ class CryptoTest(TestCase):
             secret=binascii.unhexlify(
                 "b42772df33c9719a32820d302aa664d080d7f5ea7a71a330f87864cb289ae8c0"
             ),
-            version=QuicProtocolVersion.DRAFT_24,
+            version=PROTOCOL_VERSION,
         )
 
         plain_header, plain_payload, packet_number = pair.decrypt_packet(
@@ -192,7 +194,7 @@ class CryptoTest(TestCase):
             secret=binascii.unhexlify(
                 "310281977cb8c1c1c1212d784b2d29e5a6489e23de848d370a5a2f9537f3a100"
             ),
-            version=QuicProtocolVersion.DRAFT_24,
+            version=PROTOCOL_VERSION,
         )
 
         plain_header, plain_payload, packet_number = pair.decrypt_packet(
@@ -210,7 +212,7 @@ class CryptoTest(TestCase):
             secret=binascii.unhexlify(
                 "b42772df33c9719a32820d302aa664d080d7f5ea7a71a330f87864cb289ae8c0"
             ),
-            version=QuicProtocolVersion.DRAFT_24,
+            version=PROTOCOL_VERSION,
         )
 
         packet = pair.encrypt_packet(
@@ -247,7 +249,7 @@ class CryptoTest(TestCase):
             secret=binascii.unhexlify(
                 "310281977cb8c1c1c1212d784b2d29e5a6489e23de848d370a5a2f9537f3a100"
             ),
-            version=QuicProtocolVersion.DRAFT_24,
+            version=PROTOCOL_VERSION,
         )
 
         packet = pair.encrypt_packet(
@@ -257,9 +259,9 @@ class CryptoTest(TestCase):
         )
         self.assertEqual(packet, SHORT_SERVER_ENCRYPTED_PACKET)
 
-    def _test_key_update(self, version):
-        pair1 = self.create_crypto(is_client=True, version=version)
-        pair2 = self.create_crypto(is_client=False, version=version)
+    def test_key_update(self):
+        pair1 = self.create_crypto(is_client=True)
+        pair2 = self.create_crypto(is_client=False)
 
         def create_packet(key_phase, packet_number):
             buf = Buffer(capacity=100)
@@ -314,9 +316,3 @@ class CryptoTest(TestCase):
         send(pair1, pair2, 3)
         self.assertEqual(pair1.key_phase, 1)
         self.assertEqual(pair2.key_phase, 1)
-
-    def test_key_update_draft_23(self):
-        self._test_key_update(version=QuicProtocolVersion.DRAFT_23)
-
-    def test_key_update_draft_24(self):
-        self._test_key_update(version=QuicProtocolVersion.DRAFT_24)
