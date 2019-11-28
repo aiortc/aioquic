@@ -12,6 +12,7 @@ from typing import Callable, Deque, Dict, List, Optional, Union, cast
 import wsproto
 import wsproto.events
 
+import aioquic
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.connection import H3_ALPN, H3Connection
@@ -29,6 +30,8 @@ except ImportError:
 
 AsgiApplication = Callable
 HttpConnection = Union[H0Connection, H3Connection]
+
+SERVER_NAME = "aioquic/" + aioquic.__version__
 
 
 class HttpRequestHandler:
@@ -79,8 +82,8 @@ class HttpRequestHandler:
             self.connection.send_headers(
                 stream_id=self.stream_id,
                 headers=[
-                    (b":status", str(message["status"]).encode("ascii")),
-                    (b"server", b"aioquic"),
+                    (b":status", str(message["status"]).encode()),
+                    (b"server", SERVER_NAME.encode()),
                     (b"date", formatdate(time.time(), usegmt=True).encode()),
                 ]
                 + [(k, v) for k, v in message["headers"]],
@@ -98,7 +101,7 @@ class HttpRequestHandler:
                 (b":method", b"GET"),
                 (b":scheme", b"https"),
                 (b":authority", self.authority),
-                (b":path", message["path"].encode("utf8")),
+                (b":path", message["path"].encode()),
             ] + [(k, v) for k, v in message["headers"]]
 
             # send push promise
@@ -178,11 +181,11 @@ class WebSocketHandler:
 
             headers = [
                 (b":status", b"200"),
-                (b"server", b"aioquic"),
+                (b"server", SERVER_NAME.encode()),
                 (b"date", formatdate(time.time(), usegmt=True).encode()),
             ]
             if subprotocol is not None:
-                headers.append((b"sec-websocket-protocol", subprotocol.encode("utf8")))
+                headers.append((b"sec-websocket-protocol", subprotocol.encode()))
             self.connection.send_headers(stream_id=self.stream_id, headers=headers)
 
             # consume backlog
@@ -240,11 +243,11 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     authority = value
                     headers.append((b"host", value))
                 elif header == b":method":
-                    method = value.decode("utf8")
+                    method = value.decode()
                 elif header == b":path":
                     raw_path = value
                 elif header == b":protocol":
-                    protocol = value.decode("utf8")
+                    protocol = value.decode()
                 elif header and not header.startswith(b":"):
                     headers.append((header, value))
 
@@ -252,7 +255,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                 path_bytes, query_string = raw_path.split(b"?", maxsplit=1)
             else:
                 path_bytes, query_string = raw_path, b""
-            path = path_bytes.decode("utf8")
+            path = path_bytes.decode()
 
             # FIXME: add a public API to retrieve peer address
             client_addr = self._http._quic._network_paths[0].addr
@@ -263,9 +266,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                 subprotocols: List[str] = []
                 for header, value in event.headers:
                     if header == b"sec-websocket-protocol":
-                        subprotocols = [
-                            x.strip() for x in value.decode("utf8").split(",")
-                        ]
+                        subprotocols = [x.strip() for x in value.decode().split(",")]
                 scope = {
                     "client": client,
                     "headers": headers,

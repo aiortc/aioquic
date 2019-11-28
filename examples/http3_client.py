@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import wsproto
 import wsproto.events
 
+import aioquic
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h0.connection import H0_ALPN, H0Connection
@@ -35,6 +36,8 @@ except ImportError:
 logger = logging.getLogger("client")
 
 HttpConnection = Union[H0Connection, H3Connection]
+
+USER_AGENT = "aioquic/" + aioquic.__version__
 
 
 class URL:
@@ -99,7 +102,7 @@ class WebSocket:
         if isinstance(event, HeadersReceived):
             for header, value in event.headers:
                 if header == b"sec-websocket-protocol":
-                    self.subprotocol = value.decode("utf8")
+                    self.subprotocol = value.decode()
         elif isinstance(event, DataReceived):
             self.websocket.receive_data(event.data)
 
@@ -157,15 +160,15 @@ class HttpClient(QuicConnectionProtocol):
         headers = [
             (b":method", b"CONNECT"),
             (b":scheme", b"https"),
-            (b":authority", request.url.authority.encode("utf8")),
-            (b":path", request.url.full_path.encode("utf8")),
+            (b":authority", request.url.authority.encode()),
+            (b":path", request.url.full_path.encode()),
             (b":protocol", b"websocket"),
-            (b"user-agent", b"aioquic"),
+            (b"user-agent", USER_AGENT.encode()),
             (b"sec-websocket-version", b"13"),
         ]
         if subprotocols:
             headers.append(
-                (b"sec-websocket-protocol", ", ".join(subprotocols).encode("utf8"))
+                (b"sec-websocket-protocol", ", ".join(subprotocols).encode())
             )
         self._http.send_headers(stream_id=stream_id, headers=headers)
 
@@ -207,16 +210,13 @@ class HttpClient(QuicConnectionProtocol):
         self._http.send_headers(
             stream_id=stream_id,
             headers=[
-                (b":method", request.method.encode("utf8")),
-                (b":scheme", request.url.scheme.encode("utf8")),
-                (b":authority", request.url.authority.encode("utf8")),
-                (b":path", request.url.full_path.encode("utf8")),
-                (b"user-agent", b"aioquic"),
+                (b":method", request.method.encode()),
+                (b":scheme", request.url.scheme.encode()),
+                (b":authority", request.url.authority.encode()),
+                (b":path", request.url.full_path.encode()),
+                (b"user-agent", USER_AGENT.encode()),
             ]
-            + [
-                (k.encode("utf8"), v.encode("utf8"))
-                for (k, v) in request.headers.items()
-            ],
+            + [(k.encode(), v.encode()) for (k, v) in request.headers.items()],
         )
         self._http.send_data(stream_id=stream_id, data=request.content, end_stream=True)
 
@@ -236,7 +236,7 @@ async def perform_http_request(
     if data is not None:
         http_events = await client.post(
             url,
-            data=data.encode("utf8"),
+            data=data.encode(),
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
     else:

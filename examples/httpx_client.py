@@ -46,13 +46,13 @@ class H3Dispatcher(QuicConnectionProtocol, AsyncDispatcher):
         self._http.send_headers(
             stream_id=stream_id,
             headers=[
-                (b":method", request.method.encode("utf8")),
-                (b":scheme", request.url.scheme.encode("utf8")),
-                (b":authority", str(request.url.authority).encode("utf8")),
-                (b":path", request.url.full_path.encode("utf8")),
+                (b":method", request.method.encode()),
+                (b":scheme", request.url.scheme.encode()),
+                (b":authority", str(request.url.authority).encode()),
+                (b":path", request.url.full_path.encode()),
             ]
             + [
-                (k.encode("utf8"), v.encode("utf8"))
+                (k.encode(), v.encode())
                 for (k, v) in request.headers.items()
                 if k not in ("connection", "host")
             ],
@@ -74,9 +74,9 @@ class H3Dispatcher(QuicConnectionProtocol, AsyncDispatcher):
             if isinstance(event, HeadersReceived):
                 for header, value in event.headers:
                     if header == b":status":
-                        status_code = int(value.decode("ascii"))
+                        status_code = int(value.decode())
                     elif header[0:1] != b":":
-                        headers.append((header.decode("utf8"), value.decode("utf8")))
+                        headers.append((header.decode(), value.decode()))
             elif isinstance(event, DataReceived):
                 content += event.data
 
@@ -141,7 +141,7 @@ async def run(configuration: QuicConfiguration, url: str, data: str) -> None:
         if data is not None:
             response = await client.post(
                 url,
-                data=data.encode("utf8"),
+                data=data.encode(),
                 headers={"content-type": "application/x-www-form-urlencoded"},
             )
         else:
