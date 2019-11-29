@@ -1163,7 +1163,7 @@ class Context:
         self.certificate: Optional[x509.Certificate] = None
         self.certificate_chain: List[x509.Certificate] = []
         self.certificate_private_key: Optional[
-            Union[dsa.DSAPublicKey, ec.EllipticCurvePublicKey, rsa.RSAPublicKey]
+            Union[dsa.DSAPrivateKey, ec.EllipticCurvePrivateKey, rsa.RSAPrivateKey]
         ] = None
         self.handshake_extensions: List[Extension] = []
         self._max_early_data = max_early_data
