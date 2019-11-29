@@ -66,7 +66,7 @@ class H3Dispatcher(QuicConnectionProtocol, AsyncDispatcher):
         self.transmit()
 
         # process response
-        events = await asyncio.shield(waiter)
+        events: Deque[H3Event] = await asyncio.shield(waiter)
         content = b""
         headers = []
         status_code = None
