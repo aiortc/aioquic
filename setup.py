@@ -6,7 +6,8 @@ import setuptools
 root_dir = os.path.abspath(os.path.dirname(__file__))
 
 about = {}
-with open("src/aioquic/about.py") as fp:
+about_file = os.path.join(root_dir, "src", "aioquic", "about.py")
+with open(about_file, encoding="utf-8") as fp:
     exec(fp.read(), about)
 
 readme_file = os.path.join(root_dir, "README.rst")
