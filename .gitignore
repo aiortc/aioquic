@@ -8,3 +8,5 @@
 /build
 /dist
 /docs/_build
+.idea
+venv

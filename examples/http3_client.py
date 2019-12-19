@@ -288,6 +288,7 @@ async def run(
     data: str,
     include: bool,
     output_dir: Optional[str],
+    local_port: int,
 ) -> None:
     # parse URL
     parsed = urlparse(urls[0])
@@ -308,6 +309,7 @@ async def run(
         configuration=configuration,
         create_protocol=HttpClient,
         session_ticket_handler=save_session_ticket,
+        local_port=local_port,
     ) as client:
         client = cast(HttpClient, client)
 
@@ -396,6 +398,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="increase logging verbosity"
     )
+    parser.add_argument(
+        "-p",
+        "--local-port",
+        type=int,
+        default=0,
+        help="local port to bind for connections"
+    )
 
     args = parser.parse_args()
 
@@ -441,6 +450,7 @@ if __name__ == "__main__":
                 data=args.data,
                 include=args.include,
                 output_dir=args.output_dir,
+                local_port=args.local_port,
             )
         )
     finally:
