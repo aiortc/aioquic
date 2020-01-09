@@ -403,7 +403,7 @@ if __name__ == "__main__":
         "--local-port",
         type=int,
         default=0,
-        help="local port to bind for connections"
+        help="local port to bind for connections",
     )
 
     args = parser.parse_args()
