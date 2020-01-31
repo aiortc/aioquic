@@ -1333,6 +1333,12 @@ class QuicConnection:
             length = buf.capacity - start
         data = buf.pull_bytes(length)
 
+        # log frame
+        if self._quic_logger is not None:
+            context.quic_logger_frames.append(
+                self._quic_logger.encode_datagram_frame(length=length)
+            )
+
         # check frame is allowed
         if (
             self._configuration.max_datagram_frame_size is None
@@ -1345,12 +1351,6 @@ class QuicConnection:
             )
 
         self._events.append(events.DatagramFrameReceived(data=data))
-
-        # log frame
-        if self._quic_logger is not None:
-            context.quic_logger_frames.append(
-                self._quic_logger.encode_datagram_frame(length=length)
-            )
 
     def _handle_max_data_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -1489,17 +1489,17 @@ class QuicConnection:
         length = buf.pull_uint_var()
         token = buf.pull_bytes(length)
 
+        # log frame
+        if self._quic_logger is not None:
+            context.quic_logger_frames.append(
+                self._quic_logger.encode_new_token_frame(token=token)
+            )
+
         if not self._is_client:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.PROTOCOL_VIOLATION,
                 frame_type=frame_type,
                 reason_phrase="Clients must not send NEW_TOKEN frames",
-            )
-
-        # log frame
-        if self._quic_logger is not None:
-            context.quic_logger_frames.append(
-                self._quic_logger.encode_new_token_frame(token=token)
             )
 
     def _handle_padding_frame(
