@@ -12,7 +12,7 @@ from aioquic.quic.crypto import (
 from aioquic.quic.packet import PACKET_FIXED_BIT, QuicProtocolVersion
 from aioquic.tls import CipherSuite
 
-PROTOCOL_VERSION = QuicProtocolVersion.DRAFT_24
+PROTOCOL_VERSION = QuicProtocolVersion.DRAFT_25
 
 CHACHA20_CLIENT_PACKET_NUMBER = 2
 CHACHA20_CLIENT_PLAIN_HEADER = binascii.unhexlify(

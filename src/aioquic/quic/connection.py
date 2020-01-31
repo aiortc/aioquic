@@ -25,6 +25,7 @@ from .packet import (
     QuicProtocolVersion,
     QuicStreamFrame,
     QuicTransportParameters,
+    get_retry_integrity_tag,
     get_spin_bit,
     is_long_header,
     pull_ack_frame,
@@ -283,6 +284,7 @@ class QuicConnection:
         # things to send
         self._close_pending = False
         self._datagrams_pending: Deque[bytes] = deque()
+        self._handshake_done_pending = False
         self._ping_pending: List[int] = []
         self._probe_pending = False
         self._retire_connection_ids: List[int] = []
@@ -324,6 +326,7 @@ class QuicConnection:
             0x1B: (self._handle_path_response_frame, EPOCHS("01")),
             0x1C: (self._handle_connection_close_frame, EPOCHS("IH1")),
             0x1D: (self._handle_connection_close_frame, EPOCHS("1")),
+            0x1E: (self._handle_handshake_done_frame, EPOCHS("1")),
             0x30: (self._handle_datagram_frame, EPOCHS("01")),
             0x31: (self._handle_datagram_frame, EPOCHS("01")),
         }
@@ -666,10 +669,18 @@ class QuicConnection:
                 return
 
             if self._is_client and header.packet_type == PACKET_TYPE_RETRY:
-                # stateless retry
+                # calculate stateless retry integrity tag
+                integrity_tag = get_retry_integrity_tag(
+                    version=header.version,
+                    source_cid=header.source_cid,
+                    destination_cid=header.destination_cid,
+                    original_destination_cid=self._peer_cid,
+                    retry_token=header.token,
+                )
+
                 if (
                     header.destination_cid == self.host_cid
-                    and header.original_destination_cid == self._peer_cid
+                    and header.integrity_tag == integrity_tag
                     and not self._stateless_retry_count
                 ):
                     if self._quic_logger is not None:
@@ -862,12 +873,13 @@ class QuicConnection:
                 self._network_paths.insert(0, network_path)
 
             # record packet as received
-            if packet_number > space.largest_received_packet:
-                space.largest_received_packet = packet_number
-                space.largest_received_time = now
-            space.ack_queue.add(packet_number)
-            if is_ack_eliciting and space.ack_at is None:
-                space.ack_at = now + self._ack_delay
+            if not space.discarded:
+                if packet_number > space.largest_received_packet:
+                    space.largest_received_packet = packet_number
+                    space.largest_received_time = now
+                space.ack_queue.add(packet_number)
+                if is_ack_eliciting and space.ack_at is None:
+                    space.ack_at = now + self._ack_delay
 
     def request_key_update(self) -> None:
         """
@@ -1019,6 +1031,7 @@ class QuicConnection:
         self._logger.debug("Discarding epoch %s", epoch)
         self._cryptos[epoch].teardown()
         self._loss.discard_space(self._spaces[epoch])
+        self._spaces[epoch].discarded = True
 
     def _find_network_path(self, addr: NetworkAddress) -> QuicNetworkPath:
         # check existing network paths
@@ -1191,15 +1204,6 @@ class QuicConnection:
             now=context.time,
         )
 
-        # check if we can discard handshake keys
-        if (
-            not self._handshake_confirmed
-            and self._handshake_complete
-            and context.epoch == tls.Epoch.ONE_RTT
-        ):
-            self._discard_epoch(tls.Epoch.HANDSHAKE)
-            self._handshake_confirmed = True
-
     def _handle_connection_close_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
     ) -> None:
@@ -1291,6 +1295,13 @@ class QuicConnection:
                 tls.State.SERVER_POST_HANDSHAKE,
             ]:
                 self._handshake_complete = True
+
+                # for servers, the handshake is now confirmed
+                if not self._is_client:
+                    self._discard_epoch(tls.Epoch.HANDSHAKE)
+                    self._handshake_confirmed = True
+                    self._handshake_done_pending = True
+
                 self._loss.is_client_without_1rtt = False
                 self._replenish_connection_ids()
                 self._events.append(
@@ -1351,6 +1362,30 @@ class QuicConnection:
             )
 
         self._events.append(events.DatagramFrameReceived(data=data))
+
+    def _handle_handshake_done_frame(
+        self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle a HANDSHAKE_DONE frame.
+        """
+        # log frame
+        if self._quic_logger is not None:
+            context.quic_logger_frames.append(
+                self._quic_logger.encode_handshake_done_frame()
+            )
+
+        if not self._is_client:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                frame_type=frame_type,
+                reason_phrase="Clients must not send HANDSHAKE_DONE frames",
+            )
+
+        #  for clients, the handshake is now confirmed
+        if not self._handshake_confirmed:
+            self._discard_epoch(tls.Epoch.HANDSHAKE)
+            self._handshake_confirmed = True
 
     def _handle_max_data_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -1765,6 +1800,13 @@ class QuicConnection:
         if delivery == QuicDeliveryState.ACKED:
             space.ack_queue.subtract(0, highest_acked + 1)
 
+    def _on_handshake_done_delivery(self, delivery: QuicDeliveryState) -> None:
+        """
+        Callback when a HANDSHAKE_DONE frame is acknowledged or lost.
+        """
+        if delivery != QuicDeliveryState.ACKED:
+            self._handshake_done_pending = True
+
     def _on_max_data_delivery(self, delivery: QuicDeliveryState) -> None:
         """
         Callback when a MAX_DATA frame is acknowledged or lost.
@@ -2063,6 +2105,11 @@ class QuicConnection:
                 if space.ack_at is not None and space.ack_at <= now:
                     self._write_ack_frame(builder=builder, space=space, now=now)
 
+                # HANDSHAKE_DONE
+                if self._handshake_done_pending:
+                    self._write_handshake_done_frame(builder=builder)
+                    self._handshake_done_pending = False
+
                 # PATH CHALLENGE
                 if (
                     not network_path.is_validated
@@ -2328,6 +2375,17 @@ class QuicConnection:
             )
 
         return True
+
+    def _write_handshake_done_frame(self, builder: QuicPacketBuilder) -> None:
+        builder.start_frame(
+            QuicFrameType.HANDSHAKE_DONE, self._on_handshake_done_delivery,
+        )
+
+        # log frame
+        if self._quic_logger is not None:
+            builder.quic_logger_frames.append(
+                self._quic_logger.encode_handshake_done_frame()
+            )
 
     def _write_new_connection_id_frame(
         self, builder: QuicPacketBuilder, connection_id: QuicConnectionId

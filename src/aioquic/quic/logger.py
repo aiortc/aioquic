@@ -83,6 +83,9 @@ class QuicLoggerTrace:
             "length": length,
         }
 
+    def encode_handshake_done_frame(self) -> Dict:
+        return {"frame_type": "handshake_done"}
+
     def encode_max_data_frame(self, maximum: int) -> Dict:
         return {"frame_type": "max_data", "maximum": str(maximum)}
 

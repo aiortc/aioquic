@@ -227,11 +227,11 @@ class QuicConnectionTest(TestCase):
 
     def test_connect_with_alpn(self):
         with client_and_server(
-            client_options={"alpn_protocols": ["h3-23", "hq-23"]},
-            server_options={"alpn_protocols": ["hq-23"]},
+            client_options={"alpn_protocols": ["h3-25", "hq-25"]},
+            server_options={"alpn_protocols": ["hq-25"]},
         ) as (client, server):
             # check handshake completed
-            self.check_handshake(client=client, server=server, alpn_protocol="hq-23")
+            self.check_handshake(client=client, server=server, alpn_protocol="hq-25")
 
     def test_connect_with_secrets_log(self):
         client_log_file = io.StringIO()
@@ -310,6 +310,8 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(server.get_timer(), 2.1)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
+        self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
+        self.assertIsNone(server.next_event())
 
         # handshake continues normally
         now = 1.2
@@ -318,31 +320,26 @@ class QuicConnectionTest(TestCase):
         items = client.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [1280, 327])
         self.assertAlmostEqual(client.get_timer(), 1.825)
+        self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
+        self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(client.next_event()), events.ConnectionIdIssued)
 
         now = 1.3
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         server.receive_datagram(items[1][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [276])
+        self.assertEqual(datagram_sizes(items), [229])
         self.assertAlmostEqual(server.get_timer(), 1.825)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
-        self.assertEqual(len(server._loss.spaces[1].sent_packets), 1)
+        self.assertEqual(len(server._loss.spaces[1].sent_packets), 0)
+        self.assertEqual(type(server.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(server.next_event()), events.ConnectionIdIssued)
 
         now = 1.4
         client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
         items = client.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [32])
         self.assertAlmostEqual(client.get_timer(), 61.4)  # idle timeout
-        self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
-        self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
-
-        now = 1.5
-        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
-        items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [])
-        self.assertAlmostEqual(server.get_timer(), 61.5)  # idle timeout
-        self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
-        self.assertEqual(type(server.next_event()), events.HandshakeCompleted)
 
     def test_connect_with_loss_2(self):
         def datagram_sizes(items):
@@ -376,14 +373,16 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
 
-        #  client only receives first datagram and sends ACKS
+        # client only receives first datagram and sends ACKS
         now = 0.2
         client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
         items = client.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [1280, 48])
         self.assertAlmostEqual(client.get_timer(), 0.625)
+        self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
+        self.assertIsNone(client.next_event())
 
-        #  client PTO - HANDSHAKE PING
+        # client PTO - HANDSHAKE PING
         now = client.get_timer()  # ~0.625
         client.handle_timer(now=now)
         items = client.datagrams_to_send(now=now)
@@ -398,6 +397,8 @@ class QuicConnectionTest(TestCase):
         self.assertAlmostEqual(server.get_timer(), 1.1)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 3)
+        self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
+        self.assertIsNone(server.next_event())
 
         # ACKs are lost, server retransmits HANDSHAKE
         now = server.get_timer()
@@ -407,6 +408,7 @@ class QuicConnectionTest(TestCase):
         self.assertAlmostEqual(server.get_timer(), 3.1)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 3)
+        self.assertIsNone(server.next_event())
 
         # handshake continues normally
         now = 1.2
@@ -415,22 +417,101 @@ class QuicConnectionTest(TestCase):
         items = client.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [329])
         self.assertAlmostEqual(client.get_timer(), 2.45)
-        self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
         self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(client.next_event()), events.ConnectionIdIssued)
 
         now = 1.3
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [276])
+        self.assertEqual(datagram_sizes(items), [229])
         self.assertAlmostEqual(server.get_timer(), 1.925)
-        self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
         self.assertEqual(type(server.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(server.next_event()), events.ConnectionIdIssued)
 
         now = 1.4
         client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
         items = client.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [32])
         self.assertAlmostEqual(client.get_timer(), 61.4)  # idle timeout
+
+    def test_connect_with_loss_3(self):
+        def datagram_sizes(items):
+            return [len(x[0]) for x in items]
+
+        client_configuration = QuicConfiguration(is_client=True)
+        client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+
+        client = QuicConnection(configuration=client_configuration)
+        client._ack_delay = 0
+
+        server_configuration = QuicConfiguration(is_client=False)
+        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+
+        server = QuicConnection(configuration=server_configuration)
+        server._ack_delay = 0
+
+        # client sends INITIAL
+        now = 0.0
+        client.connect(SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280])
+        self.assertEqual(client.get_timer(), 1.0)
+
+        # server receives INITIAL, sends INITIAL + HANDSHAKE
+        now = 0.1
+        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        items = server.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280, 1084])
+        self.assertEqual(server.get_timer(), 1.1)
+        self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
+        self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
+
+        # client receives INITIAL + HANDSHAKE
+        now = 0.2
+        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+        client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280, 327])
+        self.assertAlmostEqual(client.get_timer(), 0.825)
+        self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
+        self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(client.next_event()), events.ConnectionIdIssued)
+
+        # server completes handshake
+        now = 0.3
+        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        server.receive_datagram(items[1][0], CLIENT_ADDR, now=now)
+        items = server.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [229])
+        self.assertAlmostEqual(server.get_timer(), 0.825)
+        self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
+        self.assertEqual(len(server._loss.spaces[1].sent_packets), 0)
+        self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
+        self.assertEqual(type(server.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(server.next_event()), events.ConnectionIdIssued)
+
+        # server PTO - 1-RTT PING
+        now = 0.825
+        server.handle_timer(now=now)
+        items = server.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [29])
+        self.assertAlmostEqual(server.get_timer(), 1.875)
+
+        # client receives PING, sends ACK
+        now = 0.9
+        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [32])
+        self.assertAlmostEqual(client.get_timer(), 0.825)
+
+        # server receives ACK, retransmits HANDSHAKE_DONE
+        now = 1.0
+        self.assertFalse(server._handshake_done_pending)
+        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        self.assertTrue(server._handshake_done_pending)
+        items = server.datagrams_to_send(now=now)
+        self.assertFalse(server._handshake_done_pending)
+        self.assertEqual(datagram_sizes(items), [224])
 
     def test_connect_with_quantum_readiness(self):
         with client_and_server(client_options={"quantum_readiness_test": True},) as (
@@ -959,6 +1040,22 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(cm.exception.frame_type, QuicFrameType.DATAGRAM_WITH_LENGTH)
         self.assertEqual(cm.exception.reason_phrase, "Unexpected DATAGRAM frame")
 
+    def test_handle_handshake_done_not_allowed(self):
+        with client_and_server() as (client, server):
+            # server receives HANDSHAKE_DONE frame
+            with self.assertRaises(QuicConnectionError) as cm:
+                server._handle_handshake_done_frame(
+                    client_receive_context(server),
+                    QuicFrameType.HANDSHAKE_DONE,
+                    Buffer(data=b""),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION)
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.HANDSHAKE_DONE)
+            self.assertEqual(
+                cm.exception.reason_phrase,
+                "Clients must not send HANDSHAKE_DONE frames",
+            )
+
     def test_handle_max_data_frame(self):
         with client_and_server() as (client, server):
             self.assertEqual(client._remote_max_data, 1048576)
@@ -1390,9 +1487,9 @@ class QuicConnectionTest(TestCase):
         with client_and_server() as (client, server):
             # client receives unknown frame
             with self.assertRaises(QuicConnectionError) as cm:
-                client._payload_received(client_receive_context(client), b"\x1e")
+                client._payload_received(client_receive_context(client), b"\x1f")
             self.assertEqual(cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION)
-            self.assertEqual(cm.exception.frame_type, 0x1E)
+            self.assertEqual(cm.exception.frame_type, 0x1F)
             self.assertEqual(cm.exception.reason_phrase, "Unknown frame type")
 
     def test_payload_received_unexpected_frame(self):
@@ -1423,14 +1520,14 @@ class QuicConnectionTest(TestCase):
         with client_and_server() as (client, server):
             # check congestion control
             self.assertEqual(client._loss.bytes_in_flight, 0)
-            self.assertEqual(client._loss.congestion_window, 14408)
+            self.assertEqual(client._loss.congestion_window, 14303)
 
             # artificially raise received data counter
             client._local_max_data_used = client._local_max_data
             self.assertEqual(server._remote_max_data, 1048576)
 
             # artificially raise bytes in flight
-            client._loss.bytes_in_flight = 14408
+            client._loss.bytes_in_flight = 14303
 
             # MAX_DATA is not sent due to congestion control
             self.assertEqual(drop(client), 0)
