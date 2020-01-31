@@ -22,6 +22,7 @@ class QuicPacketSpace:
     def __init__(self) -> None:
         self.ack_at: Optional[float] = None
         self.ack_queue = RangeSet()
+        self.discarded = False
         self.expected_packet_number = 0
         self.largest_received_packet = -1
         self.largest_received_time: Optional[float] = None
