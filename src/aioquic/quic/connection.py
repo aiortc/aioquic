@@ -635,7 +635,11 @@ class QuicConnection:
                 return
 
             # check protocol version
-            if self._is_client and header.version == QuicProtocolVersion.NEGOTIATION:
+            if (
+                self._is_client
+                and self._state == QuicConnectionState.FIRSTFLIGHT
+                and header.version == QuicProtocolVersion.NEGOTIATION
+            ):
                 # version negotiation
                 versions = []
                 while not buf.eof():
