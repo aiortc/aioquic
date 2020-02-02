@@ -406,6 +406,9 @@ class QuicConnection:
         Return a list of `(data, addr)` tuples of datagrams which need to be
         sent, and the network address to which they need to be sent.
 
+        After calling this method call :meth:`get_timer` to know when the next
+        timer needs to be set.
+
         :param now: The current time.
         """
         network_path = self._network_paths[0]
@@ -584,6 +587,9 @@ class QuicConnection:
     def receive_datagram(self, data: bytes, addr: NetworkAddress, now: float) -> None:
         """
         Handle an incoming datagram.
+
+        After calling this method call :meth:`datagrams_to_send` to retrieve data
+        which needs to be sent.
 
         :param data: The datagram which was received.
         :param addr: The network address from which the datagram was received.
