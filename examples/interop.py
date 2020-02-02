@@ -88,6 +88,7 @@ SERVERS = [
     ),
     Server("ats", "quic.ogre.com"),
     Server("f5", "f5quic.com", retry_port=4433),
+    Server("haskell", "mew.org", retry_port=4433),
     Server("gquic", "quic.rocks", retry_port=None),
     Server("lsquic", "http3-test.litespeedtech.com", push_path="/200?push=/100"),
     Server(
@@ -99,7 +100,9 @@ SERVERS = [
         throughput_file_suffix=".txt",
         verify_mode=ssl.CERT_NONE,
     ),
-    Server("mvfst", "fb.mvfst.net", push_path="/push", structured_logging=True),
+    Server(
+        "mvfst", "fb.mvfst.net", port=443, push_path="/push", structured_logging=True
+    ),
     Server("ngtcp2", "nghttp2.org", push_path="/?push=/100"),
     Server("ngx_quic", "cloudflare-quic.com", port=443, retry_port=443),
     Server("pandora", "pandora.cm.in.tum.de", verify_mode=ssl.CERT_NONE),
@@ -107,7 +110,6 @@ SERVERS = [
     Server("quant", "quant.eggert.org", http3=False),
     Server("quic-go", "quic.seemann.io", port=443, retry_port=443),
     Server("quiche", "quic.tech", port=8443, retry_port=8444),
-    Server("quicker", "quicker.edm.uhasselt.be", retry_port=None),
     Server("quicly", "quic.examp1e.net"),
     Server("quinn", "ralith.com"),
 ]
