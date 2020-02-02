@@ -72,9 +72,9 @@ def decode_packet_number(truncated: int, num_bits: int, expected: int) -> int:
     window = 1 << num_bits
     half_window = window // 2
     candidate = (expected & ~(window - 1)) | truncated
-    if candidate <= expected - half_window:
+    if candidate <= expected - half_window and candidate < (1 << 62) - window:
         return candidate + window
-    elif candidate > expected + half_window and candidate > window:
+    elif candidate > expected + half_window and candidate >= window:
         return candidate - window
     else:
         return candidate
