@@ -29,7 +29,7 @@ class MockBuffer:
 
 class MockCrypto:
     AEAD = None
-    CryptoError = None
+    CryptoError = ValueError
     HeaderProtection = None
 
 
