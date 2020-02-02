@@ -632,6 +632,12 @@ class QuicConnection:
                     destination_cid_seq = connection_id.sequence_number
                     break
             if self._is_client and destination_cid_seq is None:
+                if self._quic_logger is not None:
+                    self._quic_logger.log_event(
+                        category="transport",
+                        event="packet_dropped",
+                        data={"trigger": "unknown_connection_id"},
+                    )
                 return
 
             # check protocol version
