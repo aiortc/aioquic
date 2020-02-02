@@ -104,11 +104,7 @@ class PacketTest(TestCase):
         # check integrity
         self.assertEqual(
             get_retry_integrity_tag(
-                version=header.version,
-                source_cid=header.source_cid,
-                destination_cid=header.destination_cid,
-                original_destination_cid=binascii.unhexlify("fbbd219b7363b64b"),
-                retry_token=header.token,
+                buf.data_slice(0, 109), binascii.unhexlify("fbbd219b7363b64b"),
             ),
             header.integrity_tag,
         )

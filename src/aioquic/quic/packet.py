@@ -26,7 +26,7 @@ CONNECTION_ID_MAX_SIZE = 20
 PACKET_NUMBER_MAX_SIZE = 4
 RETRY_AEAD_KEY = binascii.unhexlify("4d32ecdb2a2133c841e4043df27d4430")
 RETRY_AEAD_NONCE = binascii.unhexlify("4d1611d05513a552c587d575")
-RETRY_INTEGRITY_SIZE = 16
+RETRY_INTEGRITY_TAG_SIZE = 16
 
 
 class QuicErrorCode(IntEnum):
@@ -81,38 +81,22 @@ def decode_packet_number(truncated: int, num_bits: int, expected: int) -> int:
 
 
 def get_retry_integrity_tag(
-    version: int,
-    source_cid: bytes,
-    destination_cid: bytes,
-    original_destination_cid: bytes,
-    retry_token: bytes,
+    packet_without_tag: bytes, original_destination_cid: bytes
 ) -> bytes:
     """
     Calculate the integrity tag for a RETRY packet.
     """
     # build Retry pseudo packet
-    buf = Buffer(
-        capacity=8
-        + len(destination_cid)
-        + len(source_cid)
-        + len(original_destination_cid)
-        + len(retry_token)
-    )
+    buf = Buffer(capacity=1 + len(original_destination_cid) + len(packet_without_tag))
     buf.push_uint8(len(original_destination_cid))
     buf.push_bytes(original_destination_cid)
-    buf.push_uint8(PACKET_TYPE_RETRY)
-    buf.push_uint32(version)
-    buf.push_uint8(len(destination_cid))
-    buf.push_bytes(destination_cid)
-    buf.push_uint8(len(source_cid))
-    buf.push_bytes(source_cid)
-    buf.push_bytes(retry_token)
+    buf.push_bytes(packet_without_tag)
     assert buf.eof()
 
     # run AES-128-GCM
     aead = AESGCM(RETRY_AEAD_KEY)
     integrity_tag = aead.encrypt(RETRY_AEAD_NONCE, b"", buf.data)
-    assert len(integrity_tag) == RETRY_INTEGRITY_SIZE
+    assert len(integrity_tag) == RETRY_INTEGRITY_TAG_SIZE
     return integrity_tag
 
 
@@ -159,9 +143,9 @@ def pull_quic_header(buf: Buffer, host_cid_length: Optional[int] = None) -> Quic
                 token = buf.pull_bytes(token_length)
                 rest_length = buf.pull_uint_var()
             elif packet_type == PACKET_TYPE_RETRY:
-                token_length = buf.capacity - buf.tell() - RETRY_INTEGRITY_SIZE
+                token_length = buf.capacity - buf.tell() - RETRY_INTEGRITY_TAG_SIZE
                 token = buf.pull_bytes(token_length)
-                integrity_tag = buf.pull_bytes(RETRY_INTEGRITY_SIZE)
+                integrity_tag = buf.pull_bytes(RETRY_INTEGRITY_TAG_SIZE)
                 rest_length = 0
             else:
                 rest_length = buf.pull_uint_var()
@@ -201,21 +185,12 @@ def encode_quic_retry(
     original_destination_cid: bytes,
     retry_token: bytes,
 ) -> bytes:
-    # calculate integrity tag
-    integrity_tag = get_retry_integrity_tag(
-        version=version,
-        source_cid=source_cid,
-        destination_cid=destination_cid,
-        original_destination_cid=original_destination_cid,
-        retry_token=retry_token,
-    )
-
     buf = Buffer(
         capacity=7
         + len(destination_cid)
         + len(source_cid)
-        + len(integrity_tag)
         + len(retry_token)
+        + RETRY_INTEGRITY_TAG_SIZE
     )
     buf.push_uint8(PACKET_TYPE_RETRY)
     buf.push_uint32(version)
@@ -224,7 +199,7 @@ def encode_quic_retry(
     buf.push_uint8(len(source_cid))
     buf.push_bytes(source_cid)
     buf.push_bytes(retry_token)
-    buf.push_bytes(integrity_tag)
+    buf.push_bytes(get_retry_integrity_tag(buf.data, original_destination_cid))
     assert buf.eof()
     return buf.data
 

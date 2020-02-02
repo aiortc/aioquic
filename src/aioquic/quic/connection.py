@@ -20,6 +20,7 @@ from .packet import (
     PACKET_TYPE_RETRY,
     PACKET_TYPE_ZERO_RTT,
     PROBING_FRAME_TYPES,
+    RETRY_INTEGRITY_TAG_SIZE,
     QuicErrorCode,
     QuicFrameType,
     QuicProtocolVersion,
@@ -684,11 +685,8 @@ class QuicConnection:
             if self._is_client and header.packet_type == PACKET_TYPE_RETRY:
                 # calculate stateless retry integrity tag
                 integrity_tag = get_retry_integrity_tag(
-                    version=header.version,
-                    source_cid=header.source_cid,
-                    destination_cid=header.destination_cid,
-                    original_destination_cid=self._peer_cid,
-                    retry_token=header.token,
+                    buf.data_slice(start_off, buf.tell() - RETRY_INTEGRITY_TAG_SIZE),
+                    self._peer_cid,
                 )
 
                 if (
