@@ -10,9 +10,9 @@ from typing import Deque, Dict, cast
 from urllib.parse import urlparse
 
 from httpx import AsyncClient
-from httpx.config import CertTypes, TimeoutTypes, VerifyTypes
-from httpx.interfaces import AsyncDispatcher
-from httpx.models import AsyncRequest, AsyncResponse
+from httpx.config import Timeout
+from httpx.dispatch.base import AsyncDispatcher
+from httpx.models import Request, Response
 
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
@@ -33,13 +33,7 @@ class H3Dispatcher(QuicConnectionProtocol, AsyncDispatcher):
         self._request_events: Dict[int, Deque[H3Event]] = {}
         self._request_waiter: Dict[int, asyncio.Future[Deque[H3Event]]] = {}
 
-    async def send(
-        self,
-        request: AsyncRequest,
-        verify: VerifyTypes = None,
-        cert: CertTypes = None,
-        timeout: TimeoutTypes = None,
-    ) -> AsyncResponse:
+    async def send(self, request: Request, timeout: Timeout = None) -> Response:
         stream_id = self._quic.get_next_available_stream_id()
 
         # prepare request
@@ -57,7 +51,7 @@ class H3Dispatcher(QuicConnectionProtocol, AsyncDispatcher):
                 if k not in ("connection", "host")
             ],
         )
-        self._http.send_data(stream_id=stream_id, data=request.content, end_stream=True)
+        self._http.send_data(stream_id=stream_id, data=request.read(), end_stream=True)
 
         # transmit request
         waiter = self._loop.create_future()
@@ -80,12 +74,11 @@ class H3Dispatcher(QuicConnectionProtocol, AsyncDispatcher):
             elif isinstance(event, DataReceived):
                 content += event.data
 
-        return AsyncResponse(
+        return Response(
             status_code=status_code,
-            protocol="HTTP/3",
+            http_version="HTTP/3",
             headers=headers,
             content=content,
-            # on_close=on_close,
             request=request,
         )
 
