@@ -262,7 +262,11 @@ class QuicPacketBuilder:
         packet_size = buf.tell() - self._packet_start
         if packet_size > self._header_size:
             # pad initial datagram
-            if self._is_client and self._packet_type == PACKET_TYPE_INITIAL:
+            if (
+                self._is_client
+                and self._packet_type == PACKET_TYPE_INITIAL
+                and self._packet.is_crypto_packet
+            ):
                 if self.remaining_flight_space:
                     buf.push_bytes(bytes(self.remaining_flight_space))
                     packet_size = buf.tell() - self._packet_start
