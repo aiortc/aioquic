@@ -83,6 +83,7 @@ class Server:
 
 
 SERVERS = [
+    Server("akamaiquic", "ietf.akaquic.com", port=443, verify_mode=ssl.CERT_NONE),
     Server(
         "aioquic", "quic.aiortc.org", port=443, push_path="/", structured_logging=True
     ),
