@@ -180,10 +180,18 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
                 self._connection_id_retired_handler(event.connection_id)
             elif isinstance(event, events.ConnectionTerminated):
                 self._connection_terminated_handler()
+
+                # abort connection waiter
                 if self._connected_waiter is not None:
                     waiter = self._connected_waiter
                     self._connected_waiter = None
                     waiter.set_exception(ConnectionError)
+
+                # abort ping waiters
+                for waiter in self._ping_waiters.values():
+                    waiter.set_exception(ConnectionError)
+                self._ping_waiters.clear()
+
                 self._closed.set()
             elif isinstance(event, events.HandshakeCompleted):
                 if self._connected_waiter is not None:

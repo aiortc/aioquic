@@ -282,6 +282,23 @@ class HighLevelTest(TestCase):
                 )
             )
 
+    def test_connect_timeout_no_wait_connected(self):
+        async def run_client_no_wait_connected(host, port, configuration):
+            configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+            async with connect(
+                host, port, configuration=configuration, wait_connected=False
+            ) as client:
+                await client.ping()
+
+        with self.assertRaises(ConnectionError):
+            run(
+                run_client_no_wait_connected(
+                    "127.0.0.1",
+                    port=4400,
+                    configuration=QuicConfiguration(is_client=True, idle_timeout=5),
+                )
+            )
+
     def test_change_connection_id(self):
         async def run_client_change_connection_id(host, port=4433):
             configuration = QuicConfiguration(is_client=True)

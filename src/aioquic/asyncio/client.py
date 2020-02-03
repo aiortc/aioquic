@@ -21,6 +21,7 @@ async def connect(
     create_protocol: Optional[Callable] = QuicConnectionProtocol,
     session_ticket_handler: Optional[SessionTicketHandler] = None,
     stream_handler: Optional[QuicStreamHandler] = None,
+    wait_connected: bool = True,
 ) -> AsyncGenerator[QuicConnectionProtocol, None]:
     """
     Connect to a QUIC server at the given `host` and `port`.
@@ -74,7 +75,8 @@ async def connect(
     )
     protocol = cast(QuicConnectionProtocol, protocol)
     protocol.connect(addr)
-    await protocol.wait_connected()
+    if wait_connected:
+        await protocol.wait_connected()
     try:
         yield protocol
     finally:
