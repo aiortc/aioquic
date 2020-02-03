@@ -280,6 +280,9 @@ async def test_session_resumption(server: Server, configuration: QuicConfigurati
     ) as protocol:
         await protocol.ping()
 
+        # some servers don't send the ticket immediately
+        await asyncio.sleep(1)
+
     # connect a second time, with the ticket
     if saved_ticket is not None:
         configuration.session_ticket = saved_ticket
