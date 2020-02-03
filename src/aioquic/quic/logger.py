@@ -78,10 +78,7 @@ class QuicLoggerTrace:
         return {"frame_type": "data_blocked", "limit": str(limit)}
 
     def encode_datagram_frame(self, length: int) -> Dict:
-        return {
-            "frame_type": "datagram",
-            "length": length,
-        }
+        return {"frame_type": "datagram", "length": length}
 
     def encode_handshake_done_frame(self) -> Dict:
         return {"frame_type": "handshake_done"}
