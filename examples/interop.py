@@ -94,7 +94,7 @@ SERVERS = [
     Server(
         "msquic",
         "quic.westus.cloudapp.azure.com",
-        port=443,
+        port=4433,
         session_resumption_port=4433,
         structured_logging=True,
         throughput_file_suffix=".txt",
@@ -449,7 +449,7 @@ async def run(servers, tests, quic_log=False, secrets_log_file=None) -> None:
             if test_name == "test_throughput":
                 timeout = 60
             else:
-                timeout = 5
+                timeout = 10
             try:
                 await asyncio.wait_for(
                     test_func(server, configuration), timeout=timeout
