@@ -341,6 +341,7 @@ class Group(IntEnum):
     SECP384R1 = 0x0018
     SECP521R1 = 0x0019
     X25519 = 0x001D
+    GREASE = 0xAAAA
 
 
 class HandshakeType(IntEnum):
@@ -1049,12 +1050,15 @@ def cipher_suite_hash(cipher_suite: CipherSuite) -> hashes.HashAlgorithm:
 
 def decode_public_key(
     key_share: KeyShareEntry,
-) -> Union[ec.EllipticCurvePublicKey, x25519.X25519PublicKey]:
+) -> Union[ec.EllipticCurvePublicKey, x25519.X25519PublicKey, None]:
     if key_share[0] == Group.X25519:
         return x25519.X25519PublicKey.from_public_bytes(key_share[1])
-    return ec.EllipticCurvePublicKey.from_encoded_point(
-        GROUP_TO_CURVE[key_share[0]](), key_share[1]
-    )
+    elif key_share[0] in GROUP_TO_CURVE:
+        return ec.EllipticCurvePublicKey.from_encoded_point(
+            GROUP_TO_CURVE[key_share[0]](), key_share[1]
+        )
+    else:
+        return None
 
 
 def encode_public_key(
@@ -1346,17 +1350,22 @@ class Context:
         key_share: List[KeyShareEntry] = []
         supported_groups: List[int] = []
 
-        if Group.SECP256R1 in self._supported_groups:
-            self._ec_private_key = ec.generate_private_key(
-                GROUP_TO_CURVE[Group.SECP256R1](), default_backend()
-            )
-            key_share.append(encode_public_key(self._ec_private_key.public_key()))
-            supported_groups.append(Group.SECP256R1)
-
-        if Group.X25519 in self._supported_groups:
-            self._x25519_private_key = x25519.X25519PrivateKey.generate()
-            key_share.append(encode_public_key(self._x25519_private_key.public_key()))
-            supported_groups.append(Group.X25519)
+        for group in self._supported_groups:
+            if group == Group.SECP256R1:
+                self._ec_private_key = ec.generate_private_key(
+                    GROUP_TO_CURVE[Group.SECP256R1](), default_backend()
+                )
+                key_share.append(encode_public_key(self._ec_private_key.public_key()))
+                supported_groups.append(Group.SECP256R1)
+            elif group == Group.X25519:
+                self._x25519_private_key = x25519.X25519PrivateKey.generate()
+                key_share.append(
+                    encode_public_key(self._x25519_private_key.public_key())
+                )
+                supported_groups.append(Group.X25519)
+            elif group == Group.GREASE:
+                key_share.append((Group.GREASE, b"\x00"))
+                supported_groups.append(Group.GREASE)
 
         assert len(key_share), "no key share entries"
 

@@ -421,6 +421,13 @@ class ContextTest(TestCase):
 
         self._handshake(client, server)
 
+    def test_handshake_with_grease_group(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.GREASE, tls.Group.SECP256R1]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
     def test_handshake_with_x25519(self):
         client = self.create_client()
         client._supported_groups = [tls.Group.X25519]
