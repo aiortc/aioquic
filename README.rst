@@ -69,6 +69,12 @@ Running the examples
 
    $ sudo apt install libssl-dev python3-dev
 
+On Alpine Linux you will also need the following:
+
+.. code-block:: console
+
+   $ sudo apt install bsd-compat-headers libffi-dev
+
 After checking out the code using git you can run:
 
 .. code-block:: console
