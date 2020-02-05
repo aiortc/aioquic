@@ -72,6 +72,20 @@ STREAM_FLAGS = 0x07
 
 NetworkAddress = Any
 
+# frame sizes
+ACK_FRAME_CAPACITY = 64  # FIXME: this is arbitrary!
+APPLICATION_CLOSE_FRAME_CAPACITY = 1 + 8 + 8  # + reason length
+HANDSHAKE_DONE_FRAME_CAPACITY = 1
+MAX_DATA_FRAME_CAPACITY = 1 + 8
+MAX_STREAM_DATA_FRAME_CAPACITY = 1 + 8 + 8
+NEW_CONNECTION_ID_FRAME_CAPACITY = 1 + 8 + 8 + 1 + 20 + 16
+PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
+PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
+PING_FRAME_CAPACITY = 1
+RETIRE_CONNECTION_ID_CAPACITY = 1 + 8
+STREAMS_BLOCKED_CAPACITY = 1 + 8
+TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 8 + 8 + 8  # + reason length
+
 
 def EPOCHS(shortcut: str) -> FrozenSet[tls.Epoch]:
     return frozenset(EPOCH_SHORTCUTS[i] for i in shortcut)
@@ -2281,8 +2295,9 @@ class QuicConnection:
 
         buf = builder.start_frame(
             QuicFrameType.ACK,
-            self._on_ack_delivery,
-            (space, space.largest_received_packet),
+            capacity=ACK_FRAME_CAPACITY,
+            handler=self._on_ack_delivery,
+            handler_args=(space, space.largest_received_packet),
         )
         push_ack_frame(buf, space.ack_queue, ack_delay_encoded)
         space.ack_at = None
@@ -2303,17 +2318,24 @@ class QuicConnection:
         reason_phrase: str,
     ) -> None:
         reason_bytes = reason_phrase.encode("utf8")
+        reason_length = len(reason_bytes)
 
         if frame_type is None:
-            buf = builder.start_frame(QuicFrameType.APPLICATION_CLOSE)
+            buf = builder.start_frame(
+                QuicFrameType.APPLICATION_CLOSE,
+                capacity=APPLICATION_CLOSE_FRAME_CAPACITY + reason_length,
+            )
             buf.push_uint_var(error_code)
-            buf.push_uint_var(len(reason_bytes))
+            buf.push_uint_var(reason_length)
             buf.push_bytes(reason_bytes)
         else:
-            buf = builder.start_frame(QuicFrameType.TRANSPORT_CLOSE)
+            buf = builder.start_frame(
+                QuicFrameType.TRANSPORT_CLOSE,
+                capacity=TRANSPORT_CLOSE_FRAME_CAPACITY + reason_length,
+            )
             buf.push_uint_var(error_code)
             buf.push_uint_var(frame_type)
-            buf.push_uint_var(len(reason_bytes))
+            buf.push_uint_var(reason_length)
             buf.push_bytes(reason_bytes)
 
         # log frame
@@ -2337,7 +2359,9 @@ class QuicConnection:
             self._logger.debug("Local max_data raised to %d", self._local_max_data)
         if self._local_max_data_sent != self._local_max_data:
             buf = builder.start_frame(
-                QuicFrameType.MAX_DATA, self._on_max_data_delivery
+                QuicFrameType.MAX_DATA,
+                capacity=MAX_DATA_FRAME_CAPACITY,
+                handler=self._on_max_data_delivery,
             )
             buf.push_uint_var(self._local_max_data)
             self._local_max_data_sent = self._local_max_data
@@ -2356,9 +2380,9 @@ class QuicConnection:
         if frame is not None:
             buf = builder.start_frame(
                 QuicFrameType.CRYPTO,
-                stream.on_data_delivery,
-                (frame.offset, frame.offset + len(frame.data)),
-                required_bytes=frame_overhead,
+                capacity=frame_overhead,
+                handler=stream.on_data_delivery,
+                handler_args=(frame.offset, frame.offset + len(frame.data)),
             )
             buf.push_uint_var(frame.offset)
             buf.push_uint16(len(frame.data) | 0x4000)
@@ -2385,7 +2409,7 @@ class QuicConnection:
         length = len(data)
         frame_size = 1 + size_uint_var(length) + length
 
-        buf = builder.start_frame(frame_type, required_bytes=frame_size)
+        buf = builder.start_frame(frame_type, capacity=frame_size)
         buf.push_uint_var(length)
         buf.push_bytes(data)
 
@@ -2399,7 +2423,9 @@ class QuicConnection:
 
     def _write_handshake_done_frame(self, builder: QuicPacketBuilder) -> None:
         builder.start_frame(
-            QuicFrameType.HANDSHAKE_DONE, self._on_handshake_done_delivery,
+            QuicFrameType.HANDSHAKE_DONE,
+            capacity=HANDSHAKE_DONE_FRAME_CAPACITY,
+            handler=self._on_handshake_done_delivery,
         )
 
         # log frame
@@ -2415,8 +2441,9 @@ class QuicConnection:
 
         buf = builder.start_frame(
             QuicFrameType.NEW_CONNECTION_ID,
-            self._on_new_connection_id_delivery,
-            (connection_id,),
+            capacity=NEW_CONNECTION_ID_FRAME_CAPACITY,
+            handler=self._on_new_connection_id_delivery,
+            handler_args=(connection_id,),
         )
         buf.push_uint_var(connection_id.sequence_number)
         buf.push_uint_var(retire_prior_to)
@@ -2441,7 +2468,9 @@ class QuicConnection:
     def _write_path_challenge_frame(
         self, builder: QuicPacketBuilder, challenge: bytes
     ) -> None:
-        buf = builder.start_frame(QuicFrameType.PATH_CHALLENGE)
+        buf = builder.start_frame(
+            QuicFrameType.PATH_CHALLENGE, capacity=PATH_CHALLENGE_FRAME_CAPACITY
+        )
         buf.push_bytes(challenge)
 
         # log frame
@@ -2453,7 +2482,9 @@ class QuicConnection:
     def _write_path_response_frame(
         self, builder: QuicPacketBuilder, challenge: bytes
     ) -> None:
-        buf = builder.start_frame(QuicFrameType.PATH_RESPONSE)
+        buf = builder.start_frame(
+            QuicFrameType.PATH_RESPONSE, capacity=PATH_RESPONSE_FRAME_CAPACITY
+        )
         buf.push_bytes(challenge)
 
         # log frame
@@ -2464,7 +2495,10 @@ class QuicConnection:
 
     def _write_ping_frame(self, builder: QuicPacketBuilder, uids: List[int] = []):
         builder.start_frame(
-            QuicFrameType.PING, self._on_ping_delivery, (tuple(uids),), required_bytes=1
+            QuicFrameType.PING,
+            capacity=PING_FRAME_CAPACITY,
+            handler=self._on_ping_delivery,
+            handler_args=(tuple(uids),),
         )
         self._logger.debug(
             "Sending PING%s in packet %d",
@@ -2481,8 +2515,9 @@ class QuicConnection:
     ) -> None:
         buf = builder.start_frame(
             QuicFrameType.RETIRE_CONNECTION_ID,
-            self._on_retire_connection_id_delivery,
-            (sequence_number,),
+            capacity=RETIRE_CONNECTION_ID_CAPACITY,
+            handler=self._on_retire_connection_id_delivery,
+            handler_args=(sequence_number,),
         )
         buf.push_uint_var(sequence_number)
 
@@ -2519,9 +2554,9 @@ class QuicConnection:
                 frame_type |= 1
             buf = builder.start_frame(
                 frame_type,
-                stream.on_data_delivery,
-                (frame.offset, frame.offset + len(frame.data)),
-                required_bytes=frame_overhead,
+                capacity=frame_overhead,
+                handler=stream.on_data_delivery,
+                handler_args=(frame.offset, frame.offset + len(frame.data)),
             )
             buf.push_uint_var(stream.stream_id)
             if frame.offset:
@@ -2564,8 +2599,9 @@ class QuicConnection:
         if stream.max_stream_data_local_sent != stream.max_stream_data_local:
             buf = builder.start_frame(
                 QuicFrameType.MAX_STREAM_DATA,
-                self._on_max_stream_data_delivery,
-                (stream,),
+                capacity=MAX_STREAM_DATA_FRAME_CAPACITY,
+                handler=self._on_max_stream_data_delivery,
+                handler_args=(stream,),
             )
             buf.push_uint_var(stream.stream_id)
             buf.push_uint_var(stream.max_stream_data_local)
@@ -2582,7 +2618,7 @@ class QuicConnection:
     def _write_streams_blocked_frame(
         self, builder: QuicPacketBuilder, frame_type: QuicFrameType, limit: int
     ) -> None:
-        buf = builder.start_frame(frame_type)
+        buf = builder.start_frame(frame_type, capacity=STREAMS_BLOCKED_CAPACITY)
         buf.push_uint_var(limit)
 
         # log frame

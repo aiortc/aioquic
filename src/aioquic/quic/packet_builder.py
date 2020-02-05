@@ -159,16 +159,16 @@ class QuicPacketBuilder:
     def start_frame(
         self,
         frame_type: int,
+        capacity: int = 1,
         handler: Optional[QuicDeliveryHandler] = None,
-        args: Sequence[Any] = [],
-        required_bytes: int = 64,
+        handler_args: Sequence[Any] = [],
     ) -> Buffer:
         """
         Starts a new frame.
         """
-        if self.remaining_buffer_space < required_bytes or (
+        if self.remaining_buffer_space < capacity or (
             frame_type not in NON_IN_FLIGHT_FRAME_TYPES
-            and self.remaining_flight_space < required_bytes
+            and self.remaining_flight_space < capacity
         ):
             raise QuicPacketBuilderStop
 
@@ -180,7 +180,7 @@ class QuicPacketBuilder:
         if frame_type == QuicFrameType.CRYPTO:
             self._packet.is_crypto_packet = True
         if handler is not None:
-            self._packet.delivery_handlers.append((handler, args))
+            self._packet.delivery_handlers.append((handler, handler_args))
         return self._buffer
 
     def start_packet(self, packet_type: int, crypto: CryptoPair) -> None:
