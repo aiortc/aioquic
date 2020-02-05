@@ -315,7 +315,7 @@ class ContextTest(TestCase):
         self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
         server_input = merge_buffers(client_buf)
         self.assertGreaterEqual(len(server_input), 213)
-        self.assertLessEqual(len(server_input), 296)
+        self.assertLessEqual(len(server_input), 358)
         reset_buffers(client_buf)
 
         # handle client hello
@@ -438,6 +438,16 @@ class ContextTest(TestCase):
         except UnsupportedAlgorithm as exc:
             self.skipTest(str(exc))
 
+    def test_handshake_with_x448(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.X448]
+        server = self.create_server()
+
+        try:
+            self._handshake(client, server)
+        except UnsupportedAlgorithm as exc:
+            self.skipTest(str(exc))
+
     def test_session_ticket(self):
         client_tickets = []
         server_tickets = []
@@ -488,7 +498,7 @@ class ContextTest(TestCase):
             self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
             server_input = merge_buffers(client_buf)
             self.assertGreaterEqual(len(server_input), 383)
-            self.assertLessEqual(len(server_input), 421)
+            self.assertLessEqual(len(server_input), 483)
             reset_buffers(client_buf)
 
             # handle client hello
@@ -537,7 +547,7 @@ class ContextTest(TestCase):
             self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
             server_input = merge_buffers(client_buf)
             self.assertGreaterEqual(len(server_input), 383)
-            self.assertLessEqual(len(server_input), 421)
+            self.assertLessEqual(len(server_input), 483)
             reset_buffers(client_buf)
 
             # tamper with binder
@@ -563,7 +573,7 @@ class ContextTest(TestCase):
             self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
             server_input = merge_buffers(client_buf)
             self.assertGreaterEqual(len(server_input), 383)
-            self.assertLessEqual(len(server_input), 421)
+            self.assertLessEqual(len(server_input), 483)
             reset_buffers(client_buf)
 
             # handle client hello
