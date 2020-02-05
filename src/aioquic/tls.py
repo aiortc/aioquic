@@ -25,7 +25,14 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.bindings.openssl.binding import Binding
 from cryptography.hazmat.primitives import hashes, hmac, serialization
-from cryptography.hazmat.primitives.asymmetric import dsa, ec, padding, rsa, x25519
+from cryptography.hazmat.primitives.asymmetric import (
+    dsa,
+    ec,
+    padding,
+    rsa,
+    x448,
+    x25519,
+)
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -341,6 +348,7 @@ class Group(IntEnum):
     SECP384R1 = 0x0018
     SECP521R1 = 0x0019
     X25519 = 0x001D
+    X448 = 0x001E
     GREASE = 0xAAAA
 
 
@@ -1050,9 +1058,11 @@ def cipher_suite_hash(cipher_suite: CipherSuite) -> hashes.HashAlgorithm:
 
 def decode_public_key(
     key_share: KeyShareEntry,
-) -> Union[ec.EllipticCurvePublicKey, x25519.X25519PublicKey, None]:
+) -> Union[ec.EllipticCurvePublicKey, x25519.X25519PublicKey, x448.X448PublicKey, None]:
     if key_share[0] == Group.X25519:
         return x25519.X25519PublicKey.from_public_bytes(key_share[1])
+    elif key_share[0] == Group.X448:
+        return x448.X448PublicKey.from_public_bytes(key_share[1])
     elif key_share[0] in GROUP_TO_CURVE:
         return ec.EllipticCurvePublicKey.from_encoded_point(
             GROUP_TO_CURVE[key_share[0]](), key_share[1]
@@ -1062,10 +1072,14 @@ def decode_public_key(
 
 
 def encode_public_key(
-    public_key: Union[ec.EllipticCurvePublicKey, x25519.X25519PublicKey]
+    public_key: Union[
+        ec.EllipticCurvePublicKey, x25519.X25519PublicKey, x448.X448PublicKey
+    ]
 ) -> KeyShareEntry:
     if isinstance(public_key, x25519.X25519PublicKey):
         return (Group.X25519, public_key.public_bytes(Encoding.Raw, PublicFormat.Raw))
+    elif isinstance(public_key, x448.X448PublicKey):
+        return (Group.X448, public_key.public_bytes(Encoding.Raw, PublicFormat.Raw))
     return (
         CURVE_TO_GROUP[public_key.curve.__class__],
         public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint),
@@ -1203,6 +1217,8 @@ class Context:
         self._supported_groups = [Group.SECP256R1]
         if default_backend().x25519_supported():
             self._supported_groups.append(Group.X25519)
+        if default_backend().x448_supported():
+            self._supported_groups.append(Group.X448)
         self._supported_versions = [TLS_VERSION_1_3]
 
         # state
@@ -1223,6 +1239,7 @@ class Context:
 
         self._ec_private_key: Optional[ec.EllipticCurvePrivateKey] = None
         self._x25519_private_key: Optional[x25519.X25519PrivateKey] = None
+        self._x448_private_key: Optional[x448.X448PrivateKey] = None
 
         if is_client:
             self.client_random = os.urandom(32)
@@ -1363,6 +1380,10 @@ class Context:
                     encode_public_key(self._x25519_private_key.public_key())
                 )
                 supported_groups.append(Group.X25519)
+            elif group == Group.X448:
+                self._x448_private_key = x448.X448PrivateKey.generate()
+                key_share.append(encode_public_key(self._x448_private_key.public_key()))
+                supported_groups.append(Group.X448)
             elif group == Group.GREASE:
                 key_share.append((Group.GREASE, b"\x00"))
                 supported_groups.append(Group.GREASE)
@@ -1468,6 +1489,11 @@ class Context:
             and self._x25519_private_key is not None
         ):
             shared_key = self._x25519_private_key.exchange(peer_public_key)
+        elif (
+            isinstance(peer_public_key, x448.X448PublicKey)
+            and self._x448_private_key is not None
+        ):
+            shared_key = self._x448_private_key.exchange(peer_public_key)
         elif (
             isinstance(peer_public_key, ec.EllipticCurvePublicKey)
             and self._ec_private_key is not None
@@ -1723,7 +1749,9 @@ class Context:
             self.key_schedule.update_hash(input_buf.data)
 
         # perform key exchange
-        public_key: Union[ec.EllipticCurvePublicKey, x25519.X25519PublicKey]
+        public_key: Union[
+            ec.EllipticCurvePublicKey, x25519.X25519PublicKey, x448.X448PublicKey
+        ]
         shared_key: Optional[bytes] = None
         for key_share in peer_hello.key_share:
             peer_public_key = decode_public_key(key_share)
@@ -1731,6 +1759,11 @@ class Context:
                 self._x25519_private_key = x25519.X25519PrivateKey.generate()
                 public_key = self._x25519_private_key.public_key()
                 shared_key = self._x25519_private_key.exchange(peer_public_key)
+                break
+            elif isinstance(peer_public_key, x448.X448PublicKey):
+                self._x448_private_key = x448.X448PrivateKey.generate()
+                public_key = self._x448_private_key.public_key()
+                shared_key = self._x448_private_key.exchange(peer_public_key)
                 break
             elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
                 self._ec_private_key = ec.generate_private_key(
