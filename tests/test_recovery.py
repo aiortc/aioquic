@@ -5,11 +5,60 @@ from aioquic import tls
 from aioquic.quic.packet import PACKET_TYPE_INITIAL, PACKET_TYPE_ONE_RTT
 from aioquic.quic.packet_builder import QuicSentPacket
 from aioquic.quic.rangeset import RangeSet
-from aioquic.quic.recovery import QuicPacketRecovery, QuicPacketSpace, QuicRttMonitor
+from aioquic.quic.recovery import (
+    QuicPacketPacer,
+    QuicPacketRecovery,
+    QuicPacketSpace,
+    QuicRttMonitor,
+)
 
 
 def send_probe():
     pass
+
+
+class QuicPacketPacerTest(TestCase):
+    def setUp(self):
+        self.pacer = QuicPacketPacer()
+
+    def test_no_measurement(self):
+        self.assertIsNone(self.pacer.next_send_time(now=0.0))
+        self.pacer.update_after_send(now=0.0)
+
+        self.assertIsNone(self.pacer.next_send_time(now=0.0))
+        self.pacer.update_after_send(now=0.0)
+
+    def test_with_measurement(self):
+        self.assertIsNone(self.pacer.next_send_time(now=0.0))
+        self.pacer.update_after_send(now=0.0)
+
+        self.pacer.update_rate(congestion_window=1280000, smoothed_rtt=0.05)
+        self.assertEqual(self.pacer.bucket_max, 0.0008)
+        self.assertEqual(self.pacer.bucket_time, 0.0)
+        self.assertEqual(self.pacer.packet_time, 0.00005)
+
+        # 16 packets
+        for i in range(16):
+            self.assertIsNone(self.pacer.next_send_time(now=1.0))
+            self.pacer.update_after_send(now=1.0)
+        self.assertAlmostEqual(self.pacer.next_send_time(now=1.0), 1.00005)
+
+        # 2 packets
+        for i in range(2):
+            self.assertIsNone(self.pacer.next_send_time(now=1.00005))
+            self.pacer.update_after_send(now=1.00005)
+        self.assertAlmostEqual(self.pacer.next_send_time(now=1.00005), 1.0001)
+
+        # 1 packet
+        self.assertIsNone(self.pacer.next_send_time(now=1.0001))
+        self.pacer.update_after_send(now=1.0001)
+        self.assertAlmostEqual(self.pacer.next_send_time(now=1.0001), 1.00015)
+
+        # 2 packets
+        for i in range(2):
+            self.assertIsNone(self.pacer.next_send_time(now=1.00015))
+            self.pacer.update_after_send(now=1.00015)
+        self.assertAlmostEqual(self.pacer.next_send_time(now=1.00015), 1.0002)
 
 
 class QuicPacketRecoveryTest(TestCase):

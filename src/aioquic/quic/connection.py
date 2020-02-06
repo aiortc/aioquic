@@ -257,6 +257,7 @@ class QuicConnection:
         self._loss_at: Optional[float] = None
         self._network_paths: List[QuicNetworkPath] = []
         self._original_connection_id = original_connection_id
+        self._pacing_at: Optional[float] = None
         self._packet_number = 0
         self._parameters_received = False
         self._peer_cid = os.urandom(configuration.connection_id_length)
@@ -568,6 +569,11 @@ class QuicConnection:
             self._loss_at = self._loss.get_loss_detection_time()
             if self._loss_at is not None and self._loss_at < timer_at:
                 timer_at = self._loss_at
+
+            # pacing timer
+            if self._pacing_at is not None and self._pacing_at < timer_at:
+                timer_at = self._pacing_at
+
         return timer_at
 
     def handle_timer(self, now: float) -> None:
@@ -2133,6 +2139,11 @@ class QuicConnection:
         space = self._spaces[tls.Epoch.ONE_RTT]
 
         while True:
+            # apply pacing, except if we have ACKs to send
+            if space.ack_at is None or space.ack_at >= now:
+                self._pacing_at = self._loss._pacer.next_send_time(now=now)
+                if self._pacing_at is not None:
+                    break
             builder.start_packet(packet_type, crypto)
 
             if self._handshake_complete:
@@ -2245,6 +2256,8 @@ class QuicConnection:
 
             if builder.packet_is_empty:
                 break
+            else:
+                self._loss._pacer.update_after_send(now=now)
 
     def _write_handshake(
         self, builder: QuicPacketBuilder, epoch: tls.Epoch, now: float
