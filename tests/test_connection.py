@@ -1525,7 +1525,7 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(server._remote_max_data, 1048576)
 
             # artificially raise bytes in flight
-            client._loss.bytes_in_flight = 14303
+            client._loss._cc.bytes_in_flight = 14303
 
             # MAX_DATA is not sent due to congestion control
             self.assertEqual(drop(client), 0)
