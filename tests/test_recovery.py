@@ -105,7 +105,7 @@ class QuicPacketRecoveryTest(TestCase):
             packet_number=0,
             packet_type=PACKET_TYPE_INITIAL,
             sent_bytes=1280,
-            sent_time=123.45,
+            sent_time=0.0,
         )
         space = self.INITIAL_SPACE
 
@@ -114,7 +114,7 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(space.ack_eliciting_in_flight, 1)
         self.assertEqual(len(space.sent_packets), 1)
 
-        self.recovery.on_packet_lost(packet, space)
+        self.recovery._detect_loss(space, now=1.0)
         self.assertEqual(self.recovery.bytes_in_flight, 0)
         self.assertEqual(space.ack_eliciting_in_flight, 0)
         self.assertEqual(len(space.sent_packets), 0)
