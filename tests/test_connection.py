@@ -25,6 +25,7 @@ from aioquic.quic.packet import (
     encode_quic_version_negotiation,
 )
 from aioquic.quic.packet_builder import QuicDeliveryState, QuicPacketBuilder
+from aioquic.quic.recovery import QuicPacketPacer
 
 from .utils import (
     SERVER_CACERTFILE,
@@ -123,6 +124,14 @@ def client_and_server(
     # close
     client.close()
     server.close()
+
+
+def disable_packet_pacing(connection):
+    class DummyPacketPacer(QuicPacketPacer):
+        def next_send_time(self, now):
+            return None
+
+    connection._loss._pacer = DummyPacketPacer()
 
 
 def sequence_numbers(connection_ids):
@@ -721,6 +730,7 @@ class QuicConnectionTest(TestCase):
 
         with client_and_server(
             client_options={"max_datagram_frame_size": 65536},
+            client_patch=disable_packet_pacing,
             server_options={"max_datagram_frame_size": 65536},
         ) as (client, server):
             # check handshake completed
@@ -1548,7 +1558,7 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(server._remote_max_data, 2097152)
 
     def test_send_max_stream_data_retransmit(self):
-        with client_and_server() as (client, server):
+        with client_and_server(server_patch=disable_packet_pacing) as (client, server):
             # client creates bidirectional stream 0
             stream = client._create_stream(stream_id=0)
             client.send_stream_data(0, b"hello")
