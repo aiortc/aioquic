@@ -47,7 +47,7 @@ class QuicLoggerTrace:
 
     def encode_ack_frame(self, ranges: RangeSet, delay: float) -> Dict:
         return {
-            "ack_delay": str(int(delay * 1000)),  # convert to ms
+            "ack_delay": str(self.encode_time(delay)),
             "acked_ranges": [[str(x.start), str(x.stop - 1)] for x in ranges],
             "frame_type": "ack",
         }
@@ -181,6 +181,12 @@ class QuicLoggerTrace:
             "stream_type": "unidirectional" if is_unidirectional else "bidirectional",
         }
 
+    def encode_time(self, seconds: float) -> int:
+        """
+        Convert a time to integer microseconds.
+        """
+        return int(seconds * 1000000)
+
     def encode_transport_parameters(
         self, owner: str, parameters: QuicTransportParameters
     ) -> Dict[str, Any]:
@@ -209,15 +215,16 @@ class QuicLoggerTrace:
         else:
             reference_time = 0.0
         return {
+            "configuration": {"time_units": "us"},
             "common_fields": {
                 "ODCID": hexdump(self._odcid),
-                "reference_time": "%d" % (reference_time * 1000),
+                "reference_time": str(self.encode_time(reference_time)),
             },
             "event_fields": ["relative_time", "category", "event_type", "data"],
             "events": list(
                 map(
                     lambda event: (
-                        "%d" % ((event[0] - reference_time) * 1000),
+                        str(self.encode_time(event[0] - reference_time)),
                         event[1],
                         event[2],
                         event[3],

@@ -22,6 +22,7 @@ class QuicLoggerTest(TestCase):
                             "ODCID": "0000000000000000",
                             "reference_time": "0",
                         },
+                        "configuration": {"time_units": "us"},
                         "event_fields": [
                             "relative_time",
                             "category",

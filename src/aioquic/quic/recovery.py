@@ -392,10 +392,10 @@ class QuicPacketRecovery:
         if log_rtt:
             data.update(
                 {
-                    "latest_rtt": int(self._rtt_latest * 1000),
-                    "min_rtt": int(self._rtt_min * 1000),
-                    "smoothed_rtt": int(self._rtt_smoothed * 1000),
-                    "rtt_variance": int(self._rtt_variance * 1000),
+                    "latest_rtt": self._quic_logger.encode_time(self._rtt_latest),
+                    "min_rtt": self._quic_logger.encode_time(self._rtt_min),
+                    "smoothed_rtt": self._quic_logger.encode_time(self._rtt_smoothed),
+                    "rtt_variance": self._quic_logger.encode_time(self._rtt_variance),
                 }
             )
 
