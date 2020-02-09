@@ -152,6 +152,7 @@ async def run(configuration: QuicConfiguration, url: str, data: str) -> None:
         # print response
         for header, value in response.headers.items():
             sys.stderr.write(header + ": " + value + "\r\n")
+        sys.stderr.write("\r\n")
         sys.stdout.buffer.write(response.content)
         sys.stdout.buffer.flush()
 
