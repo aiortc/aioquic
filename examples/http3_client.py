@@ -7,7 +7,7 @@ import ssl
 import sys
 import time
 from collections import deque
-from typing import Callable, Deque, Dict, List, Optional, Union, cast
+from typing import BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
 from urllib.parse import urlparse
 
 import wsproto
@@ -229,7 +229,11 @@ class HttpClient(QuicConnectionProtocol):
 
 
 async def perform_http_request(
-    client: HttpClient, url: str, data: str, print_response: bool
+    client: HttpClient,
+    url: str,
+    data: str,
+    include: bool,
+    output_file: Optional[BinaryIO],
 ) -> None:
     # perform request
     start = time.time()
@@ -253,19 +257,19 @@ async def perform_http_request(
         % (octets, elapsed, octets * 8 / elapsed / 1000000)
     )
 
-    # print response
-    if print_response:
+    # output response
+    if output_file is not None:
         for http_event in http_events:
-            if isinstance(http_event, HeadersReceived):
+            if isinstance(http_event, HeadersReceived) and include:
                 headers = b""
                 for k, v in http_event.headers:
                     headers += k + b": " + v + b"\r\n"
                 if headers:
-                    sys.stderr.buffer.write(headers + b"\r\n")
-                    sys.stderr.buffer.flush()
+                    output_file.write(headers + b"\r\n")
+                    output_file.flush()
             elif isinstance(http_event, DataReceived):
-                sys.stdout.buffer.write(http_event.data)
-                sys.stdout.buffer.flush()
+                output_file.write(http_event.data)
+                output_file.flush()
 
 
 def save_session_ticket(ticket):
@@ -283,8 +287,9 @@ async def run(
     configuration: QuicConfiguration,
     url: str,
     data: str,
+    include: bool,
+    output: str,
     parallel: int,
-    print_response: bool,
 ) -> None:
     # parse URL
     parsed = urlparse(url)
@@ -322,10 +327,21 @@ async def run(
 
             await ws.close()
         else:
+            if output == "-":
+                output_file = sys.stdout.buffer
+            elif output:
+                output_file = open(output, "wb")
+            else:
+                output_file = None
+
             # perform request
             coros = [
                 perform_http_request(
-                    client=client, url=url, data=data, print_response=print_response
+                    client=client,
+                    url=url,
+                    data=data,
+                    include=include,
+                    output_file=output_file,
                 )
                 for i in range(parallel)
             ]
@@ -340,6 +356,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-d", "--data", type=str, help="send the specified data in a POST request"
+    )
+    parser.add_argument(
+        "-i",
+        "--include",
+        action="store_true",
+        help="include the HTTP response headers in the output",
     )
     parser.add_argument(
         "-k",
@@ -358,10 +380,13 @@ if __name__ == "__main__":
         help="log secrets to a file, for use with Wireshark",
     )
     parser.add_argument(
-        "--parallel", type=int, default=1, help="perform this many requests in parallel"
+        "-o",
+        "--output",
+        type=str,
+        help="write output to <file> or to stdout if passed '-'",
     )
     parser.add_argument(
-        "--print-response", action="store_true", help="print response headers and body"
+        "--parallel", type=int, default=1, help="perform this many requests in parallel"
     )
     parser.add_argument(
         "-s",
@@ -408,8 +433,9 @@ if __name__ == "__main__":
                 configuration=configuration,
                 url=args.url,
                 data=args.data,
+                include=args.include,
+                output=args.output,
                 parallel=args.parallel,
-                print_response=args.print_response,
             )
         )
     finally:
