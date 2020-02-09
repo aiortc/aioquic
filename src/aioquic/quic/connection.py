@@ -2218,7 +2218,7 @@ class QuicConnection:
 
             # PING (probe)
             if self._probe_pending:
-                self._write_ping_frame(builder)
+                self._write_ping_frame(builder, comment="probe")
                 self._probe_pending = False
 
             # CRYPTO
@@ -2293,7 +2293,7 @@ class QuicConnection:
                 and epoch == tls.Epoch.HANDSHAKE
                 and not self._handshake_complete
             ):
-                self._write_ping_frame(builder)
+                self._write_ping_frame(builder, comment="probe")
                 self._probe_pending = False
 
             if builder.packet_is_empty:
@@ -2312,7 +2312,7 @@ class QuicConnection:
             handler=self._on_ack_delivery,
             handler_args=(space, space.largest_received_packet),
         )
-        push_ack_frame(buf, space.ack_queue, ack_delay_encoded)
+        ranges = push_ack_frame(buf, space.ack_queue, ack_delay_encoded)
         space.ack_at = None
 
         # log frame
@@ -2322,6 +2322,10 @@ class QuicConnection:
                     ranges=space.ack_queue, delay=ack_delay
                 )
             )
+
+        # check if we need to trigger an ACK-of-ACK
+        if ranges > 1 and builder.packet_number % 8 == 0:
+            self._write_ping_frame(builder, comment="ACK-of-ACK trigger")
 
     def _write_connection_close_frame(
         self,
@@ -2506,7 +2510,9 @@ class QuicConnection:
                 self._quic_logger.encode_path_response_frame(data=challenge)
             )
 
-    def _write_ping_frame(self, builder: QuicPacketBuilder, uids: List[int] = []):
+    def _write_ping_frame(
+        self, builder: QuicPacketBuilder, uids: List[int] = [], comment=""
+    ):
         builder.start_frame(
             QuicFrameType.PING,
             capacity=PING_FRAME_CAPACITY,
@@ -2515,7 +2521,7 @@ class QuicConnection:
         )
         self._logger.debug(
             "Sending PING%s in packet %d",
-            "" if uids else " (probe)",
+            " (%s)" % comment if comment else "",
             builder.packet_number,
         )
 

@@ -450,8 +450,9 @@ def pull_ack_frame(buf: Buffer) -> Tuple[RangeSet, int]:
     return rangeset, delay
 
 
-def push_ack_frame(buf: Buffer, rangeset: RangeSet, delay: int) -> None:
-    index = len(rangeset) - 1
+def push_ack_frame(buf: Buffer, rangeset: RangeSet, delay: int) -> int:
+    ranges = len(rangeset)
+    index = ranges - 1
     r = rangeset[index]
     buf.push_uint_var(r.stop - 1)
     buf.push_uint_var(delay)
@@ -464,3 +465,4 @@ def push_ack_frame(buf: Buffer, rangeset: RangeSet, delay: int) -> None:
         buf.push_uint_var(start - r.stop - 1)
         buf.push_uint_var(r.stop - r.start - 1)
         start = r.start
+    return ranges
