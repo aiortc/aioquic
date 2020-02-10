@@ -2,12 +2,12 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import pickle
 import ssl
-import sys
 import time
 from collections import deque
-from typing import BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
+from typing import Callable, Deque, Dict, List, Optional, Union, cast
 from urllib.parse import urlparse
 
 import wsproto
@@ -229,11 +229,7 @@ class HttpClient(QuicConnectionProtocol):
 
 
 async def perform_http_request(
-    client: HttpClient,
-    url: str,
-    data: str,
-    include: bool,
-    output_file: Optional[BinaryIO],
+    client: HttpClient, url: str, data: str, include: bool, output_dir: Optional[str],
 ) -> None:
     # perform request
     start = time.time()
@@ -258,18 +254,20 @@ async def perform_http_request(
     )
 
     # output response
-    if output_file is not None:
-        for http_event in http_events:
-            if isinstance(http_event, HeadersReceived) and include:
-                headers = b""
-                for k, v in http_event.headers:
-                    headers += k + b": " + v + b"\r\n"
-                if headers:
-                    output_file.write(headers + b"\r\n")
-                    output_file.flush()
-            elif isinstance(http_event, DataReceived):
-                output_file.write(http_event.data)
-                output_file.flush()
+    if output_dir is not None:
+        output_path = os.path.join(
+            output_dir, os.path.basename(urlparse(url).path) or "index.html"
+        )
+        with open(output_path, "wb") as output_file:
+            for http_event in http_events:
+                if isinstance(http_event, HeadersReceived) and include:
+                    headers = b""
+                    for k, v in http_event.headers:
+                        headers += k + b": " + v + b"\r\n"
+                    if headers:
+                        output_file.write(headers + b"\r\n")
+                elif isinstance(http_event, DataReceived):
+                    output_file.write(http_event.data)
 
 
 def save_session_ticket(ticket):
@@ -285,14 +283,13 @@ def save_session_ticket(ticket):
 
 async def run(
     configuration: QuicConfiguration,
-    url: str,
+    urls: List[str],
     data: str,
     include: bool,
-    output: str,
-    parallel: int,
+    output_dir: Optional[str],
 ) -> None:
     # parse URL
-    parsed = urlparse(url)
+    parsed = urlparse(urls[0])
     assert parsed.scheme in (
         "https",
         "wss",
@@ -314,7 +311,7 @@ async def run(
         client = cast(HttpClient, client)
 
         if parsed.scheme == "wss":
-            ws = await client.websocket(url, subprotocols=["chat", "superchat"])
+            ws = await client.websocket(urls[0], subprotocols=["chat", "superchat"])
 
             # send some messages and receive reply
             for i in range(2):
@@ -327,13 +324,6 @@ async def run(
 
             await ws.close()
         else:
-            if output == "-":
-                output_file = sys.stdout.buffer
-            elif output:
-                output_file = open(output, "wb")
-            else:
-                output_file = None
-
             # perform request
             coros = [
                 perform_http_request(
@@ -341,9 +331,9 @@ async def run(
                     url=url,
                     data=data,
                     include=include,
-                    output_file=output_file,
+                    output_dir=output_dir,
                 )
-                for i in range(parallel)
+                for url in urls
             ]
             await asyncio.gather(*coros)
 
@@ -352,7 +342,9 @@ if __name__ == "__main__":
     defaults = QuicConfiguration(is_client=True)
 
     parser = argparse.ArgumentParser(description="HTTP/3 client")
-    parser.add_argument("url", type=str, help="the URL to query (must be HTTPS)")
+    parser.add_argument(
+        "url", type=str, nargs="+", help="the URL to query (must be HTTPS)"
+    )
     parser.add_argument(
         "--ca-certs", type=str, help="load CA certificates from the specified file"
     )
@@ -383,6 +375,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--legacy-http", action="store_true", help="use HTTP/0.9")
     parser.add_argument(
+        "--output-dir", type=str, help="write downloaded files to this directory",
+    )
+    parser.add_argument(
         "-q", "--quic-log", type=str, help="log QUIC events to a file in QLOG format"
     )
     parser.add_argument(
@@ -390,15 +385,6 @@ if __name__ == "__main__":
         "--secrets-log",
         type=str,
         help="log secrets to a file, for use with Wireshark",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        help="write output to <file> or to stdout if passed '-'",
-    )
-    parser.add_argument(
-        "--parallel", type=int, default=1, help="perform this many requests in parallel"
     )
     parser.add_argument(
         "-s",
@@ -416,6 +402,9 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         level=logging.DEBUG if args.verbose else logging.INFO,
     )
+
+    if args.output_dir is not None and not os.path.isdir(args.output_dir):
+        raise Exception("%s is not a directory" % args.output_dir)
 
     # prepare configuration
     configuration = QuicConfiguration(
@@ -447,11 +436,10 @@ if __name__ == "__main__":
         loop.run_until_complete(
             run(
                 configuration=configuration,
-                url=args.url,
+                urls=args.url,
                 data=args.data,
                 include=args.include,
-                output=args.output,
-                parallel=args.parallel,
+                output_dir=args.output_dir,
             )
         )
     finally:
