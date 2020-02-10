@@ -15,7 +15,9 @@ from starlette.templating import Jinja2Templates
 from starlette.websockets import WebSocketDisconnect
 
 ROOT = os.path.dirname(__file__)
-LOGS_PATH = os.path.join(ROOT, "htdocs", "logs")
+STATIC_ROOT = os.environ.get("STATIC_ROOT", os.path.join(ROOT, "htdocs"))
+STATIC_URL = "/"
+LOGS_PATH = os.path.join(STATIC_ROOT, "logs")
 QVIS_URL = "https://qvis.edm.uhasselt.be/"
 
 templates = Jinja2Templates(directory=os.path.join(ROOT, "templates"))
@@ -104,4 +106,4 @@ async def ws(websocket):
 
 app.mount("/httpbin", WsgiToAsgi(httpbin.app))
 
-app.mount("/", StaticFiles(directory=os.path.join(ROOT, "htdocs"), html=True))
+app.mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True))
