@@ -35,6 +35,16 @@ class QuicConfiguration:
     Whether this is the client side of the QUIC connection.
     """
 
+    max_data: int = 1048576
+    """
+    Connection-wide flow control limit.
+    """
+
+    max_stream_data: int = 1048576
+    """
+    Per-stream flow control limit.
+    """
+
     quic_logger: Optional[QuicLogger] = None
     """
     The :class:`~aioquic.quic.logger.QuicLogger` instance to log events to.

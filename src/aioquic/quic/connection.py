@@ -52,7 +52,6 @@ EPOCH_SHORTCUTS = {
     "0": tls.Epoch.ZERO_RTT,
     "1": tls.Epoch.ONE_RTT,
 }
-MAX_DATA_WINDOW = 1048576
 MAX_EARLY_DATA = 0xFFFFFFFF
 SECRETS_LABELS = [
     [
@@ -246,12 +245,12 @@ class QuicConnection:
         self._host_cid_seq = 1
         self._local_ack_delay_exponent = 3
         self._local_active_connection_id_limit = 8
-        self._local_max_data = MAX_DATA_WINDOW
-        self._local_max_data_sent = MAX_DATA_WINDOW
+        self._local_max_data = configuration.max_data
+        self._local_max_data_sent = configuration.max_data
         self._local_max_data_used = 0
-        self._local_max_stream_data_bidi_local = MAX_DATA_WINDOW
-        self._local_max_stream_data_bidi_remote = MAX_DATA_WINDOW
-        self._local_max_stream_data_uni = MAX_DATA_WINDOW
+        self._local_max_stream_data_bidi_local = configuration.max_stream_data
+        self._local_max_stream_data_bidi_remote = configuration.max_stream_data
+        self._local_max_stream_data_uni = configuration.max_stream_data
         self._local_max_streams_bidi = 128
         self._local_max_streams_uni = 128
         self._loss_at: Optional[float] = None

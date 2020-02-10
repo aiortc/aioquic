@@ -349,6 +349,8 @@ async def run(
 
 
 if __name__ == "__main__":
+    defaults = QuicConfiguration(is_client=True)
+
     parser = argparse.ArgumentParser(description="HTTP/3 client")
     parser.add_argument("url", type=str, help="the URL to query (must be HTTPS)")
     parser.add_argument(
@@ -362,6 +364,16 @@ if __name__ == "__main__":
         "--include",
         action="store_true",
         help="include the HTTP response headers in the output",
+    )
+    parser.add_argument(
+        "--max-data",
+        type=int,
+        help="connection-wide flow control limit (default: %d)" % defaults.max_data,
+    )
+    parser.add_argument(
+        "--max-stream-data",
+        type=int,
+        help="per-stream flow control limit (default: %d)" % defaults.max_stream_data,
     )
     parser.add_argument(
         "-k",
@@ -413,6 +425,10 @@ if __name__ == "__main__":
         configuration.load_verify_locations(args.ca_certs)
     if args.insecure:
         configuration.verify_mode = ssl.CERT_NONE
+    if args.max_data:
+        configuration.max_data = args.max_data
+    if args.max_stream_data:
+        configuration.max_stream_data = args.max_stream_data
     if args.quic_log:
         configuration.quic_logger = QuicLogger()
     if args.secrets_log:
