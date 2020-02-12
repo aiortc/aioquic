@@ -4,9 +4,14 @@ asyncio API
 The asyncio API provides a high-level QUIC API built on top of :mod:`asyncio`,
 Python's standard asynchronous I/O framework.
 
-Here is a client which performs an HTTP/0.9 request using asyncio:
+``aioquic`` comes with a selection of examples, including:
 
-.. literalinclude:: http_client.py
+- an HTTP/3 client
+- an HTTP/3 server
+
+The examples can be browsed on GitHub:
+
+https://github.com/aiortc/aioquic/tree/master/examples
 
 .. automodule:: aioquic.asyncio
 
