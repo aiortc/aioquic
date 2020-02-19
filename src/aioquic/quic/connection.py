@@ -4,7 +4,7 @@ import os
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Deque, Dict, FrozenSet, List, Optional, Sequence, Tuple, cast
+from typing import Any, Deque, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from .. import tls
 from ..buffer import UINT_VAR_MAX, Buffer, BufferReadError, size_uint_var
@@ -626,7 +626,6 @@ class QuicConnection:
         if self._state in END_STATES:
             return
 
-        data = cast(bytes, data)
         if self._quic_logger is not None:
             self._quic_logger.log_event(
                 category="transport",
