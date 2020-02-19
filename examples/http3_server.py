@@ -45,7 +45,7 @@ class HttpRequestHandler:
         stream_ended: bool,
         stream_id: int,
         transmit: Callable[[], None],
-    ):
+    ) -> None:
         self.authority = authority
         self.connection = connection
         self.protocol = protocol
@@ -57,7 +57,7 @@ class HttpRequestHandler:
         if stream_ended:
             self.queue.put_nowait({"type": "http.request"})
 
-    def http_event_received(self, event: H3Event):
+    def http_event_received(self, event: H3Event) -> None:
         if isinstance(event, DataReceived):
             self.queue.put_nowait(
                 {
@@ -77,7 +77,7 @@ class HttpRequestHandler:
     async def receive(self) -> Dict:
         return await self.queue.get()
 
-    async def send(self, message: Dict):
+    async def send(self, message: Dict) -> None:
         if message["type"] == "http.response.start":
             self.connection.send_headers(
                 stream_id=self.stream_id,
@@ -129,7 +129,7 @@ class WebSocketHandler:
         scope: Dict,
         stream_id: int,
         transmit: Callable[[], None],
-    ):
+    ) -> None:
         self.closed = False
         self.connection = connection
         self.http_event_queue: Deque[DataReceived] = deque()
@@ -171,7 +171,7 @@ class WebSocketHandler:
     async def receive(self) -> Dict:
         return await self.queue.get()
 
-    async def send(self, message: Dict):
+    async def send(self, message: Dict) -> None:
         data = b""
         end_stream = False
         if message["type"] == "websocket.accept":
@@ -225,7 +225,7 @@ Handler = Union[HttpRequestHandler, WebSocketHandler]
 
 
 class HttpServerProtocol(QuicConnectionProtocol):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._handlers: Dict[int, Handler] = {}
         self._http: Optional[HttpConnection] = None
@@ -321,7 +321,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
             handler = self._handlers[event.stream_id]
             handler.http_event_received(event)
 
-    def quic_event_received(self, event: QuicEvent):
+    def quic_event_received(self, event: QuicEvent) -> None:
         if isinstance(event, ProtocolNegotiated):
             if event.alpn_protocol.startswith("h3-"):
                 self._http = H3Connection(self._quic)

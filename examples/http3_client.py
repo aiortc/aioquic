@@ -27,6 +27,7 @@ from aioquic.h3.events import (
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
 from aioquic.quic.logger import QuicLogger
+from aioquic.tls import SessionTicket
 
 try:
     import uvloop
@@ -41,7 +42,7 @@ USER_AGENT = "aioquic/" + aioquic.__version__
 
 
 class URL:
-    def __init__(self, url: str):
+    def __init__(self, url: str) -> None:
         parsed = urlparse(url)
 
         self.authority = parsed.netloc
@@ -88,7 +89,7 @@ class WebSocket:
         """
         return await self.queue.get()
 
-    async def send(self, message: str):
+    async def send(self, message: str) -> None:
         """
         Send a message.
         """
@@ -98,7 +99,7 @@ class WebSocket:
         self.http.send_data(stream_id=self.stream_id, data=data, end_stream=False)
         self.transmit()
 
-    def http_event_received(self, event: H3Event):
+    def http_event_received(self, event: H3Event) -> None:
         if isinstance(event, HeadersReceived):
             for header, value in event.headers:
                 if header == b"sec-websocket-protocol":
@@ -115,7 +116,7 @@ class WebSocket:
 
 
 class HttpClient(QuicConnectionProtocol):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self.pushes: Dict[int, Deque[H3Event]] = {}
@@ -176,7 +177,7 @@ class HttpClient(QuicConnectionProtocol):
 
         return websocket
 
-    def http_event_received(self, event: H3Event):
+    def http_event_received(self, event: H3Event) -> None:
         if isinstance(event, (HeadersReceived, DataReceived)):
             stream_id = event.stream_id
             if stream_id in self._request_events:
@@ -199,7 +200,7 @@ class HttpClient(QuicConnectionProtocol):
             self.pushes[event.push_id] = deque()
             self.pushes[event.push_id].append(event)
 
-    def quic_event_received(self, event: QuicEvent):
+    def quic_event_received(self, event: QuicEvent) -> None:
         #  pass event to the HTTP layer
         if self._http is not None:
             for http_event in self._http.handle_event(event):
@@ -270,7 +271,7 @@ async def perform_http_request(
                     output_file.write(http_event.data)
 
 
-def save_session_ticket(ticket):
+def save_session_ticket(ticket: SessionTicket) -> None:
     """
     Callback which is invoked by the TLS engine when a new session ticket
     is received.
