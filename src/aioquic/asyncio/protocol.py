@@ -94,7 +94,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
 
     def transmit(self) -> None:
         """
-        Send pending datagrams to the peer.
+        Send pending datagrams to the peer and arm the timer if needed.
         """
         self._transmit_task = None
 
@@ -139,6 +139,11 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
     # overridable
 
     def quic_event_received(self, event: events.QuicEvent) -> None:
+        """
+        Called when a QUIC event is received.
+
+        Reimplement this in your subclass to handle the events.
+        """
         # FIXME: move this to a subclass
         if isinstance(event, events.ConnectionTerminated):
             for reader in self._stream_readers.values():
