@@ -49,6 +49,8 @@ class QuicErrorCode(IntEnum):
 class QuicProtocolVersion(IntEnum):
     NEGOTIATION = 0
     DRAFT_25 = 0xFF000019
+    DRAFT_26 = 0xFF00001A
+    DRAFT_27 = 0xFF00001B
 
 
 @dataclass
@@ -322,14 +324,37 @@ def push_quic_preferred_address(
     buf.push_bytes(preferred_address.stateless_reset_token)
 
 
-def pull_quic_transport_parameters(buf: Buffer) -> QuicTransportParameters:
+def pull_quic_transport_parameters(
+    buf: Buffer, protocol_version: int
+) -> QuicTransportParameters:
     params = QuicTransportParameters()
 
-    with pull_block(buf, 2) as length:
-        end = buf.tell() + length
-        while buf.tell() < end:
-            param_id = buf.pull_uint16()
-            param_len = buf.pull_uint16()
+    if protocol_version < QuicProtocolVersion.DRAFT_27:
+        with pull_block(buf, 2) as length:
+            end = buf.tell() + length
+            while buf.tell() < end:
+                param_id = buf.pull_uint16()
+                param_len = buf.pull_uint16()
+                param_start = buf.tell()
+                if param_id in PARAMS:
+                    # parse known parameter
+                    param_name, param_type = PARAMS[param_id]
+                    if param_type == int:
+                        setattr(params, param_name, buf.pull_uint_var())
+                    elif param_type == bytes:
+                        setattr(params, param_name, buf.pull_bytes(param_len))
+                    elif param_type == QuicPreferredAddress:
+                        setattr(params, param_name, pull_quic_preferred_address(buf))
+                    else:
+                        setattr(params, param_name, True)
+                else:
+                    # skip unknown parameter
+                    buf.pull_bytes(param_len)
+                assert buf.tell() == param_start + param_len
+    else:
+        while not buf.eof():
+            param_id = buf.pull_uint_var()
+            param_len = buf.pull_uint_var()
             param_start = buf.tell()
             if param_id in PARAMS:
                 # parse known parameter
@@ -351,20 +376,35 @@ def pull_quic_transport_parameters(buf: Buffer) -> QuicTransportParameters:
 
 
 def push_quic_transport_parameters(
-    buf: Buffer, params: QuicTransportParameters
+    buf: Buffer, params: QuicTransportParameters, protocol_version: int
 ) -> None:
-    with push_block(buf, 2):
+    if protocol_version < QuicProtocolVersion.DRAFT_27:
+        with push_block(buf, 2):
+            for param_id, (param_name, param_type) in PARAMS.items():
+                param_value = getattr(params, param_name)
+                if param_value is not None and param_value is not False:
+                    buf.push_uint16(param_id)
+                    with push_block(buf, 2):
+                        if param_type == int:
+                            buf.push_uint_var(param_value)
+                        elif param_type == bytes:
+                            buf.push_bytes(param_value)
+                        elif param_type == QuicPreferredAddress:
+                            push_quic_preferred_address(buf, param_value)
+    else:
         for param_id, (param_name, param_type) in PARAMS.items():
             param_value = getattr(params, param_name)
             if param_value is not None and param_value is not False:
-                buf.push_uint16(param_id)
-                with push_block(buf, 2):
-                    if param_type == int:
-                        buf.push_uint_var(param_value)
-                    elif param_type == bytes:
-                        buf.push_bytes(param_value)
-                    elif param_type == QuicPreferredAddress:
-                        push_quic_preferred_address(buf, param_value)
+                param_buf = Buffer(capacity=65536)
+                if param_type == int:
+                    param_buf.push_uint_var(param_value)
+                elif param_type == bytes:
+                    param_buf.push_bytes(param_value)
+                elif param_type == QuicPreferredAddress:
+                    push_quic_preferred_address(param_buf, param_value)
+                buf.push_uint_var(param_id)
+                buf.push_uint_var(param_buf.tell())
+                buf.push_bytes(param_buf.data)
 
 
 # FRAMES
