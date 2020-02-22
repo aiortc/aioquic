@@ -188,14 +188,15 @@ class ParamsTest(TestCase):
 
     def test_params(self):
         data = binascii.unhexlify(
-            "004700020010cc2fd6e7d97a53ab5be85b28d75c80080008000106000100026"
-            "710000600048000ffff000500048000ffff000400048005fffa000a00010300"
-            "0b0001190003000247e4"
+            "010267100210cc2fd6e7d97a53ab5be85b28d75c8008030247e404048005fff"
+            "a05048000ffff06048000ffff0801060a01030b0119"
         )
 
         # parse
         buf = Buffer(data=data)
-        params = pull_quic_transport_parameters(buf)
+        params = pull_quic_transport_parameters(
+            buf, protocol_version=QuicProtocolVersion.DRAFT_27
+        )
         self.assertEqual(
             params,
             QuicTransportParameters(
@@ -215,61 +216,153 @@ class ParamsTest(TestCase):
 
         # serialize
         buf = Buffer(capacity=len(data))
-        push_quic_transport_parameters(buf, params)
+        push_quic_transport_parameters(
+            buf, params, protocol_version=QuicProtocolVersion.DRAFT_27
+        )
         self.assertEqual(len(buf.data), len(data))
 
-    def test_params_disable_active_migration(self):
-        data = binascii.unhexlify("0004000c0000")
-
-        # parse
-        buf = Buffer(data=data)
-        params = pull_quic_transport_parameters(buf)
-        self.assertEqual(params, QuicTransportParameters(disable_active_migration=True))
-
-        # serialize
-        buf = Buffer(capacity=len(data))
-        push_quic_transport_parameters(buf, params)
-        self.assertEqual(buf.data, data)
-
-    def test_params_preferred_address(self):
+    def test_params_legacy(self):
         data = binascii.unhexlify(
-            "008b000100048000753000020010191adf238f8041a56a5fa7a88ddd14f3000"
-            "400048010000000050004800400000006000480040000000700048004000000"
-            "08000240640009000103000d003b8ba27b8611532400890200000000f03c91f"
-            "ffe69a45411531262c4518d63013f0c287ed3573efa9095603746b2e02d4548"
-            "0ba6643e5c6e7d48ecb4000e000107"
+            "004700020010cc2fd6e7d97a53ab5be85b28d75c80080008000106000100026"
+            "710000600048000ffff000500048000ffff000400048005fffa000a00010300"
+            "0b0001190003000247e4"
         )
 
         # parse
         buf = Buffer(data=data)
-        params = pull_quic_transport_parameters(buf)
+        params = pull_quic_transport_parameters(
+            buf, protocol_version=QuicProtocolVersion.DRAFT_25
+        )
         self.assertEqual(
             params,
             QuicTransportParameters(
-                idle_timeout=30000,
-                stateless_reset_token=b"\x19\x1a\xdf#\x8f\x80A\xa5j_\xa7\xa8\x8d\xdd\x14\xf3",
-                initial_max_data=1048576,
-                initial_max_stream_data_bidi_local=262144,
-                initial_max_stream_data_bidi_remote=262144,
-                initial_max_stream_data_uni=262144,
-                initial_max_streams_bidi=100,
-                initial_max_streams_uni=3,
+                idle_timeout=10000,
+                stateless_reset_token=b"\xcc/\xd6\xe7\xd9zS\xab[\xe8[(\xd7\\\x80\x08",
+                max_packet_size=2020,
+                initial_max_data=393210,
+                initial_max_stream_data_bidi_local=65535,
+                initial_max_stream_data_bidi_remote=65535,
+                initial_max_stream_data_uni=None,
+                initial_max_streams_bidi=6,
+                initial_max_streams_uni=None,
+                ack_delay_exponent=3,
+                max_ack_delay=25,
+            ),
+        )
+
+        # serialize
+        buf = Buffer(capacity=len(data))
+        push_quic_transport_parameters(
+            buf, params, protocol_version=QuicProtocolVersion.DRAFT_25
+        )
+        self.assertEqual(len(buf.data), len(data))
+
+    def test_params_disable_active_migration(self):
+        data = binascii.unhexlify("0c00")
+
+        # parse
+        buf = Buffer(data=data)
+        params = pull_quic_transport_parameters(
+            buf, protocol_version=QuicProtocolVersion.DRAFT_27
+        )
+        self.assertEqual(params, QuicTransportParameters(disable_active_migration=True))
+
+        # serialize
+        buf = Buffer(capacity=len(data))
+        push_quic_transport_parameters(
+            buf, params, protocol_version=QuicProtocolVersion.DRAFT_27
+        )
+        self.assertEqual(buf.data, data)
+
+    def test_params_disable_active_migration_legacy(self):
+        data = binascii.unhexlify("0004000c0000")
+
+        # parse
+        buf = Buffer(data=data)
+        params = pull_quic_transport_parameters(
+            buf, protocol_version=QuicProtocolVersion.DRAFT_25
+        )
+        self.assertEqual(params, QuicTransportParameters(disable_active_migration=True))
+
+        # serialize
+        buf = Buffer(capacity=len(data))
+        push_quic_transport_parameters(
+            buf, params, protocol_version=QuicProtocolVersion.DRAFT_25
+        )
+        self.assertEqual(buf.data, data)
+
+    def test_params_preferred_address(self):
+        data = binascii.unhexlify(
+            "0d3b8ba27b8611532400890200000000f03c91fffe69a45411531262c4518d6"
+            "3013f0c287ed3573efa9095603746b2e02d45480ba6643e5c6e7d48ecb4"
+        )
+
+        # parse
+        buf = Buffer(data=data)
+        params = pull_quic_transport_parameters(
+            buf, protocol_version=QuicProtocolVersion.DRAFT_27
+        )
+        self.assertEqual(
+            params,
+            QuicTransportParameters(
                 preferred_address=QuicPreferredAddress(
                     ipv4_address=("139.162.123.134", 4435),
                     ipv6_address=("2400:8902::f03c:91ff:fe69:a454", 4435),
                     connection_id=b"b\xc4Q\x8dc\x01?\x0c(~\xd3W>\xfa\x90\x95`7",
                     stateless_reset_token=b"F\xb2\xe0-EH\x0b\xa6d>\\n}H\xec\xb4",
                 ),
-                active_connection_id_limit=7,
+            ),
+        )
+
+        # serialize
+        buf = Buffer(capacity=1000)
+        push_quic_transport_parameters(
+            buf, params, protocol_version=QuicProtocolVersion.DRAFT_27
+        )
+        self.assertEqual(buf.data, data)
+
+    def test_params_preferred_address_legacy(self):
+        data = binascii.unhexlify(
+            "003f000d003b8ba27b8611532400890200000000f03c91fffe69a4541153126"
+            "2c4518d63013f0c287ed3573efa9095603746b2e02d45480ba6643e5c6e7d48"
+            "ecb4"
+        )
+
+        # parse
+        buf = Buffer(data=data)
+        params = pull_quic_transport_parameters(
+            buf, protocol_version=QuicProtocolVersion.DRAFT_25
+        )
+        self.assertEqual(
+            params,
+            QuicTransportParameters(
+                preferred_address=QuicPreferredAddress(
+                    ipv4_address=("139.162.123.134", 4435),
+                    ipv6_address=("2400:8902::f03c:91ff:fe69:a454", 4435),
+                    connection_id=b"b\xc4Q\x8dc\x01?\x0c(~\xd3W>\xfa\x90\x95`7",
+                    stateless_reset_token=b"F\xb2\xe0-EH\x0b\xa6d>\\n}H\xec\xb4",
+                ),
             ),
         )
 
         # serialize
         buf = Buffer(capacity=len(data))
-        push_quic_transport_parameters(buf, params)
+        push_quic_transport_parameters(
+            buf, params, protocol_version=QuicProtocolVersion.DRAFT_25
+        )
         self.assertEqual(buf.data, data)
 
     def test_params_unknown(self):
+        data = binascii.unhexlify("8000ff000100")
+
+        # parse
+        buf = Buffer(data=data)
+        params = pull_quic_transport_parameters(
+            buf, protocol_version=QuicProtocolVersion.DRAFT_27
+        )
+        self.assertEqual(params, QuicTransportParameters())
+
+    def test_params_unknown_legacy(self):
         # fb.mvfst.net sends a proprietary parameter 65280
         data = binascii.unhexlify(
             "006400050004800104000006000480010400000700048001040000040004801"
@@ -280,7 +373,9 @@ class ParamsTest(TestCase):
 
         # parse
         buf = Buffer(data=data)
-        params = pull_quic_transport_parameters(buf)
+        params = pull_quic_transport_parameters(
+            buf, protocol_version=QuicProtocolVersion.DRAFT_25
+        )
         self.assertEqual(
             params,
             QuicTransportParameters(
