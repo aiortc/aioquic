@@ -24,9 +24,7 @@ CHACHA20_CLIENT_ENCRYPTED_PACKET = binascii.unhexlify(
     "e8ff0000160880b57c7b70d8524b0850fc2a28e240fd7640178313b04be98449"
     "eb10567e25ce930381f2a5b7da2db8db"
 )
-CHACHA20_SKIP = os.environ.get("TRAVIS") == "true" or (
-    os.environ.get("GITHUB_ACTIONS") == "true" and sys.platform == "darwin"
-)
+CHACHA20_SKIP = os.environ.get("GITHUB_ACTIONS") == "true" and sys.platform == "darwin"
 
 LONG_CLIENT_PACKET_NUMBER = 2
 LONG_CLIENT_PLAIN_HEADER = binascii.unhexlify(

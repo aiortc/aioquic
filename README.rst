@@ -1,7 +1,7 @@
 aioquic
 =======
 
-|rtd| |pypi-v| |pypi-pyversions| |pypi-l| |travis| |codecov| |black|
+|rtd| |pypi-v| |pypi-pyversions| |pypi-l| |tests| |codecov| |black|
 
 .. |rtd| image:: https://readthedocs.org/projects/aioquic/badge/?version=latest
     :target: https://aioquic.readthedocs.io/
@@ -15,8 +15,8 @@ aioquic
 .. |pypi-l| image:: https://img.shields.io/pypi/l/aioquic.svg
     :target: https://pypi.python.org/pypi/aioquic
 
-.. |travis| image:: https://img.shields.io/travis/com/aiortc/aioquic.svg
-    :target: https://travis-ci.com/aiortc/aioquic
+.. |tests| image:: https://github.com/aiortc/aioquic/workflows/tests/badge.svg
+    :target: https://github.com/aiortc/aioquic/actions
 
 .. |codecov| image:: https://img.shields.io/codecov/c/github/aiortc/aioquic.svg
     :target: https://codecov.io/gh/aiortc/aioquic
