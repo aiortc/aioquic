@@ -60,10 +60,15 @@ Features
 - logging QUIC events in QLOG format
 - HTTP/3 server push support
 
-Running the examples
---------------------
+Requirements
+------------
 
 ``aioquic`` requires Python 3.6 or better, and the OpenSSL development headers.
+
+Linux
+.....
+
+On Debian/Ubuntu run:
 
 .. code-block:: console
 
@@ -74,6 +79,25 @@ On Alpine Linux you will also need the following:
 .. code-block:: console
 
    $ sudo apt install bsd-compat-headers libffi-dev
+
+OS X
+....
+
+On OS X run:
+
+.. code-block:: console
+
+   $ brew install openssl
+
+You will need to set some environment variables to link against OpenSSL:
+
+.. code-block:: console
+
+   $ export CFLAGS=-I/usr/local/opt/openssl/include
+   $ export LDFLAGS=-L/usr/local/opt/openssl/lib
+
+Running the examples
+--------------------
 
 After checking out the code using git you can run:
 
