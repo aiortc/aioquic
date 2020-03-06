@@ -24,17 +24,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
         python: [3.8, 3.7, 3.6, pypy3]
     steps:
       - uses: actions/checkout@v1
       - uses: actions/setup-python@v1
         with:
           python-version: ${{ matrix.python }}
-      - name: Disable firewall
+      - name: Disable firewall and configure compiler
         if: matrix.os == 'macos-latest'
         run: |
           sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
+          echo "::set-env name=CFLAGS::-I/usr/local/opt/openssl/include"
+          echo "::set-env name=LDFLAGS::-L/usr/local/opt/openssl/lib"
       - name: Run tests
         run: |
           pip install -U pip setuptools wheel
