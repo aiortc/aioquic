@@ -262,6 +262,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
             client = (client_addr[0], client_addr[1])
 
             handler: Handler
+            scope: Dict
             if method == "CONNECT" and protocol == "websocket":
                 subprotocols: List[str] = []
                 for header, value in event.headers:
