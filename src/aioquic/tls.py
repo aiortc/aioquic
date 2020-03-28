@@ -208,10 +208,10 @@ def load_pem_x509_certificates(data: bytes) -> List[x509.Certificate]:
     return certificates
 
 
-def openssl_assert(ok: bool) -> None:
+def openssl_assert(ok: bool, func: str) -> None:
     if not ok:
         lib.ERR_clear_error()
-        raise AlertInternalError("OpenSSL call failed")
+        raise AlertInternalError("OpenSSL call to %s failed" % func)
 
 
 def openssl_decode_string(charp) -> str:
@@ -269,43 +269,53 @@ def verify_certificate(
 
     # verify certificate chain
     store = lib.X509_STORE_new()
-    openssl_assert(store != ffi.NULL)
+    openssl_assert(store != ffi.NULL, "X509_store_new")
     store = ffi.gc(store, lib.X509_STORE_free)
 
     # load default CAs
-    openssl_assert(lib.X509_STORE_set_default_paths(store))
+    openssl_assert(
+        lib.X509_STORE_set_default_paths(store), "X509_STORE_set_default_paths"
+    )
     paths = ssl.get_default_verify_paths()
     openssl_assert(
         lib.X509_STORE_load_locations(
             store, openssl_encode_path(paths.cafile), openssl_encode_path(paths.capath)
-        )
+        ),
+        "X509_STORE_load_locations",
     )
 
     # load extra CAs
     if cadata is not None:
         for cert in load_pem_x509_certificates(cadata):
-            openssl_assert(lib.X509_STORE_add_cert(store, cert_x509_ptr(cert)))
+            openssl_assert(
+                lib.X509_STORE_add_cert(store, cert_x509_ptr(cert)),
+                "X509_STORE_add_cert",
+            )
 
     if cafile is not None or capath is not None:
         openssl_assert(
             lib.X509_STORE_load_locations(
                 store, openssl_encode_path(cafile), openssl_encode_path(capath)
-            )
+            ),
+            "X509_STORE_load_locations",
         )
 
     chain_stack = lib.sk_X509_new_null()
-    openssl_assert(chain_stack != ffi.NULL)
+    openssl_assert(chain_stack != ffi.NULL, "sk_X509_new_null")
     chain_stack = ffi.gc(chain_stack, lib.sk_X509_free)
     for cert in chain:
-        openssl_assert(lib.sk_X509_push(chain_stack, cert_x509_ptr(cert)))
+        openssl_assert(
+            lib.sk_X509_push(chain_stack, cert_x509_ptr(cert)), "sk_X509_push"
+        )
 
     store_ctx = lib.X509_STORE_CTX_new()
-    openssl_assert(store_ctx != ffi.NULL)
+    openssl_assert(store_ctx != ffi.NULL, "X509_STORE_CTX_new")
     store_ctx = ffi.gc(store_ctx, lib.X509_STORE_CTX_free)
     openssl_assert(
         lib.X509_STORE_CTX_init(
             store_ctx, store, cert_x509_ptr(certificate), chain_stack
-        )
+        ),
+        "X509_STORE_CTX_init",
     )
 
     res = lib.X509_verify_cert(store_ctx)

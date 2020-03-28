@@ -1293,7 +1293,7 @@ class VerifyCertificateTest(TestCase):
                 certificate=certificate,
                 server_name="localhost",
             )
-        self.assertEqual(str(cm.exception), "OpenSSL call failed")
+        self.assertEqual(str(cm.exception), "OpenSSL call to X509_store_new failed")
 
     def test_verify_dates(self):
         certificate, _ = generate_ec_certificate(
