@@ -55,6 +55,8 @@ def handle_stream(reader, writer):
 class HighLevelTest(TestCase):
     def setUp(self):
         self.server = None
+        self.server_host = "::1"
+        self.server_port = 4433
 
     def tearDown(self):
         if self.server is not None:
@@ -62,14 +64,18 @@ class HighLevelTest(TestCase):
 
     async def run_client(
         self,
-        host,
-        port=4433,
+        host=None,
+        port=None,
         cadata=None,
         cafile=SERVER_CACERTFILE,
         configuration=None,
         request=b"ping",
         **kwargs
     ):
+        if host is None:
+            host = self.server_host
+        if port is None:
+            port = self.server_port
         if configuration is None:
             configuration = QuicConfiguration(is_client=True)
         configuration.load_verify_locations(cadata=cadata, cafile=cafile)
@@ -97,7 +103,7 @@ class HighLevelTest(TestCase):
             configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
         self.server = await serve(
             host="::",
-            port="4433",
+            port=4433,
             configuration=configuration,
             stream_handler=handle_stream,
             **kwargs
@@ -106,7 +112,7 @@ class HighLevelTest(TestCase):
 
     def test_connect_and_serve(self):
         run(self.run_server())
-        response = run(self.run_client("127.0.0.1"))
+        response = run(self.run_client())
         self.assertEqual(response, b"gnip")
 
     def test_connect_and_serve_ec_certificate(self):
@@ -122,7 +128,6 @@ class HighLevelTest(TestCase):
 
         response = run(
             self.run_client(
-                "127.0.0.1",
                 cadata=certificate.public_bytes(serialization.Encoding.PEM),
                 cafile=None,
             )
@@ -136,23 +141,25 @@ class HighLevelTest(TestCase):
         """
         data = b"Z" * 2097152
         run(self.run_server())
-        response = run(self.run_client("127.0.0.1", request=data))
+        response = run(self.run_client(request=data))
         self.assertEqual(response, data)
 
     def test_connect_and_serve_without_client_configuration(self):
-        async def run_client_without_config(host, port=4433):
-            async with connect(host, port) as client:
+        async def run_client_without_config():
+            async with connect(self.server_host, self.server_port) as client:
                 await client.ping()
 
         run(self.run_server())
         with self.assertRaises(ConnectionError):
-            run(run_client_without_config("127.0.0.1"))
+            run(run_client_without_config())
 
     def test_connect_and_serve_writelines(self):
-        async def run_client_writelines(host, port=4433):
+        async def run_client_writelines():
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
-            async with connect(host, port, configuration=configuration) as client:
+            async with connect(
+                self.server_host, self.server_port, configuration=configuration
+            ) as client:
                 reader, writer = await client.create_stream()
                 assert writer.can_write_eof() is True
 
@@ -162,7 +169,7 @@ class HighLevelTest(TestCase):
                 return await reader.read()
 
         run(self.run_server())
-        response = run(run_client_writelines("127.0.0.1"))
+        response = run(run_client_writelines())
         self.assertEqual(response, b"5432109876543210")
 
     @patch("socket.socket.sendto", new_callable=lambda: sendto_with_loss)
@@ -181,7 +188,6 @@ class HighLevelTest(TestCase):
 
         response = run(
             self.run_client(
-                "127.0.0.1",
                 configuration=QuicConfiguration(
                     is_client=True, quic_logger=QuicLogger()
                 ),
@@ -206,9 +212,7 @@ class HighLevelTest(TestCase):
         )
 
         # first request
-        response = run(
-            self.run_client("127.0.0.1", session_ticket_handler=save_ticket),
-        )
+        response = run(self.run_client(session_ticket_handler=save_ticket),)
         self.assertEqual(response, b"gnip")
 
         self.assertIsNotNone(client_ticket)
@@ -216,7 +220,6 @@ class HighLevelTest(TestCase):
         # second request
         run(
             self.run_client(
-                "127.0.0.1",
                 configuration=QuicConfiguration(
                     is_client=True, session_ticket=client_ticket
                 ),
@@ -226,12 +229,12 @@ class HighLevelTest(TestCase):
 
     def test_connect_and_serve_with_sni(self):
         run(self.run_server())
-        response = run(self.run_client("localhost"))
+        response = run(self.run_client(host="localhost"))
         self.assertEqual(response, b"gnip")
 
     def test_connect_and_serve_with_stateless_retry(self):
         run(self.run_server())
-        response = run(self.run_client("127.0.0.1"))
+        response = run(self.run_client())
         self.assertEqual(response, b"gnip")
 
     def test_connect_and_serve_with_stateless_retry_bad_original_connection_id(self):
@@ -247,7 +250,7 @@ class HighLevelTest(TestCase):
 
         run(self.run_server(create_protocol=create_protocol, stateless_retry=True))
         with self.assertRaises(ConnectionError):
-            run(self.run_client("127.0.0.1"))
+            run(self.run_client())
 
     @patch("aioquic.quic.retry.QuicRetryTokenHandler.validate_token")
     def test_connect_and_serve_with_stateless_retry_bad(self, mock_validate):
@@ -257,7 +260,6 @@ class HighLevelTest(TestCase):
         with self.assertRaises(ConnectionError):
             run(
                 self.run_client(
-                    "127.0.0.1",
                     configuration=QuicConfiguration(is_client=True, idle_timeout=4.0),
                 )
             )
@@ -269,81 +271,89 @@ class HighLevelTest(TestCase):
         configuration = QuicConfiguration(is_client=True, quic_logger=QuicLogger())
         configuration.supported_versions.insert(0, 0x1A2A3A4A)
 
-        response = run(self.run_client("127.0.0.1", configuration=configuration))
+        response = run(self.run_client(configuration=configuration))
         self.assertEqual(response, b"gnip")
 
     def test_connect_timeout(self):
         with self.assertRaises(ConnectionError):
             run(
                 self.run_client(
-                    "127.0.0.1",
                     port=4400,
                     configuration=QuicConfiguration(is_client=True, idle_timeout=5),
                 )
             )
 
     def test_connect_timeout_no_wait_connected(self):
-        async def run_client_no_wait_connected(host, port, configuration):
+        async def run_client_no_wait_connected(configuration):
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
             async with connect(
-                host, port, configuration=configuration, wait_connected=False
+                self.server_host,
+                4400,
+                configuration=configuration,
+                wait_connected=False,
             ) as client:
                 await client.ping()
 
         with self.assertRaises(ConnectionError):
             run(
                 run_client_no_wait_connected(
-                    "127.0.0.1",
-                    port=4400,
                     configuration=QuicConfiguration(is_client=True, idle_timeout=5),
                 )
             )
 
     def test_change_connection_id(self):
-        async def run_client_change_connection_id(host, port=4433):
+        async def run_client_change_connection_id():
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
-            async with connect(host, port, configuration=configuration) as client:
+            async with connect(
+                self.server_host, self.server_port, configuration=configuration
+            ) as client:
                 await client.ping()
                 client.change_connection_id()
                 await client.ping()
 
         run(self.run_server())
-        run(run_client_change_connection_id("127.0.0.1"))
+        run(run_client_change_connection_id())
 
     def test_key_update(self):
-        async def run_client_key_update(host, port=4433):
+        async def run_client_key_update():
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
-            async with connect(host, port, configuration=configuration) as client:
+            async with connect(
+                self.server_host, self.server_port, configuration=configuration
+            ) as client:
                 await client.ping()
                 client.request_key_update()
                 await client.ping()
 
         run(self.run_server())
-        run(run_client_key_update("127.0.0.1"))
+        run(run_client_key_update())
 
     def test_ping(self):
-        async def run_client_ping(host, port=4433):
+        async def run_client_ping():
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
-            async with connect(host, port, configuration=configuration) as client:
+            async with connect(
+                self.server_host, self.server_port, configuration=configuration
+            ) as client:
                 await client.ping()
                 await client.ping()
 
         run(self.run_server())
-        run(run_client_ping("127.0.0.1"))
+        run(run_client_ping())
 
     def test_ping_parallel(self):
-        async def run_client_ping(host, port=4433):
+        async def run_client_ping():
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
-            async with connect(host, port, configuration=configuration) as client:
+            async with connect(
+                self.server_host, self.server_port, configuration=configuration
+            ) as client:
                 coros = [client.ping() for x in range(16)]
                 await asyncio.gather(*coros)
 
         run(self.run_server())
-        run(run_client_ping("127.0.0.1"))
+        run(run_client_ping())
 
     def test_server_receives_garbage(self):
         server = run(self.run_server())
