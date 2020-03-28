@@ -3,15 +3,13 @@ from unittest import TestCase
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.events import DataReceived, HeadersReceived
 
-from .test_connection import client_and_server, disable_packet_pacing, transfer
+from .test_connection import client_and_server, transfer
 
 
 def h0_client_and_server():
     return client_and_server(
         client_options={"alpn_protocols": H0_ALPN},
-        client_patch=disable_packet_pacing,
         server_options={"alpn_protocols": H0_ALPN},
-        server_patch=disable_packet_pacing,
     )
 
 

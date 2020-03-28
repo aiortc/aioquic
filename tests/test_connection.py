@@ -93,7 +93,6 @@ def client_and_server(
     server_keyfile=SERVER_KEYFILE,
     server_options={},
     server_patch=lambda x: None,
-    transport_options={},
 ):
     client_configuration = QuicConfiguration(
         is_client=True, quic_logger=QuicLogger(), **client_options
@@ -102,6 +101,7 @@ def client_and_server(
 
     client = QuicConnection(configuration=client_configuration, **client_kwargs)
     client._ack_delay = 0
+    disable_packet_pacing(client)
     client_patch(client)
 
     server_configuration = QuicConfiguration(
@@ -111,6 +111,7 @@ def client_and_server(
 
     server = QuicConnection(configuration=server_configuration, **server_kwargs)
     server._ack_delay = 0
+    disable_packet_pacing(server)
     server_patch(server)
 
     # perform handshake
@@ -730,7 +731,6 @@ class QuicConnectionTest(TestCase):
 
         with client_and_server(
             client_options={"max_datagram_frame_size": 65536},
-            client_patch=disable_packet_pacing,
             server_options={"max_datagram_frame_size": 65536},
         ) as (client, server):
             # check handshake completed
@@ -1558,7 +1558,7 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(server._remote_max_data, 2097152)
 
     def test_send_max_stream_data_retransmit(self):
-        with client_and_server(server_patch=disable_packet_pacing) as (client, server):
+        with client_and_server() as (client, server):
             # client creates bidirectional stream 0
             stream = client._create_stream(stream_id=0)
             client.send_stream_data(0, b"hello")

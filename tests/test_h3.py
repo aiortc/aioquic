@@ -17,15 +17,13 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
 from aioquic.quic.logger import QuicLogger
 
-from .test_connection import client_and_server, disable_packet_pacing, transfer
+from .test_connection import client_and_server, transfer
 
 
 def h3_client_and_server():
     return client_and_server(
         client_options={"alpn_protocols": H3_ALPN},
-        client_patch=disable_packet_pacing,
         server_options={"alpn_protocols": H3_ALPN},
-        server_patch=disable_packet_pacing,
     )
 
 
