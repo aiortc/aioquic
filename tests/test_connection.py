@@ -529,7 +529,7 @@ class QuicConnectionTest(TestCase):
             stream_id = client.get_next_available_stream_id()
             client.send_stream_data(stream_id, b"hello")
 
-            roundtrip(client, server)
+            self.assertEqual(roundtrip(client, server), (1, 1))
 
             received = None
             while True:
@@ -564,7 +564,7 @@ class QuicConnectionTest(TestCase):
             stream_id = client.get_next_available_stream_id()
             client.send_stream_data(stream_id, b"hello")
 
-            roundtrip(client, server)
+            self.assertEqual(roundtrip(client, server), (2, 1))
 
             event = server.next_event()
             self.assertEqual(type(event), events.ProtocolNegotiated)
@@ -903,7 +903,7 @@ class QuicConnectionTest(TestCase):
                 frame_type=QuicFrameType.ACK,
                 reason_phrase="illegal ACK frame",
             )
-            roundtrip(server, client)
+            self.assertEqual(roundtrip(server, client), (1, 0))
 
             self.assertEqual(
                 client._close_event,
@@ -917,7 +917,7 @@ class QuicConnectionTest(TestCase):
     def test_handle_connection_close_frame_app(self):
         with client_and_server() as (client, server):
             server.close(error_code=QuicErrorCode.NO_ERROR, reason_phrase="goodbye")
-            roundtrip(server, client)
+            self.assertEqual(roundtrip(server, client), (1, 0))
 
             self.assertEqual(
                 client._close_event,
@@ -1564,7 +1564,7 @@ class QuicConnectionTest(TestCase):
             client.send_stream_data(0, b"hello")
             self.assertEqual(stream.max_stream_data_local, 1048576)
             self.assertEqual(stream.max_stream_data_local_sent, 1048576)
-            roundtrip(client, server)
+            self.assertEqual(roundtrip(client, server), (1, 1))
 
             # server sends data, just before raising MAX_STREAM_DATA
             server.send_stream_data(0, b"Z" * 524288)  # 1048576 // 2
@@ -1575,7 +1575,7 @@ class QuicConnectionTest(TestCase):
 
             # server sends one more byte
             server.send_stream_data(0, b"Z")
-            transfer(server, client)
+            self.assertEqual(transfer(server, client), 1)
 
             # MAX_STREAM_DATA is sent and lost
             self.assertEqual(drop(client), 1)
@@ -1596,7 +1596,7 @@ class QuicConnectionTest(TestCase):
 
             # client sends ping, server ACKs it
             client.send_ping(uid=12345)
-            roundtrip(client, server)
+            self.assertEqual(roundtrip(client, server), (1, 1))
 
             # check event
             event = client.next_event()
@@ -1678,23 +1678,23 @@ class QuicConnectionTest(TestCase):
         with client_and_server() as (client, server):
             # server creates bidirectional stream
             server.send_stream_data(1, b"hello")
-            roundtrip(server, client)
+            self.assertEqual(roundtrip(server, client), (1, 1))
 
             # server creates unidirectional stream
             server.send_stream_data(3, b"hello")
-            roundtrip(server, client)
+            self.assertEqual(roundtrip(server, client), (1, 1))
 
             # client creates bidirectional stream
             client.send_stream_data(0, b"hello")
-            roundtrip(client, server)
+            self.assertEqual(roundtrip(client, server), (1, 1))
 
             # client sends data on server-initiated bidirectional stream
             client.send_stream_data(1, b"hello")
-            roundtrip(client, server)
+            self.assertEqual(roundtrip(client, server), (1, 1))
 
             # client create unidirectional stream
             client.send_stream_data(2, b"hello")
-            roundtrip(client, server)
+            self.assertEqual(roundtrip(client, server), (1, 1))
 
             # client tries to send data on server-initial unidirectional stream
             with self.assertRaises(ValueError) as cm:
