@@ -61,6 +61,7 @@ setuptools.setup(
     package_data={"aioquic": ["py.typed", "_buffer.pyi", "_crypto.pyi"]},
     packages=["aioquic", "aioquic.asyncio", "aioquic.h0", "aioquic.h3", "aioquic.quic"],
     install_requires=[
+        "certifi",
         "cryptography >= 2.5",
         'dataclasses; python_version < "3.7"',
         "pylsqpack >= 0.3.3, < 0.4.0",

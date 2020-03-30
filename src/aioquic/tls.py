@@ -20,6 +20,7 @@ from typing import (
     Union,
 )
 
+import certifi
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.backends import default_backend
@@ -276,16 +277,12 @@ def verify_certificate(
     openssl_assert(
         lib.X509_STORE_set_default_paths(store), "X509_STORE_set_default_paths"
     )
-    paths = ssl.get_default_verify_paths()
-    if paths.cafile is not None or paths.capath is not None:
-        openssl_assert(
-            lib.X509_STORE_load_locations(
-                store,
-                openssl_encode_path(paths.cafile),
-                openssl_encode_path(paths.capath),
-            ),
-            "X509_STORE_load_locations",
-        )
+    openssl_assert(
+        lib.X509_STORE_load_locations(
+            store, openssl_encode_path(certifi.where()), openssl_encode_path(None),
+        ),
+        "X509_STORE_load_locations",
+    )
 
     # load extra CAs
     if cadata is not None:
