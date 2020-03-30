@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import logging
 import os
+import sys
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -55,3 +56,15 @@ SERVER_KEYFILE = os.path.join(os.path.dirname(__file__), "ssl_key.pem")
 
 if os.environ.get("AIOQUIC_DEBUG"):
     logging.basicConfig(level=logging.DEBUG)
+
+if (
+    sys.platform == "win32"
+    and sys.version_info.major == 3
+    and sys.version_info.minor == 8
+):
+    # Python 3.8 uses ProactorEventLoop by default,
+    # which breaks UDP / IPv6 support, see:
+    #
+    # https://bugs.python.org/issue39148
+
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
