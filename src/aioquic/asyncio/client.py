@@ -1,6 +1,7 @@
 import asyncio
 import ipaddress
 import socket
+import sys
 from typing import AsyncGenerator, Callable, Optional, cast
 
 from ..quic.configuration import QuicConfiguration
@@ -45,6 +46,7 @@ async def connect(
       and a :class:`asyncio.StreamWriter`.
     """
     loop = asyncio.get_event_loop()
+    local_host = "::"
 
     # if host is not an IP address, pass it to enable SNI
     try:
@@ -57,7 +59,13 @@ async def connect(
     infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
     addr = infos[0][4]
     if len(addr) == 2:
-        addr = ("::ffff:" + addr[0], addr[1], 0, 0)
+        # determine behaviour for IPv4
+        if sys.platform == "win32":
+            # on Windows, we must use an IPv4 socket to reach an IPv4 host
+            local_host = "0.0.0.0"
+        else:
+            # other platforms support dual-stack sockets
+            addr = ("::ffff:" + addr[0], addr[1], 0, 0)
 
     # prepare QUIC connection
     if configuration is None:
@@ -71,7 +79,7 @@ async def connect(
     # connect
     _, protocol = await loop.create_datagram_endpoint(
         lambda: create_protocol(connection, stream_handler=stream_handler),
-        local_addr=("::", 0),
+        local_addr=(local_host, 0),
     )
     protocol = cast(QuicConnectionProtocol, protocol)
     protocol.connect(addr)

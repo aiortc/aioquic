@@ -55,7 +55,7 @@ def handle_stream(reader, writer):
 class HighLevelTest(TestCase):
     def setUp(self):
         self.server = None
-        self.server_host = "::1"
+        self.server_host = "localhost"
         self.server_port = 4433
 
     def tearDown(self):
@@ -97,13 +97,13 @@ class HighLevelTest(TestCase):
 
         return response
 
-    async def run_server(self, configuration=None, **kwargs):
+    async def run_server(self, configuration=None, host="::", **kwargs):
         if configuration is None:
             configuration = QuicConfiguration(is_client=False)
             configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
         self.server = await serve(
-            host="::",
-            port=4433,
+            host=host,
+            port=self.server_port,
             configuration=configuration,
             stream_handler=handle_stream,
             **kwargs
@@ -113,6 +113,16 @@ class HighLevelTest(TestCase):
     def test_connect_and_serve(self):
         run(self.run_server())
         response = run(self.run_client())
+        self.assertEqual(response, b"gnip")
+
+    def test_connect_and_serve_ipv4(self):
+        run(self.run_server(host="0.0.0.0"))
+        response = run(self.run_client(host="127.0.0.1"))
+        self.assertEqual(response, b"gnip")
+
+    def test_connect_and_serve_ipv6(self):
+        run(self.run_server(host="::"))
+        response = run(self.run_client(host="::1"))
         self.assertEqual(response, b"gnip")
 
     def test_connect_and_serve_ec_certificate(self):
@@ -225,11 +235,6 @@ class HighLevelTest(TestCase):
                 ),
             )
         )
-        self.assertEqual(response, b"gnip")
-
-    def test_connect_and_serve_with_sni(self):
-        run(self.run_server())
-        response = run(self.run_client(host="localhost"))
         self.assertEqual(response, b"gnip")
 
     def test_connect_and_serve_with_stateless_retry(self):
