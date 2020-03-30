@@ -53,6 +53,7 @@ SERVER_CERTFILE_WITH_CHAIN = os.path.join(
     os.path.dirname(__file__), "ssl_cert_with_chain.pem"
 )
 SERVER_KEYFILE = os.path.join(os.path.dirname(__file__), "ssl_key.pem")
+SKIP_TESTS = frozenset(os.environ.get("AIOQUIC_SKIP_TESTS", "").split(","))
 
 if os.environ.get("AIOQUIC_DEBUG"):
     logging.basicConfig(level=logging.DEBUG)

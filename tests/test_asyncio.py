@@ -2,7 +2,7 @@ import asyncio
 import binascii
 import random
 import socket
-from unittest import TestCase
+from unittest import TestCase, skipIf
 from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
@@ -17,6 +17,7 @@ from .utils import (
     SERVER_CACERTFILE,
     SERVER_CERTFILE,
     SERVER_KEYFILE,
+    SKIP_TESTS,
     generate_ec_certificate,
     run,
 )
@@ -120,6 +121,7 @@ class HighLevelTest(TestCase):
         response = run(self.run_client(host="127.0.0.1"))
         self.assertEqual(response, b"gnip")
 
+    @skipIf("ipv6" in SKIP_TESTS, "Skipping IPv6 tests")
     def test_connect_and_serve_ipv6(self):
         run(self.run_server(host="::"))
         response = run(self.run_client(host="::1"))
@@ -182,6 +184,7 @@ class HighLevelTest(TestCase):
         response = run(run_client_writelines())
         self.assertEqual(response, b"5432109876543210")
 
+    @skipIf("loss" in SKIP_TESTS, "Skipping loss tests")
     @patch("socket.socket.sendto", new_callable=lambda: sendto_with_loss)
     def test_connect_and_serve_with_packet_loss(self, mock_sendto):
         """

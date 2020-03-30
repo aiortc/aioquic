@@ -75,7 +75,7 @@ AEAD_init(AEADObject *self, PyObject *args, PyObject *kwargs)
 
     const EVP_CIPHER *evp_cipher = EVP_get_cipherbyname(cipher_name);
     if (evp_cipher == 0) {
-        PyErr_SetString(CryptoError, "Invalid cipher name");
+        PyErr_Format(CryptoError, "Invalid cipher name: %s", cipher_name);
         return -1;
     }
     if (key_len > AEAD_KEY_LENGTH_MAX) {
@@ -258,7 +258,7 @@ HeaderProtection_init(HeaderProtectionObject *self, PyObject *args, PyObject *kw
 
     const EVP_CIPHER *evp_cipher = EVP_get_cipherbyname(cipher_name);
     if (evp_cipher == 0) {
-        PyErr_SetString(CryptoError, "Invalid cipher name");
+        PyErr_Format(CryptoError, "Invalid cipher name: %s", cipher_name);
         return -1;
     }
 
@@ -444,6 +444,12 @@ PyInit__crypto(void)
         return NULL;
     Py_INCREF(&HeaderProtectionType);
     PyModule_AddObject(m, "HeaderProtection", (PyObject *)&HeaderProtectionType);
+
+    // ensure required ciphers are initialised
+    EVP_add_cipher(EVP_aes_128_ecb());
+    EVP_add_cipher(EVP_aes_128_gcm());
+    EVP_add_cipher(EVP_aes_256_ecb());
+    EVP_add_cipher(EVP_aes_256_gcm());
 
     return m;
 }
