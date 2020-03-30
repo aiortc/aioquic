@@ -14,9 +14,12 @@ readme_file = os.path.join(root_dir, "README.rst")
 with open(readme_file, encoding="utf-8") as f:
     long_description = f.read()
 
-extra_compile_args = []
-if sys.platform != "win32":
+if sys.platform == "win32":
+    extra_compile_args = []
+    libraries = ["libcrypto"]
+else:
     extra_compile_args = ["-std=c99"]
+    libraries = ["crypto"]
 
 setuptools.setup(
     name=about["__title__"],
@@ -50,7 +53,7 @@ setuptools.setup(
         setuptools.Extension(
             "aioquic._crypto",
             extra_compile_args=extra_compile_args,
-            libraries=["crypto"],
+            libraries=libraries,
             sources=["src/aioquic/_crypto.c"],
         ),
     ],
