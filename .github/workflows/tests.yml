@@ -58,17 +58,31 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  package:
+  package-source:
     runs-on: ubuntu-latest
-    needs: [lint, test]
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-python@v1
         with:
-          python-version: 3.6
-      - name: Build package
+          python-version: 3.7
+      - name: Build source package
         run: python setup.py sdist
-      - name: Publish package
+      - name: Upload source package
+        uses: actions/upload-artifact@v1
+        with:
+          name: "dist"
+          path: dist/
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [lint, test, package-source]
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/download-artifact@v1
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
         if: github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/')
         uses: pypa/gh-action-pypi-publish@master
         with:
