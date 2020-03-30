@@ -1,6 +1,4 @@
 import binascii
-import os
-import sys
 from unittest import TestCase, skipIf
 
 from aioquic.buffer import Buffer
@@ -13,6 +11,8 @@ from aioquic.quic.crypto import (
 from aioquic.quic.packet import PACKET_FIXED_BIT, QuicProtocolVersion
 from aioquic.tls import CipherSuite
 
+from .utils import SKIP_TESTS
+
 PROTOCOL_VERSION = QuicProtocolVersion.DRAFT_25
 
 CHACHA20_CLIENT_PACKET_NUMBER = 2
@@ -24,7 +24,6 @@ CHACHA20_CLIENT_ENCRYPTED_PACKET = binascii.unhexlify(
     "e8ff0000160880b57c7b70d8524b0850fc2a28e240fd7640178313b04be98449"
     "eb10567e25ce930381f2a5b7da2db8db"
 )
-CHACHA20_SKIP = os.environ.get("GITHUB_ACTIONS") == "true" and sys.platform == "darwin"
 
 LONG_CLIENT_PACKET_NUMBER = 2
 LONG_CLIENT_PLAIN_HEADER = binascii.unhexlify(
@@ -146,7 +145,7 @@ class CryptoTest(TestCase):
         self.assertEqual(iv, binascii.unhexlify("0a82086d32205ba22241d8dc"))
         self.assertEqual(hp, binascii.unhexlify("94b9452d2b3c7c7f6da7fdd8593537fd"))
 
-    @skipIf(CHACHA20_SKIP, "Skipping chacha20 tests")
+    @skipIf("chacha20" in SKIP_TESTS, "Skipping chacha20 tests")
     def test_decrypt_chacha20(self):
         pair = CryptoPair()
         pair.recv.setup(
@@ -206,7 +205,7 @@ class CryptoTest(TestCase):
         self.assertEqual(plain_payload, SHORT_SERVER_PLAIN_PAYLOAD)
         self.assertEqual(packet_number, SHORT_SERVER_PACKET_NUMBER)
 
-    @skipIf(CHACHA20_SKIP, "Skipping chacha20 tests")
+    @skipIf("chacha20" in SKIP_TESTS, "Skipping chacha20 tests")
     def test_encrypt_chacha20(self):
         pair = CryptoPair()
         pair.send.setup(
