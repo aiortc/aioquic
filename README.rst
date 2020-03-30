@@ -96,6 +96,22 @@ You will need to set some environment variables to link against OpenSSL:
    $ export CFLAGS=-I/usr/local/opt/openssl/include
    $ export LDFLAGS=-L/usr/local/opt/openssl/lib
 
+Windows
+.......
+
+On Windows the easiest way to install OpenSSL is to use `Chocolatey`_.
+
+.. code-block:: console
+
+   > choco install openssl
+
+You will need to set some environment variables to link against OpenSSL:
+
+.. code-block:: console
+
+  > $Env:CL = "/IC:\Progra~1\OpenSSL-Win64\include"
+  > $Env:LINK = "/LIBPATH:C:\Progra~1\OpenSSL-Win64\lib"
+
 Running the examples
 --------------------
 
@@ -144,4 +160,5 @@ License
 .. _read the documentation: https://aioquic.readthedocs.io/en/latest/
 .. _QUIC implementations: https://github.com/quicwg/base-drafts/wiki/Implementations
 .. _cryptography: https://cryptography.io/
+.. _Chocolatey: https://chocolatey.org/
 .. _BSD license: https://aioquic.readthedocs.io/en/latest/license.html
