@@ -14,6 +14,7 @@ done
 mkdir openssl
 curl -L https://www.openssl.org/source/openssl-1.1.1f.tar.gz | tar xz -C openssl --strip-components 1
 cd openssl
-./config --prefix=$destdir no-dtls no-shared no-ssl no-tests no-tls
+
+./config --prefix=$destdir no-comp no-shared no-tests
 make
 make install_sw

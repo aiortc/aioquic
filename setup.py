@@ -16,7 +16,7 @@ with open(readme_file, encoding="utf-8") as f:
 
 if sys.platform == "win32":
     extra_compile_args = []
-    libraries = ["libcrypto"]
+    libraries = ["libcrypto", "advapi32", "crypt32", "gdi32", "user32", "ws2_32"]
 else:
     extra_compile_args = ["-std=c99"]
     libraries = ["crypto"]
