@@ -45,6 +45,7 @@ async def connect(
     * ``stream_handler`` is a callback which is invoked whenever a stream is
       created. It must accept two arguments: a :class:`asyncio.StreamReader`
       and a :class:`asyncio.StreamWriter`.
+    * ``local_port`` is the UDP port number that this client wants to bind.
     """
     loop = asyncio.get_event_loop()
     local_host = "::"
@@ -78,9 +79,6 @@ async def connect(
     )
 
     # connect
-    if local_port is None:
-        local_port = 0
-
     _, protocol = await loop.create_datagram_endpoint(
         lambda: create_protocol(connection, stream_handler=stream_handler),
         local_addr=(local_host, local_port),
