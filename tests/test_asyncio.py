@@ -311,7 +311,7 @@ class HighLevelTest(TestCase):
 
     def test_connect_local_port(self):
         run(self.run_server())
-        response = run(self.run_client("127.0.0.1", local_port=3456))
+        response = run(self.run_client(local_port=3456))
         self.assertEqual(response, b"gnip")
 
     def test_change_connection_id(self):
