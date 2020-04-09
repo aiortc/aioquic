@@ -399,7 +399,6 @@ if __name__ == "__main__":
         "-v", "--verbose", action="store_true", help="increase logging verbosity"
     )
     parser.add_argument(
-        "-lp",
         "--local-port",
         type=int,
         default=0,
