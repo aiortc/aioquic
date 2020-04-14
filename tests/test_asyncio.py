@@ -309,6 +309,11 @@ class HighLevelTest(TestCase):
                 )
             )
 
+    def test_connect_local_port(self):
+        run(self.run_server())
+        response = run(self.run_client(local_port=3456))
+        self.assertEqual(response, b"gnip")
+
     def test_change_connection_id(self):
         async def run_client_change_connection_id():
             configuration = QuicConfiguration(is_client=True)
