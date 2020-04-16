@@ -1,7 +1,7 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from aioquic.h3.events import DataReceived, H3Event, Headers, HeadersReceived
-from aioquic.quic.connection import QuicConnection
+from aioquic.quic.connection import NetworkAddress, QuicConnection
 from aioquic.quic.events import QuicEvent, StreamDataReceived
 
 H0_ALPN = ["hq-27", "hq-26", "hq-25"]
@@ -61,3 +61,9 @@ class H0Connection:
         else:
             data = b""
         self._quic.send_stream_data(stream_id, data, end_stream)
+
+    def peer_address(self) -> Optional[NetworkAddress]:
+        """
+        :return: Refer to QuicConnection.peer_address
+        """
+        return self._quic.peer_address()

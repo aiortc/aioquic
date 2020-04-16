@@ -13,7 +13,11 @@ from aioquic.h3.events import (
     PushPromiseReceived,
 )
 from aioquic.h3.exceptions import NoAvailablePushIDError
-from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
+from aioquic.quic.connection import (
+    NetworkAddress,
+    QuicConnection,
+    stream_is_unidirectional,
+)
 from aioquic.quic.events import QuicEvent, StreamDataReceived
 from aioquic.quic.logger import QuicLoggerTrace
 
@@ -359,6 +363,14 @@ class H3Connection:
         self._quic.send_stream_data(
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
+
+    def peer_address(self) -> Optional[NetworkAddress]:
+        """
+        :return: Refer to QuicConnection.peer_address
+        """
+        return self._quic.peer_address()
+
+    # Private methods
 
     def _create_uni_stream(self, stream_type: int) -> int:
         """

@@ -2,8 +2,10 @@ from unittest import TestCase
 
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.events import DataReceived, HeadersReceived
+from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.connection import QuicConnection
 
-from .test_connection import client_and_server, transfer
+from .test_connection import CLIENT_ADDR, SERVER_ADDR, client_and_server, transfer
 
 
 def h0_client_and_server():
@@ -146,3 +148,20 @@ class H0ConnectionTest(TestCase):
             self.assertEqual(events[1].data, b"")
             self.assertEqual(events[1].stream_id, stream_id)
             self.assertEqual(events[1].stream_ended, True)
+
+    def test_peer_address(self):
+        with h0_client_and_server() as (quic_client, quic_server):
+            h0_client = H0Connection(quic_client)
+            h0_server = H0Connection(quic_server)
+
+            peer = h0_client.peer_address()
+            self.assertEqual(peer, SERVER_ADDR)
+            peer = h0_server.peer_address()
+            self.assertEqual(peer, CLIENT_ADDR)
+
+            # verify returning None when not connected
+            dummy_configuration = QuicConfiguration(is_client=True)
+            conn = QuicConnection(configuration=dummy_configuration)
+            client = H0Connection(conn)
+            peer = client.peer_address()
+            self.assertIsNone(peer)

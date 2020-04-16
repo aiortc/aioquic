@@ -257,8 +257,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                 path_bytes, query_string = raw_path, b""
             path = path_bytes.decode()
 
-            # FIXME: add a public API to retrieve peer address
-            client_addr = self._http._quic._network_paths[0].addr
+            client_addr = self._http.peer_address()
             client = (client_addr[0], client_addr[1])
 
             handler: Handler

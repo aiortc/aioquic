@@ -1776,6 +1776,26 @@ class QuicConnectionTest(TestCase):
         )
         self.assertEqual(drop(client), 1)
 
+    def test_peer_address(self):
+        # verify the return value when connected
+        with client_and_server() as (client, server):
+            consume_events(client)
+
+            peer = server.peer_address()
+            self.assertEqual(peer, CLIENT_ADDR)
+
+            peer = client.peer_address()
+            self.assertEqual(peer, SERVER_ADDR)
+
+        # verify returning None when not connected
+        dummy_configuration = QuicConfiguration(
+            is_client=True, quic_logger=QuicLogger()
+        )
+        dummy_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+        client = QuicConnection(configuration=dummy_configuration)
+        peer = client.peer_address()
+        self.assertIsNone(peer)
+
 
 class QuicNetworkPathTest(TestCase):
     def test_can_send(self):

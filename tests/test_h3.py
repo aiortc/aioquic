@@ -14,10 +14,11 @@ from aioquic.h3.connection import (
 from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import StreamDataReceived
 from aioquic.quic.logger import QuicLogger
 
-from .test_connection import client_and_server, transfer
+from .test_connection import CLIENT_ADDR, SERVER_ADDR, client_and_server, transfer
 
 
 def h3_client_and_server():
@@ -1290,3 +1291,20 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_server._stream[2].stream_type, 9)
             self.assertEqual(h3_server._stream[6].buffer, b"")
             self.assertEqual(h3_server._stream[6].stream_type, 64)
+
+    def test_peer_address(self):
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            peer = h3_client.peer_address()
+            self.assertEqual(peer, SERVER_ADDR)
+            peer = h3_server.peer_address()
+            self.assertEqual(peer, CLIENT_ADDR)
+
+            # verify returning None when not connected
+            dummy_configuration = QuicConfiguration(is_client=True)
+            conn = QuicConnection(configuration=dummy_configuration)
+            client = H3Connection(conn)
+            peer = client.peer_address()
+            self.assertIsNone(peer)
