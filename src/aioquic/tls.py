@@ -1159,7 +1159,7 @@ class SessionTicket:
 
     @property
     def obfuscated_age(self) -> int:
-        age = int((utcnow() - self.not_valid_before).total_seconds())
+        age = int((utcnow() - self.not_valid_before).total_seconds() * 1000)
         return (age + self.age_add) % (1 << 32)
 
 
