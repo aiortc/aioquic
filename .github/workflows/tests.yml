@@ -47,7 +47,7 @@ jobs:
           echo "::set-env name=LINK::/LIBPATH:C:\Progra~1\OpenSSL-Win64\lib"
       - name: Run tests
         run: |
-          pip install -U pip setuptools wheel
+          python -m pip install -U pip setuptools wheel
           pip install coverage
           pip install .
           coverage run -m unittest discover -v
