@@ -79,7 +79,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DNS over QUIC client")
     parser.add_argument("-t", "--type", type=str, help="Type of record to ")
     parser.add_argument(
-        "--host", type=str, help="The remote peer's host name or IP address"
+        "--host",
+        type=str,
+        default="localhost",
+        help="The remote peer's host name or IP address",
     )
     parser.add_argument(
         "--port", type=int, default=784, help="The remote peer's port number"
@@ -89,6 +92,9 @@ if __name__ == "__main__":
         "--insecure",
         action="store_true",
         help="do not validate server certificate",
+    )
+    parser.add_argument(
+        "--ca-certs", type=str, help="load CA certificates from the specified file"
     )
     parser.add_argument("--dns_type", help="The DNS query type to send")
     parser.add_argument("--query", help="Domain to query")
@@ -121,6 +127,8 @@ if __name__ == "__main__":
     configuration = QuicConfiguration(
         alpn_protocols=["dq"], is_client=True, max_datagram_frame_size=65536
     )
+    if args.ca_certs:
+        configuration.load_verify_locations(args.ca_certs)
     if args.insecure:
         configuration.verify_mode = ssl.CERT_NONE
     if args.quic_log:

@@ -83,8 +83,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port",
         type=int,
-        default=784,
-        help="listen on the specified port (defaults to 784)",
+        default=4784,
+        help="listen on the specified port (defaults to 4784)",
     )
     parser.add_argument(
         "-k",
