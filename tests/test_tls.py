@@ -314,7 +314,7 @@ class ContextTest(TestCase):
         client.handle_message(b"", client_buf)
         self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
         server_input = merge_buffers(client_buf)
-        self.assertGreaterEqual(len(server_input), 213)
+        self.assertGreaterEqual(len(server_input), 181)
         self.assertLessEqual(len(server_input), 358)
         reset_buffers(client_buf)
 
@@ -507,7 +507,7 @@ class ContextTest(TestCase):
             server.handle_message(server_input, server_buf)
             self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
             client_input = merge_buffers(server_buf)
-            self.assertEqual(len(client_input), 307)
+            self.assertEqual(len(client_input), 275)
             reset_buffers(server_buf)
 
             # handle server hello, encrypted extensions, certificate, certificate verify, finished
@@ -587,7 +587,7 @@ class ContextTest(TestCase):
             buf.seek(buf.tell() - 1)
             buf.push_uint8(1)
             client_input = merge_buffers(server_buf)
-            self.assertEqual(len(client_input), 307)
+            self.assertEqual(len(client_input), 275)
             reset_buffers(server_buf)
 
             # handle server hello and bomb
