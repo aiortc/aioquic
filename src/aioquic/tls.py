@@ -1251,7 +1251,7 @@ class Context:
 
         if is_client:
             self.client_random = os.urandom(32)
-            self.legacy_session_id = os.urandom(32)
+            self.legacy_session_id = b""
             self.state = State.CLIENT_HANDSHAKE_START
         else:
             self.client_random = None
