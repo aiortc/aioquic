@@ -613,7 +613,7 @@ class TlsTest(TestCase):
             ),
         )
         self.assertEqual(
-            hello.session_id,
+            hello.legacy_session_id,
             binascii.unhexlify(
                 "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
             ),
@@ -626,7 +626,7 @@ class TlsTest(TestCase):
                 tls.CipherSuite.CHACHA20_POLY1305_SHA256,
             ],
         )
-        self.assertEqual(hello.compression_methods, [tls.CompressionMethod.NULL])
+        self.assertEqual(hello.legacy_compression_methods, [tls.CompressionMethod.NULL])
 
         # extensions
         self.assertEqual(hello.alpn_protocols, None)
@@ -688,7 +688,7 @@ class TlsTest(TestCase):
                 "ed575c6fbd599c4dfaabd003dca6e860ccdb0e1782c1af02e57bf27cb6479b76"
             ),
         )
-        self.assertEqual(hello.session_id, b"")
+        self.assertEqual(hello.legacy_session_id, b"")
         self.assertEqual(
             hello.cipher_suites,
             [
@@ -698,7 +698,7 @@ class TlsTest(TestCase):
                 tls.CipherSuite.EMPTY_RENEGOTIATION_INFO_SCSV,
             ],
         )
-        self.assertEqual(hello.compression_methods, [tls.CompressionMethod.NULL])
+        self.assertEqual(hello.legacy_compression_methods, [tls.CompressionMethod.NULL])
 
         # extensions
         self.assertEqual(hello.alpn_protocols, ["h3-19"])
@@ -802,7 +802,7 @@ class TlsTest(TestCase):
             ),
         )
         self.assertEqual(
-            hello.session_id,
+            hello.legacy_session_id,
             binascii.unhexlify(
                 "26b19bdd30dbf751015a3a16e13bd59002dfe420b799d2a5cd5e11b8fa7bcb66"
             ),
@@ -815,7 +815,7 @@ class TlsTest(TestCase):
                 tls.CipherSuite.CHACHA20_POLY1305_SHA256,
             ],
         )
-        self.assertEqual(hello.compression_methods, [tls.CompressionMethod.NULL])
+        self.assertEqual(hello.legacy_compression_methods, [tls.CompressionMethod.NULL])
 
         # extensions
         self.assertEqual(hello.alpn_protocols, None)
@@ -876,7 +876,7 @@ class TlsTest(TestCase):
             random=binascii.unhexlify(
                 "18b2b23bf3e44b5d52ccfe7aecbc5ff14eadc3d349fabf804d71f165ae76e7d5"
             ),
-            session_id=binascii.unhexlify(
+            legacy_session_id=binascii.unhexlify(
                 "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
             ),
             cipher_suites=[
@@ -884,7 +884,7 @@ class TlsTest(TestCase):
                 tls.CipherSuite.AES_128_GCM_SHA256,
                 tls.CipherSuite.CHACHA20_POLY1305_SHA256,
             ],
-            compression_methods=[tls.CompressionMethod.NULL],
+            legacy_compression_methods=[tls.CompressionMethod.NULL],
             key_share=[
                 (
                     tls.Group.SECP256R1,
@@ -933,7 +933,7 @@ class TlsTest(TestCase):
             ),
         )
         self.assertEqual(
-            hello.session_id,
+            hello.legacy_session_id,
             binascii.unhexlify(
                 "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
             ),
@@ -966,7 +966,7 @@ class TlsTest(TestCase):
             ),
         )
         self.assertEqual(
-            hello.session_id,
+            hello.legacy_session_id,
             binascii.unhexlify(
                 "9483e7e895d0f4cec17086b0849601c0632662cd764e828f2f892f4c4b7771b0"
             ),
@@ -1003,7 +1003,7 @@ class TlsTest(TestCase):
                 random=binascii.unhexlify(
                     "ada85271d19680c615ea7336519e3fdf6f1e26f3b1075ee1de96ffa8884e8280"
                 ),
-                session_id=binascii.unhexlify(
+                legacy_session_id=binascii.unhexlify(
                     "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
                 ),
                 cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
@@ -1031,7 +1031,7 @@ class TlsTest(TestCase):
             random=binascii.unhexlify(
                 "ada85271d19680c615ea7336519e3fdf6f1e26f3b1075ee1de96ffa8884e8280"
             ),
-            session_id=binascii.unhexlify(
+            legacy_session_id=binascii.unhexlify(
                 "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
             ),
             cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
