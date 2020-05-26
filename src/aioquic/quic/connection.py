@@ -1971,6 +1971,13 @@ class QuicConnection:
     def _parse_transport_parameters(
         self, data: bytes, from_session_ticket: bool = False
     ) -> None:
+        """
+        Parse and apply remote transport parameters.
+
+        `from_session_ticket` is `True` when restoring saved transport parameters,
+        and `False` when handling received transport parameters.
+        """
+
         quic_transport_parameters = pull_quic_transport_parameters(
             Buffer(data=data), protocol_version=self._version
         )
@@ -1998,6 +2005,15 @@ class QuicConnection:
                 error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
                 frame_type=QuicFrameType.CRYPTO,
                 reason_phrase="original_connection_id does not match",
+            )
+        if (
+            quic_transport_parameters.active_connection_id_limit is not None
+            and quic_transport_parameters.active_connection_id_limit < 2
+        ):
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                frame_type=QuicFrameType.CRYPTO,
+                reason_phrase="active_connection_id_limit must be no less than 2",
             )
 
         # store remote parameters

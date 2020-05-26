@@ -21,8 +21,11 @@ from aioquic.quic.packet import (
     PACKET_TYPE_INITIAL,
     QuicErrorCode,
     QuicFrameType,
+    QuicProtocolVersion,
+    QuicTransportParameters,
     encode_quic_retry,
     encode_quic_version_negotiation,
+    push_quic_transport_parameters,
 )
 from aioquic.quic.packet_builder import QuicDeliveryState, QuicPacketBuilder
 from aioquic.quic.recovery import QuicPacketPacer
@@ -1481,6 +1484,33 @@ class QuicConnectionTest(TestCase):
                 QuicFrameType.STREAMS_BLOCKED_UNI,
                 Buffer(data=b"\x00"),
             )
+
+    def test_parse_transport_parameters(self):
+        client = create_standalone_client(self)
+
+        buf = Buffer(capacity=32)
+        push_quic_transport_parameters(
+            buf,
+            QuicTransportParameters(),
+            protocol_version=QuicProtocolVersion.DRAFT_27,
+        )
+        client._parse_transport_parameters(buf.data)
+
+    def test_parse_transport_parameters_with_bad_active_connection_id_limit(self):
+        client = create_standalone_client(self)
+
+        for active_connection_id_limit in [0, 1]:
+            buf = Buffer(capacity=32)
+            push_quic_transport_parameters(
+                buf,
+                QuicTransportParameters(active_connection_id_limit=active_connection_id_limit),
+                protocol_version=QuicProtocolVersion.DRAFT_27,
+            )
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._parse_transport_parameters(buf.data)
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR)
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+            self.assertEqual(cm.exception.reason_phrase, "active_connection_id_limit must be no less than 2")
 
     def test_payload_received_padding_only(self):
         with client_and_server() as (client, server):
