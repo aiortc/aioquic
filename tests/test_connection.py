@@ -1507,7 +1507,7 @@ class QuicConnectionTest(TestCase):
             QuicTransportParameters(
                 original_destination_connection_id=client.original_destination_connection_id
             ),
-            protocol_version=QuicProtocolVersion.DRAFT_27,
+            protocol_version=QuicProtocolVersion.DRAFT_28,
         )
         client._parse_transport_parameters(buf.data)
 
@@ -1522,7 +1522,7 @@ class QuicConnectionTest(TestCase):
                     active_connection_id_limit=active_connection_id_limit,
                     original_destination_connection_id=client.original_destination_connection_id,
                 ),
-                protocol_version=QuicProtocolVersion.DRAFT_27,
+                protocol_version=QuicProtocolVersion.DRAFT_28,
             )
             with self.assertRaises(QuicConnectionError) as cm:
                 client._parse_transport_parameters(buf.data)
