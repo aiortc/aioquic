@@ -52,6 +52,7 @@ class QuicProtocolVersion(IntEnum):
     DRAFT_25 = 0xFF000019
     DRAFT_26 = 0xFF00001A
     DRAFT_27 = 0xFF00001B
+    DRAFT_28 = 0xFF00001C
 
 
 @dataclass

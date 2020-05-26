@@ -13,7 +13,7 @@ from aioquic.tls import CipherSuite
 
 from .utils import SKIP_TESTS
 
-PROTOCOL_VERSION = QuicProtocolVersion.DRAFT_25
+PROTOCOL_VERSION = QuicProtocolVersion.DRAFT_28
 
 CHACHA20_CLIENT_PACKET_NUMBER = 2
 CHACHA20_CLIENT_PLAIN_HEADER = binascii.unhexlify(
