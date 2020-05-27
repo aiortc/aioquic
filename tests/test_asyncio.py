@@ -250,7 +250,7 @@ class HighLevelTest(TestCase):
     ):
         """
         If the server's transport parameters do not have the correct
-        original_destination_connection_id the connection fail.
+        original_destination_connection_id the connection must fail.
         """
 
         def create_protocol(*args, **kwargs):
@@ -262,8 +262,25 @@ class HighLevelTest(TestCase):
         with self.assertRaises(ConnectionError):
             run(self.run_client())
 
+    def test_connect_and_serve_with_stateless_retry_bad_retry_source_connection_id(
+        self,
+    ):
+        """
+        If the server's transport parameters do not have the correct
+        retry_source_connection_id the connection must fail.
+        """
+
+        def create_protocol(*args, **kwargs):
+            protocol = QuicConnectionProtocol(*args, **kwargs)
+            protocol._quic._retry_source_connection_id = None
+            return protocol
+
+        run(self.run_server(create_protocol=create_protocol, stateless_retry=True))
+        with self.assertRaises(ConnectionError):
+            run(self.run_client())
+
     @patch("aioquic.quic.retry.QuicRetryTokenHandler.validate_token")
-    def test_connect_and_serve_with_stateless_retry_bad(self, mock_validate):
+    def test_connect_and_serve_with_stateless_retry_bad_token(self, mock_validate):
         mock_validate.side_effect = ValueError("Decryption failed.")
 
         run(self.run_server(stateless_retry=True))

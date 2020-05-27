@@ -755,9 +755,9 @@ class QuicConnection:
                             },
                         )
 
-                    self._original_destination_connection_id = self._peer_cid
                     self._peer_cid = header.source_cid
                     self._peer_token = header.token
+                    self._retry_source_connection_id = header.source_cid
                     self._stateless_retry_count += 1
                     self._logger.info("Performing stateless retry")
                     self._connect(now=now)
@@ -2009,28 +2009,34 @@ class QuicConnection:
             )
 
         # validate remote parameters
-        if (
-            self._is_client
-            and not from_session_ticket
-            and (
+        if not from_session_ticket:
+            if self._is_client and (
                 quic_transport_parameters.original_destination_connection_id
                 != self._original_destination_connection_id
-            )
-        ):
-            raise QuicConnectionError(
-                error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
-                frame_type=QuicFrameType.CRYPTO,
-                reason_phrase="original_destination_connection_id does not match",
-            )
-        if (
-            quic_transport_parameters.active_connection_id_limit is not None
-            and quic_transport_parameters.active_connection_id_limit < 2
-        ):
-            raise QuicConnectionError(
-                error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
-                frame_type=QuicFrameType.CRYPTO,
-                reason_phrase="active_connection_id_limit must be no less than 2",
-            )
+            ):
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="original_destination_connection_id does not match",
+                )
+            if self._is_client and (
+                quic_transport_parameters.retry_source_connection_id
+                != self._retry_source_connection_id
+            ):
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="retry_source_connection_id does not match",
+                )
+            if (
+                quic_transport_parameters.active_connection_id_limit is not None
+                and quic_transport_parameters.active_connection_id_limit < 2
+            ):
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="active_connection_id_limit must be no less than 2",
+                )
 
         # store remote parameters
         if not from_session_ticket:
