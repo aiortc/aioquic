@@ -5,6 +5,8 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
+from ..buffer import Buffer
+from ..tls import pull_opaque, push_opaque
 from .connection import NetworkAddress
 
 
@@ -24,32 +26,31 @@ class QuicRetryTokenHandler:
         original_destination_connection_id: bytes,
         retry_source_connection_id: bytes,
     ) -> bytes:
-        retry_message = (
-            encode_address(addr)
-            + b"|"
-            + original_destination_connection_id
-            + b"|"
-            + retry_source_connection_id
-        )
+        buf = Buffer(capacity=512)
+        push_opaque(buf, 1, encode_address(addr))
+        push_opaque(buf, 1, original_destination_connection_id)
+        push_opaque(buf, 1, retry_source_connection_id)
         return self._key.public_key().encrypt(
-            retry_message,
+            buf.data,
             padding.OAEP(
                 mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None
             ),
         )
 
     def validate_token(self, addr: NetworkAddress, token: bytes) -> Tuple[bytes, bytes]:
-        retry_message = self._key.decrypt(
-            token,
-            padding.OAEP(
-                mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None
-            ),
+        buf = Buffer(
+            data=self._key.decrypt(
+                token,
+                padding.OAEP(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None,
+                ),
+            )
         )
-        (
-            encoded_addr,
-            original_destination_connection_id,
-            retry_source_connection_id,
-        ) = retry_message.split(b"|", maxsplit=2)
+        encoded_addr = pull_opaque(buf, 1)
+        original_destination_connection_id = pull_opaque(buf, 1)
+        retry_source_connection_id = pull_opaque(buf, 1)
         if encoded_addr != encode_address(addr):
             raise ValueError("Remote address does not match.")
         return original_destination_connection_id, retry_source_connection_id
