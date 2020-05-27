@@ -461,6 +461,7 @@ class QuicConnection:
                     builder.start_packet(packet_type, crypto)
                     self._write_connection_close_frame(
                         builder=builder,
+                        epoch=epoch,
                         error_code=self._close_event.error_code,
                         frame_type=self._close_event.frame_type,
                         reason_phrase=self._close_event.reason_phrase,
@@ -2352,10 +2353,17 @@ class QuicConnection:
     def _write_connection_close_frame(
         self,
         builder: QuicPacketBuilder,
+        epoch: tls.Epoch,
         error_code: int,
         frame_type: Optional[int],
         reason_phrase: str,
     ) -> None:
+        # convert application-level close to transport-level close in early stages
+        if frame_type is None and epoch in (tls.Epoch.INITIAL, tls.Epoch.HANDSHAKE):
+            error_code = QuicErrorCode.APPLICATION_ERROR
+            frame_type = QuicFrameType.PADDING
+            reason_phrase = ""
+
         reason_bytes = reason_phrase.encode("utf8")
         reason_length = len(reason_bytes)
 

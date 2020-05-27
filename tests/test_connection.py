@@ -1503,14 +1503,21 @@ class QuicConnectionTest(TestCase):
             buf = Buffer(capacity=32)
             push_quic_transport_parameters(
                 buf,
-                QuicTransportParameters(active_connection_id_limit=active_connection_id_limit),
+                QuicTransportParameters(
+                    active_connection_id_limit=active_connection_id_limit
+                ),
                 protocol_version=QuicProtocolVersion.DRAFT_27,
             )
             with self.assertRaises(QuicConnectionError) as cm:
                 client._parse_transport_parameters(buf.data)
-            self.assertEqual(cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR)
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+            )
             self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
-            self.assertEqual(cm.exception.reason_phrase, "active_connection_id_limit must be no less than 2")
+            self.assertEqual(
+                cm.exception.reason_phrase,
+                "active_connection_id_limit must be no less than 2",
+            )
 
     def test_payload_received_padding_only(self):
         with client_and_server() as (client, server):
@@ -1805,6 +1812,40 @@ class QuicConnectionTest(TestCase):
             now=time.time(),
         )
         self.assertEqual(drop(client), 1)
+
+    def test_write_connection_close_early(self):
+        client = create_standalone_client(self)
+
+        builder = QuicPacketBuilder(
+            host_cid=client.host_cid,
+            is_client=True,
+            peer_cid=client._peer_cid,
+            version=client._version,
+        )
+        crypto = CryptoPair()
+        crypto.setup_initial(client.host_cid, is_client=True, version=client._version)
+        builder.start_packet(PACKET_TYPE_INITIAL, crypto)
+        client._write_connection_close_frame(
+            builder=builder,
+            epoch=tls.Epoch.INITIAL,
+            error_code=123,
+            frame_type=None,
+            reason_phrase="some reason",
+        )
+
+        self.assertEqual(
+            builder.quic_logger_frames,
+            [
+                {
+                    "error_code": QuicErrorCode.APPLICATION_ERROR,
+                    "error_space": "transport",
+                    "frame_type": "connection_close",
+                    "raw_error_code": QuicErrorCode.APPLICATION_ERROR,
+                    "reason": "",
+                    "trigger_frame_type": QuicFrameType.PADDING,
+                }
+            ],
+        )
 
 
 class QuicNetworkPathTest(TestCase):
