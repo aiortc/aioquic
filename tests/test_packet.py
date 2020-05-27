@@ -200,7 +200,7 @@ class ParamsTest(TestCase):
         self.assertEqual(
             params,
             QuicTransportParameters(
-                idle_timeout=10000,
+                max_idle_timeout=10000,
                 stateless_reset_token=b"\xcc/\xd6\xe7\xd9zS\xab[\xe8[(\xd7\\\x80\x08",
                 max_udp_payload_size=2020,
                 initial_max_data=393210,
@@ -236,7 +236,7 @@ class ParamsTest(TestCase):
         self.assertEqual(
             params,
             QuicTransportParameters(
-                idle_timeout=10000,
+                max_idle_timeout=10000,
                 stateless_reset_token=b"\xcc/\xd6\xe7\xd9zS\xab[\xe8[(\xd7\\\x80\x08",
                 max_udp_payload_size=2020,
                 initial_max_data=393210,
@@ -379,7 +379,7 @@ class ParamsTest(TestCase):
         self.assertEqual(
             params,
             QuicTransportParameters(
-                idle_timeout=60000,
+                max_idle_timeout=60000,
                 stateless_reset_token=b"aaaabbbbccccdddd",
                 max_udp_payload_size=4096,
                 initial_max_data=1048576,

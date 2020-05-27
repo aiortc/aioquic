@@ -267,7 +267,7 @@ class QuicConnection:
         self._quic_logger: Optional[QuicLoggerTrace] = None
         self._remote_ack_delay_exponent = 3
         self._remote_active_connection_id_limit = 0
-        self._remote_idle_timeout = 0.0  # seconds
+        self._remote_max_idle_timeout = 0.0  # seconds
         self._remote_max_data = 0
         self._remote_max_data_used = 0
         self._remote_max_datagram_frame_size: Optional[int] = None
@@ -2029,8 +2029,10 @@ class QuicConnection:
             self._remote_active_connection_id_limit = (
                 quic_transport_parameters.active_connection_id_limit
             )
-        if quic_transport_parameters.idle_timeout is not None:
-            self._remote_idle_timeout = quic_transport_parameters.idle_timeout / 1000.0
+        if quic_transport_parameters.max_idle_timeout is not None:
+            self._remote_max_idle_timeout = (
+                quic_transport_parameters.max_idle_timeout / 1000.0
+            )
         self._remote_max_datagram_frame_size = (
             quic_transport_parameters.max_datagram_frame_size
         )
@@ -2050,7 +2052,7 @@ class QuicConnection:
         quic_transport_parameters = QuicTransportParameters(
             ack_delay_exponent=self._local_ack_delay_exponent,
             active_connection_id_limit=self._local_active_connection_id_limit,
-            idle_timeout=int(self._configuration.idle_timeout * 1000),
+            max_idle_timeout=int(self._configuration.idle_timeout * 1000),
             initial_max_data=self._local_max_data,
             initial_max_stream_data_bidi_local=self._local_max_stream_data_bidi_local,
             initial_max_stream_data_bidi_remote=self._local_max_stream_data_bidi_remote,

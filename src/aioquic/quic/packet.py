@@ -241,7 +241,7 @@ class QuicPreferredAddress:
 @dataclass
 class QuicTransportParameters:
     original_connection_id: Optional[bytes] = None
-    idle_timeout: Optional[int] = None
+    max_idle_timeout: Optional[int] = None
     stateless_reset_token: Optional[bytes] = None
     max_udp_payload_size: Optional[int] = None
     initial_max_data: Optional[int] = None
@@ -261,7 +261,7 @@ class QuicTransportParameters:
 
 PARAMS = {
     0: ("original_connection_id", bytes),
-    1: ("idle_timeout", int),
+    1: ("max_idle_timeout", int),
     2: ("stateless_reset_token", bytes),
     3: ("max_udp_payload_size", int),
     4: ("initial_max_data", int),
