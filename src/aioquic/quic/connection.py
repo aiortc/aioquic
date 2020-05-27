@@ -2009,6 +2009,20 @@ class QuicConnection:
             )
 
         # validate remote parameters
+        if not self._is_client:
+            for attr in [
+                "original_destination_connection_id",
+                "preferred_address",
+                "retry_source_connection_id",
+                "stateless_reset_token",
+            ]:
+                if getattr(quic_transport_parameters, attr) is not None:
+                    raise QuicConnectionError(
+                        error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                        frame_type=QuicFrameType.CRYPTO,
+                        reason_phrase="%s is not allowed for clients" % attr,
+                    )
+
         if not from_session_ticket:
             if self._is_client and (
                 quic_transport_parameters.original_destination_connection_id
