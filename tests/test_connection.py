@@ -141,6 +141,12 @@ def disable_packet_pacing(connection):
     connection._loss._pacer = DummyPacketPacer()
 
 
+def encode_transport_parameters(parameters: QuicTransportParameters) -> bytes:
+    buf = Buffer(capacity=512)
+    push_quic_transport_parameters(buf, parameters)
+    return buf.data
+
+
 def sequence_numbers(connection_ids):
     return list(map(lambda x: x.sequence_number, connection_ids))
 
@@ -1500,29 +1506,25 @@ class QuicConnectionTest(TestCase):
     def test_parse_transport_parameters(self):
         client = create_standalone_client(self)
 
-        buf = Buffer(capacity=32)
-        push_quic_transport_parameters(
-            buf,
+        data = encode_transport_parameters(
             QuicTransportParameters(
                 original_destination_connection_id=client.original_destination_connection_id
-            ),
+            )
         )
-        client._parse_transport_parameters(buf.data)
+        client._parse_transport_parameters(data)
 
     def test_parse_transport_parameters_with_bad_active_connection_id_limit(self):
         client = create_standalone_client(self)
 
         for active_connection_id_limit in [0, 1]:
-            buf = Buffer(capacity=32)
-            push_quic_transport_parameters(
-                buf,
+            data = encode_transport_parameters(
                 QuicTransportParameters(
                     active_connection_id_limit=active_connection_id_limit,
                     original_destination_connection_id=client.original_destination_connection_id,
-                ),
+                )
             )
             with self.assertRaises(QuicConnectionError) as cm:
-                client._parse_transport_parameters(buf.data)
+                client._parse_transport_parameters(data)
             self.assertEqual(
                 cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
             )
@@ -1530,6 +1532,34 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(
                 cm.exception.reason_phrase,
                 "active_connection_id_limit must be no less than 2",
+            )
+
+    def test_parse_transport_parameters_with_server_only_parameter(self):
+        server_configuration = QuicConfiguration(
+            is_client=False, quic_logger=QuicLogger()
+        )
+        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+
+        server = QuicConnection(
+            configuration=server_configuration,
+            original_destination_connection_id=bytes(8),
+        )
+        for active_connection_id_limit in [0, 1]:
+            data = encode_transport_parameters(
+                QuicTransportParameters(
+                    active_connection_id_limit=active_connection_id_limit,
+                    original_destination_connection_id=bytes(8),
+                )
+            )
+            with self.assertRaises(QuicConnectionError) as cm:
+                server._parse_transport_parameters(data)
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+            self.assertEqual(
+                cm.exception.reason_phrase,
+                "original_destination_connection_id is not allowed for clients",
             )
 
     def test_payload_received_padding_only(self):
