@@ -1996,9 +1996,7 @@ class QuicConnection:
         and `False` when handling received transport parameters.
         """
 
-        quic_transport_parameters = pull_quic_transport_parameters(
-            Buffer(data=data), protocol_version=self._version
-        )
+        quic_transport_parameters = pull_quic_transport_parameters(Buffer(data=data))
 
         # log event
         if self._quic_logger is not None and not from_session_ticket:
@@ -2102,9 +2100,7 @@ class QuicConnection:
             )
 
         buf = Buffer(capacity=3 * PACKET_MAX_SIZE)
-        push_quic_transport_parameters(
-            buf, quic_transport_parameters, protocol_version=self._version
-        )
+        push_quic_transport_parameters(buf, quic_transport_parameters)
         return buf.data
 
     def _set_state(self, state: QuicConnectionState) -> None:
