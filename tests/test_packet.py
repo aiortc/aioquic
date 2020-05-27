@@ -202,7 +202,7 @@ class ParamsTest(TestCase):
             QuicTransportParameters(
                 idle_timeout=10000,
                 stateless_reset_token=b"\xcc/\xd6\xe7\xd9zS\xab[\xe8[(\xd7\\\x80\x08",
-                max_packet_size=2020,
+                max_udp_payload_size=2020,
                 initial_max_data=393210,
                 initial_max_stream_data_bidi_local=65535,
                 initial_max_stream_data_bidi_remote=65535,
@@ -238,7 +238,7 @@ class ParamsTest(TestCase):
             QuicTransportParameters(
                 idle_timeout=10000,
                 stateless_reset_token=b"\xcc/\xd6\xe7\xd9zS\xab[\xe8[(\xd7\\\x80\x08",
-                max_packet_size=2020,
+                max_udp_payload_size=2020,
                 initial_max_data=393210,
                 initial_max_stream_data_bidi_local=65535,
                 initial_max_stream_data_bidi_remote=65535,
@@ -381,7 +381,7 @@ class ParamsTest(TestCase):
             QuicTransportParameters(
                 idle_timeout=60000,
                 stateless_reset_token=b"aaaabbbbccccdddd",
-                max_packet_size=4096,
+                max_udp_payload_size=4096,
                 initial_max_data=1048576,
                 initial_max_stream_data_bidi_local=66560,
                 initial_max_stream_data_bidi_remote=66560,

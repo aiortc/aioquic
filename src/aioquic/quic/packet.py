@@ -243,7 +243,7 @@ class QuicTransportParameters:
     original_connection_id: Optional[bytes] = None
     idle_timeout: Optional[int] = None
     stateless_reset_token: Optional[bytes] = None
-    max_packet_size: Optional[int] = None
+    max_udp_payload_size: Optional[int] = None
     initial_max_data: Optional[int] = None
     initial_max_stream_data_bidi_local: Optional[int] = None
     initial_max_stream_data_bidi_remote: Optional[int] = None
@@ -263,7 +263,7 @@ PARAMS = {
     0: ("original_connection_id", bytes),
     1: ("idle_timeout", int),
     2: ("stateless_reset_token", bytes),
-    3: ("max_packet_size", int),
+    3: ("max_udp_payload_size", int),
     4: ("initial_max_data", int),
     5: ("initial_max_stream_data_bidi_local", int),
     6: ("initial_max_stream_data_bidi_remote", int),
