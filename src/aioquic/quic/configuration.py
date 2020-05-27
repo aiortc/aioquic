@@ -78,10 +78,7 @@ class QuicConfiguration:
     private_key: Any = None
     quantum_readiness_test: bool = False
     supported_versions: List[int] = field(
-        default_factory=lambda: [
-            QuicProtocolVersion.DRAFT_28,
-            QuicProtocolVersion.DRAFT_27,
-        ]
+        default_factory=lambda: [QuicProtocolVersion.DRAFT_28]
     )
     verify_mode: Optional[int] = None
 
