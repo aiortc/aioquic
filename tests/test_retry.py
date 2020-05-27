@@ -6,16 +6,22 @@ from aioquic.quic.retry import QuicRetryTokenHandler
 class QuicRetryTokenHandlerTest(TestCase):
     def test_retry_token(self):
         addr = ("127.0.0.1", 1234)
-        cid = b"\x08\x07\x06\05\x04\x03\x02\x01"
+        original_destination_connection_id = b"\x08\x07\x06\05\x04\x03\x02\x01"
+        retry_source_connection_id = b"abcdefgh"
 
         handler = QuicRetryTokenHandler()
 
         # create token
-        token = handler.create_token(addr, cid)
+        token = handler.create_token(
+            addr, original_destination_connection_id, retry_source_connection_id
+        )
         self.assertIsNotNone(token)
 
         # validate token - ok
-        self.assertEqual(handler.validate_token(addr, token), cid)
+        self.assertEqual(
+            handler.validate_token(addr, token),
+            (original_destination_connection_id, retry_source_connection_id),
+        )
 
         # validate token - empty
         with self.assertRaises(ValueError) as cm:

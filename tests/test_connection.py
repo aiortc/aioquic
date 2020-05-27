@@ -112,7 +112,11 @@ def client_and_server(
     )
     server_configuration.load_cert_chain(server_certfile, server_keyfile)
 
-    server = QuicConnection(configuration=server_configuration, **server_kwargs)
+    server = QuicConnection(
+        configuration=server_configuration,
+        original_destination_connection_id=client.original_destination_connection_id,
+        **server_kwargs
+    )
     server._ack_delay = 0
     disable_packet_pacing(server)
     server_patch(server)
@@ -298,7 +302,10 @@ class QuicConnectionTest(TestCase):
         server_configuration = QuicConfiguration(is_client=False)
         server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
 
-        server = QuicConnection(configuration=server_configuration)
+        server = QuicConnection(
+            configuration=server_configuration,
+            original_destination_connection_id=client.original_destination_connection_id,
+        )
         server._ack_delay = 0
 
         # client sends INITIAL
@@ -319,7 +326,7 @@ class QuicConnectionTest(TestCase):
         now = 1.1
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1030])
+        self.assertEqual(datagram_sizes(items), [1280, 1050])
         self.assertEqual(server.get_timer(), 2.1)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -366,7 +373,10 @@ class QuicConnectionTest(TestCase):
         server_configuration = QuicConfiguration(is_client=False)
         server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
 
-        server = QuicConnection(configuration=server_configuration)
+        server = QuicConnection(
+            configuration=server_configuration,
+            original_destination_connection_id=client.original_destination_connection_id,
+        )
         server._ack_delay = 0
 
         # client sends INITIAL
@@ -380,7 +390,7 @@ class QuicConnectionTest(TestCase):
         now = 0.1
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1030])
+        self.assertEqual(datagram_sizes(items), [1280, 1050])
         self.assertEqual(server.get_timer(), 1.1)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -416,7 +426,7 @@ class QuicConnectionTest(TestCase):
         now = server.get_timer()
         server.handle_timer(now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 854])
+        self.assertEqual(datagram_sizes(items), [1280, 874])
         self.assertAlmostEqual(server.get_timer(), 3.1)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 3)
@@ -459,7 +469,10 @@ class QuicConnectionTest(TestCase):
         server_configuration = QuicConfiguration(is_client=False)
         server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
 
-        server = QuicConnection(configuration=server_configuration)
+        server = QuicConnection(
+            configuration=server_configuration,
+            original_destination_connection_id=client.original_destination_connection_id,
+        )
         server._ack_delay = 0
 
         # client sends INITIAL
@@ -473,7 +486,7 @@ class QuicConnectionTest(TestCase):
         now = 0.1
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1030])
+        self.assertEqual(datagram_sizes(items), [1280, 1050])
         self.assertEqual(server.get_timer(), 1.1)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -1491,7 +1504,9 @@ class QuicConnectionTest(TestCase):
         buf = Buffer(capacity=32)
         push_quic_transport_parameters(
             buf,
-            QuicTransportParameters(),
+            QuicTransportParameters(
+                original_destination_connection_id=client.original_destination_connection_id
+            ),
             protocol_version=QuicProtocolVersion.DRAFT_27,
         )
         client._parse_transport_parameters(buf.data)
@@ -1504,7 +1519,8 @@ class QuicConnectionTest(TestCase):
             push_quic_transport_parameters(
                 buf,
                 QuicTransportParameters(
-                    active_connection_id_limit=active_connection_id_limit
+                    active_connection_id_limit=active_connection_id_limit,
+                    original_destination_connection_id=client.original_destination_connection_id,
                 ),
                 protocol_version=QuicProtocolVersion.DRAFT_27,
             )

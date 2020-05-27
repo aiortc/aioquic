@@ -81,7 +81,8 @@ class QuicServer(asyncio.DatagramProtocol):
             return
 
         protocol = self._protocols.get(header.destination_cid, None)
-        original_connection_id: Optional[bytes] = None
+        original_destination_connection_id: Optional[bytes] = None
+        retry_source_connection_id: Optional[bytes] = None
         if (
             protocol is None
             and len(data) >= 1200
@@ -91,14 +92,15 @@ class QuicServer(asyncio.DatagramProtocol):
             if self._retry is not None:
                 if not header.token:
                     # create a retry token
+                    source_cid = os.urandom(8)
                     self._transport.sendto(
                         encode_quic_retry(
                             version=header.version,
-                            source_cid=os.urandom(8),
+                            source_cid=source_cid,
                             destination_cid=header.source_cid,
                             original_destination_cid=header.destination_cid,
                             retry_token=self._retry.create_token(
-                                addr, header.destination_cid
+                                addr, header.destination_cid, source_cid
                             ),
                         ),
                         addr,
@@ -107,17 +109,20 @@ class QuicServer(asyncio.DatagramProtocol):
                 else:
                     # validate retry token
                     try:
-                        original_connection_id = self._retry.validate_token(
-                            addr, header.token
-                        )
+                        (
+                            original_destination_connection_id,
+                            retry_source_connection_id,
+                        ) = self._retry.validate_token(addr, header.token)
                     except ValueError:
                         return
+            else:
+                original_destination_connection_id = header.destination_cid
 
             # create new connection
             connection = QuicConnection(
                 configuration=self._configuration,
-                logger_connection_id=original_connection_id or header.destination_cid,
-                original_connection_id=original_connection_id,
+                original_destination_connection_id=original_destination_connection_id,
+                retry_source_connection_id=retry_source_connection_id,
                 session_ticket_fetcher=self._session_ticket_fetcher,
                 session_ticket_handler=self._session_ticket_handler,
             )

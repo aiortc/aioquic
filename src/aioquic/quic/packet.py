@@ -240,7 +240,7 @@ class QuicPreferredAddress:
 
 @dataclass
 class QuicTransportParameters:
-    original_connection_id: Optional[bytes] = None
+    original_destination_connection_id: Optional[bytes] = None
     max_idle_timeout: Optional[int] = None
     stateless_reset_token: Optional[bytes] = None
     max_udp_payload_size: Optional[int] = None
@@ -255,28 +255,33 @@ class QuicTransportParameters:
     disable_active_migration: Optional[bool] = False
     preferred_address: Optional[QuicPreferredAddress] = None
     active_connection_id_limit: Optional[int] = None
+    initial_source_connection_id: Optional[bytes] = None
+    retry_source_connection_id: Optional[bytes] = None
     max_datagram_frame_size: Optional[int] = None
     quantum_readiness: Optional[bytes] = None
 
 
 PARAMS = {
-    0: ("original_connection_id", bytes),
-    1: ("max_idle_timeout", int),
-    2: ("stateless_reset_token", bytes),
-    3: ("max_udp_payload_size", int),
-    4: ("initial_max_data", int),
-    5: ("initial_max_stream_data_bidi_local", int),
-    6: ("initial_max_stream_data_bidi_remote", int),
-    7: ("initial_max_stream_data_uni", int),
-    8: ("initial_max_streams_bidi", int),
-    9: ("initial_max_streams_uni", int),
-    10: ("ack_delay_exponent", int),
-    11: ("max_ack_delay", int),
-    12: ("disable_active_migration", bool),
-    13: ("preferred_address", QuicPreferredAddress),
-    14: ("active_connection_id_limit", int),
-    32: ("max_datagram_frame_size", int),
-    3127: ("quantum_readiness", bytes),
+    0x00: ("original_destination_connection_id", bytes),
+    0x01: ("max_idle_timeout", int),
+    0x02: ("stateless_reset_token", bytes),
+    0x03: ("max_udp_payload_size", int),
+    0x04: ("initial_max_data", int),
+    0x05: ("initial_max_stream_data_bidi_local", int),
+    0x06: ("initial_max_stream_data_bidi_remote", int),
+    0x07: ("initial_max_stream_data_uni", int),
+    0x08: ("initial_max_streams_bidi", int),
+    0x09: ("initial_max_streams_uni", int),
+    0x0A: ("ack_delay_exponent", int),
+    0x0B: ("max_ack_delay", int),
+    0x0C: ("disable_active_migration", bool),
+    0x0D: ("preferred_address", QuicPreferredAddress),
+    0x0E: ("active_connection_id_limit", int),
+    0x0F: ("initial_source_connection_id", bytes),
+    0x10: ("retry_source_connection_id", bytes),
+    # extensions
+    0x0020: ("max_datagram_frame_size", int),
+    0x0C37: ("quantum_readiness", bytes),
 }
 
 

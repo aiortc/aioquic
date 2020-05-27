@@ -203,15 +203,18 @@ class QuicConnection:
         self,
         *,
         configuration: QuicConfiguration,
-        logger_connection_id: Optional[bytes] = None,
-        original_connection_id: Optional[bytes] = None,
+        original_destination_connection_id: Optional[bytes] = None,
+        retry_source_connection_id: Optional[bytes] = None,
         session_ticket_fetcher: Optional[tls.SessionTicketFetcher] = None,
         session_ticket_handler: Optional[tls.SessionTicketHandler] = None,
     ) -> None:
         if configuration.is_client:
             assert (
-                original_connection_id is None
-            ), "Cannot set original_connection_id for a client"
+                original_destination_connection_id is None
+            ), "Cannot set original_destination_connection_id for a client"
+            assert (
+                retry_source_connection_id is None
+            ), "Cannot set retry_source_connection_id for a client"
         else:
             assert (
                 configuration.certificate is not None
@@ -219,6 +222,9 @@ class QuicConnection:
             assert (
                 configuration.private_key is not None
             ), "SSL private key is required for a server"
+            assert (
+                original_destination_connection_id is not None
+            ), "original_destination_connection_id is required for a server"
 
         # configuration
         self._configuration = configuration
@@ -246,6 +252,7 @@ class QuicConnection:
         self._host_cid_seq = 1
         self._local_ack_delay_exponent = 3
         self._local_active_connection_id_limit = 8
+        self._local_initial_source_connection_id = self._host_cids[0].cid
         self._local_max_data = configuration.max_data
         self._local_max_data_sent = configuration.max_data
         self._local_max_data_used = 0
@@ -256,7 +263,6 @@ class QuicConnection:
         self._local_max_streams_uni = 128
         self._loss_at: Optional[float] = None
         self._network_paths: List[QuicNetworkPath] = []
-        self._original_connection_id = original_connection_id
         self._pacing_at: Optional[float] = None
         self._packet_number = 0
         self._parameters_received = False
@@ -276,6 +282,7 @@ class QuicConnection:
         self._remote_max_stream_data_uni = 0
         self._remote_max_streams_bidi = 0
         self._remote_max_streams_uni = 0
+        self._retry_source_connection_id = retry_source_connection_id
         self._spaces: Dict[tls.Epoch, QuicPacketSpace] = {}
         self._spin_bit = False
         self._spin_highest_pn = 0
@@ -286,15 +293,21 @@ class QuicConnection:
         self._streams_blocked_uni: List[QuicStream] = []
         self._version: Optional[int] = None
 
+        if self._is_client:
+            self._original_destination_connection_id = self._peer_cid
+        else:
+            self._original_destination_connection_id = (
+                original_destination_connection_id
+            )
+
         # logging
-        if logger_connection_id is None:
-            logger_connection_id = self._peer_cid
         self._logger = QuicConnectionAdapter(
-            logger, {"id": dump_cid(logger_connection_id)}
+            logger, {"id": dump_cid(self._original_destination_connection_id)}
         )
         if configuration.quic_logger:
             self._quic_logger = configuration.quic_logger.start_trace(
-                is_client=configuration.is_client, odcid=logger_connection_id
+                is_client=configuration.is_client,
+                odcid=self._original_destination_connection_id,
             )
 
         # loss recovery
@@ -357,6 +370,10 @@ class QuicConnection:
     @property
     def configuration(self) -> QuicConfiguration:
         return self._configuration
+
+    @property
+    def original_destination_connection_id(self) -> bytes:
+        return self._original_destination_connection_id
 
     def change_connection_id(self) -> None:
         """
@@ -738,7 +755,7 @@ class QuicConnection:
                             },
                         )
 
-                    self._original_connection_id = self._peer_cid
+                    self._original_destination_connection_id = self._peer_cid
                     self._peer_cid = header.source_cid
                     self._peer_token = header.token
                     self._stateless_retry_count += 1
@@ -1998,14 +2015,14 @@ class QuicConnection:
             self._is_client
             and not from_session_ticket
             and (
-                quic_transport_parameters.original_connection_id
-                != self._original_connection_id
+                quic_transport_parameters.original_destination_connection_id
+                != self._original_destination_connection_id
             )
         ):
             raise QuicConnectionError(
                 error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
                 frame_type=QuicFrameType.CRYPTO,
-                reason_phrase="original_connection_id does not match",
+                reason_phrase="original_destination_connection_id does not match",
             )
         if (
             quic_transport_parameters.active_connection_id_limit is not None
@@ -2059,6 +2076,7 @@ class QuicConnection:
             initial_max_stream_data_uni=self._local_max_stream_data_uni,
             initial_max_streams_bidi=self._local_max_streams_bidi,
             initial_max_streams_uni=self._local_max_streams_uni,
+            initial_source_connection_id=self._local_initial_source_connection_id,
             max_ack_delay=25,
             max_datagram_frame_size=self._configuration.max_datagram_frame_size,
             quantum_readiness=b"Q" * 1200
@@ -2066,8 +2084,11 @@ class QuicConnection:
             else None,
         )
         if not self._is_client:
-            quic_transport_parameters.original_connection_id = (
-                self._original_connection_id
+            quic_transport_parameters.original_destination_connection_id = (
+                self._original_destination_connection_id
+            )
+            quic_transport_parameters.retry_source_connection_id = (
+                self._retry_source_connection_id
             )
 
         # log event
