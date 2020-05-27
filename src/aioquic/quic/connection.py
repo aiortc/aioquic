@@ -2017,16 +2017,19 @@ class QuicConnection:
             )
 
         # store remote parameters
-        if quic_transport_parameters.ack_delay_exponent is not None:
-            self._remote_ack_delay_exponent = self._remote_ack_delay_exponent
+        if not from_session_ticket:
+            if quic_transport_parameters.ack_delay_exponent is not None:
+                self._remote_ack_delay_exponent = self._remote_ack_delay_exponent
+            if quic_transport_parameters.max_ack_delay is not None:
+                self._loss.max_ack_delay = (
+                    quic_transport_parameters.max_ack_delay / 1000.0
+                )
         if quic_transport_parameters.active_connection_id_limit is not None:
             self._remote_active_connection_id_limit = (
                 quic_transport_parameters.active_connection_id_limit
             )
         if quic_transport_parameters.idle_timeout is not None:
             self._remote_idle_timeout = quic_transport_parameters.idle_timeout / 1000.0
-        if quic_transport_parameters.max_ack_delay is not None:
-            self._loss.max_ack_delay = quic_transport_parameters.max_ack_delay / 1000.0
         self._remote_max_datagram_frame_size = (
             quic_transport_parameters.max_datagram_frame_size
         )
