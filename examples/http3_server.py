@@ -1,9 +1,7 @@
 import argparse
 import asyncio
 import importlib
-import json
 import logging
-import os
 import time
 from collections import deque
 from email.utils import formatdate
@@ -11,6 +9,7 @@ from typing import Callable, Deque, Dict, List, Optional, Union, cast
 
 import wsproto
 import wsproto.events
+from quic_logger import QuicDirectoryLogger
 
 import aioquic
 from aioquic.asyncio import QuicConnectionProtocol, serve
@@ -20,7 +19,6 @@ from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import DatagramFrameReceived, ProtocolNegotiated, QuicEvent
-from aioquic.quic.logger import QuicLogger, QuicLoggerTrace
 from aioquic.tls import SessionTicket
 
 try:
@@ -353,27 +351,6 @@ class SessionTicketStore:
         return self.tickets.pop(label, None)
 
 
-class QuicLoggerCustom(QuicLogger):
-    """
-    Custom QUIC logger which writes one trace per file.
-    """
-
-    def __init__(self, path: str) -> None:
-        if not os.path.isdir(path):
-            raise ValueError("QUIC log output directory '%s' does not exist" % path)
-        self.path = path
-        super().__init__()
-
-    def end_trace(self, trace: QuicLoggerTrace) -> None:
-        trace_dict = trace.to_dict()
-        trace_path = os.path.join(
-            self.path, trace_dict["common_fields"]["ODCID"] + ".qlog"
-        )
-        with open(trace_path, "w") as logger_fp:
-            json.dump({"qlog_version": "draft-01", "traces": [trace_dict]}, logger_fp)
-        self._traces.remove(trace)
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="QUIC server")
     parser.add_argument(
@@ -416,7 +393,10 @@ if __name__ == "__main__":
         help="log secrets to a file, for use with Wireshark",
     )
     parser.add_argument(
-        "-q", "--quic-log", type=str, help="log QUIC events to a file in QLOG format"
+        "-q",
+        "--quic-log",
+        type=str,
+        help="log QUIC events to QLOG files in the specified directory",
     )
     parser.add_argument(
         "-r",
@@ -441,7 +421,7 @@ if __name__ == "__main__":
 
     # create QUIC logger
     if args.quic_log:
-        quic_logger = QuicLoggerCustom(args.quic_log)
+        quic_logger = QuicDirectoryLogger(args.quic_log)
     else:
         quic_logger = None
 

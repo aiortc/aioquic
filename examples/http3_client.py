@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import json
 import logging
 import os
 import pickle
@@ -12,6 +11,7 @@ from urllib.parse import urlparse
 
 import wsproto
 import wsproto.events
+from quic_logger import QuicDirectoryLogger
 
 import aioquic
 from aioquic.asyncio.client import connect
@@ -26,7 +26,6 @@ from aioquic.h3.events import (
 )
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
-from aioquic.quic.logger import QuicLogger
 from aioquic.tls import CipherSuite, SessionTicket
 
 try:
@@ -386,7 +385,10 @@ if __name__ == "__main__":
         "--output-dir", type=str, help="write downloaded files to this directory",
     )
     parser.add_argument(
-        "-q", "--quic-log", type=str, help="log QUIC events to a file in QLOG format"
+        "-q",
+        "--quic-log",
+        type=str,
+        help="log QUIC events to QLOG files in the specified directory",
     )
     parser.add_argument(
         "-l",
@@ -434,7 +436,7 @@ if __name__ == "__main__":
     if args.max_stream_data:
         configuration.max_stream_data = args.max_stream_data
     if args.quic_log:
-        configuration.quic_logger = QuicLogger()
+        configuration.quic_logger = QuicDirectoryLogger(args.quic_log)
     if args.secrets_log:
         configuration.secrets_log_file = open(args.secrets_log, "a")
     if args.session_ticket:
@@ -447,18 +449,13 @@ if __name__ == "__main__":
     if uvloop is not None:
         uvloop.install()
     loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(
-            run(
-                configuration=configuration,
-                urls=args.url,
-                data=args.data,
-                include=args.include,
-                output_dir=args.output_dir,
-                local_port=args.local_port,
-            )
+    loop.run_until_complete(
+        run(
+            configuration=configuration,
+            urls=args.url,
+            data=args.data,
+            include=args.include,
+            output_dir=args.output_dir,
+            local_port=args.local_port,
         )
-    finally:
-        if configuration.quic_logger is not None:
-            with open(args.quic_log, "w") as logger_fp:
-                json.dump(configuration.quic_logger.to_dict(), logger_fp, indent=4)
+    )

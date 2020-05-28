@@ -1,16 +1,15 @@
 import argparse
 import asyncio
-import json
 import logging
 from typing import Dict, Optional
 
 from dnslib.dns import DNSRecord
+from quic_logger import QuicDirectoryLogger
 
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import ProtocolNegotiated, QuicEvent, StreamDataReceived
-from aioquic.quic.logger import QuicLogger
 from aioquic.tls import SessionTicket
 
 try:
@@ -114,7 +113,10 @@ if __name__ == "__main__":
         help="send a stateless retry for new connections",
     )
     parser.add_argument(
-        "-q", "--quic-log", type=str, help="log QUIC events to a file in QLOG format"
+        "-q",
+        "--quic-log",
+        type=str,
+        help="log QUIC events to QLOG files in the specified directory",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="increase logging verbosity"
@@ -128,7 +130,7 @@ if __name__ == "__main__":
     )
 
     if args.quic_log:
-        quic_logger = QuicLogger()
+        quic_logger = QuicDirectoryLogger(args.quic_log)
     else:
         quic_logger = None
 
@@ -161,7 +163,3 @@ if __name__ == "__main__":
         loop.run_forever()
     except KeyboardInterrupt:
         pass
-    finally:
-        if configuration.quic_logger is not None:
-            with open(args.quic_log, "w") as logger_fp:
-                json.dump(configuration.quic_logger.to_dict(), logger_fp, indent=4)

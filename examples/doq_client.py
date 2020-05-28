@@ -1,18 +1,17 @@
 import argparse
 import asyncio
-import json
 import logging
 import pickle
 import ssl
 from typing import Optional, cast
 
 from dnslib.dns import QTYPE, DNSQuestion, DNSRecord
+from quic_logger import QuicDirectoryLogger
 
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent, StreamDataReceived
-from aioquic.quic.logger import QuicLogger
 
 logger = logging.getLogger("client")
 
@@ -99,7 +98,10 @@ if __name__ == "__main__":
     parser.add_argument("--dns_type", help="The DNS query type to send")
     parser.add_argument("--query", help="Domain to query")
     parser.add_argument(
-        "-q", "--quic-log", type=str, help="log QUIC events to a file in QLOG format"
+        "-q",
+        "--quic-log",
+        type=str,
+        help="log QUIC events to QLOG files in the specified directory",
     )
     parser.add_argument(
         "-l",
@@ -132,7 +134,7 @@ if __name__ == "__main__":
     if args.insecure:
         configuration.verify_mode = ssl.CERT_NONE
     if args.quic_log:
-        configuration.quic_logger = QuicLogger()
+        configuration.quic_logger = QuicDirectoryLogger(args.quic_log)
     if args.secrets_log:
         configuration.secrets_log_file = open(args.secrets_log, "a")
     if args.session_ticket:
@@ -146,17 +148,12 @@ if __name__ == "__main__":
         logger.debug("No session ticket defined...")
 
     loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(
-            run(
-                configuration=configuration,
-                host=args.host,
-                port=args.port,
-                query_type=args.dns_type,
-                dns_query=args.query,
-            )
+    loop.run_until_complete(
+        run(
+            configuration=configuration,
+            host=args.host,
+            port=args.port,
+            query_type=args.dns_type,
+            dns_query=args.query,
         )
-    finally:
-        if configuration.quic_logger is not None:
-            with open(args.quic_log, "w") as logger_fp:
-                json.dump(configuration.quic_logger.to_dict(), logger_fp, indent=4)
+    )
