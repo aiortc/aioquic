@@ -95,8 +95,7 @@ SERVERS = [
     Server(
         "msquic",
         "quic.westus.cloudapp.azure.com",
-        port=4433,
-        session_resumption_port=4433,
+        port=443,
         structured_logging=True,
         throughput_file_suffix=".txt",
         verify_mode=ssl.CERT_NONE,
