@@ -89,7 +89,7 @@ SERVERS = [
     ),
     Server("ats", "quic.ogre.com"),
     Server("f5", "f5quic.com", retry_port=4433),
-    Server("haskell", "mew.org", retry_port=4433),
+    Server("haskell", "mew.org"),
     Server("gquic", "quic.rocks", retry_port=None),
     Server("lsquic", "http3-test.litespeedtech.com", push_path="/200?push=/100"),
     Server(
