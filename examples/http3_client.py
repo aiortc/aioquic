@@ -27,7 +27,7 @@ from aioquic.h3.events import (
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
 from aioquic.quic.logger import QuicLogger
-from aioquic.tls import SessionTicket
+from aioquic.tls import CipherSuite, SessionTicket
 
 try:
     import uvloop
@@ -352,6 +352,11 @@ if __name__ == "__main__":
         "--ca-certs", type=str, help="load CA certificates from the specified file"
     )
     parser.add_argument(
+        "--cipher-suites",
+        type=str,
+        help="only advertise the given cipher suites, e.g. `AES_256_GCM_SHA384,CHACHA20_POLY1305_SHA256`",
+    )
+    parser.add_argument(
         "-d", "--data", type=str, help="send the specified data in a POST request"
     )
     parser.add_argument(
@@ -418,6 +423,10 @@ if __name__ == "__main__":
     )
     if args.ca_certs:
         configuration.load_verify_locations(args.ca_certs)
+    if args.cipher_suites:
+        configuration.cipher_suites = [
+            CipherSuite[s] for s in args.cipher_suites.split(",")
+        ]
     if args.insecure:
         configuration.verify_mode = ssl.CERT_NONE
     if args.max_data:

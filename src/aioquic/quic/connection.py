@@ -1163,6 +1163,7 @@ class QuicConnection:
             cadata=self._configuration.cadata,
             cafile=self._configuration.cafile,
             capath=self._configuration.capath,
+            cipher_suites=self.configuration.cipher_suites,
             is_client=self._is_client,
             logger=self._logger,
             max_early_data=None if self._is_client else MAX_EARLY_DATA,
