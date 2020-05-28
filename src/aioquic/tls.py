@@ -1176,6 +1176,7 @@ class Context:
         cadata: Optional[bytes] = None,
         cafile: Optional[str] = None,
         capath: Optional[str] = None,
+        cipher_suites: Optional[List[CipherSuite]] = None,
         logger: Optional[Union[logging.Logger, logging.LoggerAdapter]] = None,
         max_early_data: Optional[int] = None,
         server_name: Optional[str] = None,
@@ -1209,11 +1210,14 @@ class Context:
         ] = lambda d, e, c, s: None
 
         # supported parameters
-        self._cipher_suites = [
-            CipherSuite.AES_256_GCM_SHA384,
-            CipherSuite.AES_128_GCM_SHA256,
-            CipherSuite.CHACHA20_POLY1305_SHA256,
-        ]
+        if cipher_suites is not None:
+            self._cipher_suites = cipher_suites
+        else:
+            self._cipher_suites = [
+                CipherSuite.AES_256_GCM_SHA384,
+                CipherSuite.AES_128_GCM_SHA256,
+                CipherSuite.CHACHA20_POLY1305_SHA256,
+            ]
         self._legacy_compression_methods: List[int] = [CompressionMethod.NULL]
         self._psk_key_exchange_modes: List[int] = [PskKeyExchangeMode.PSK_DHE_KE]
         self._signature_algorithms: List[int] = [

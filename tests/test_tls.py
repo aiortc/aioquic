@@ -120,12 +120,15 @@ class ContextTest(TestCase):
         self.assertEqual(client.state, State.CLIENT_HANDSHAKE_START)
         return client
 
-    def create_server(self, alpn_protocols=None):
+    def create_server(self, alpn_protocols=None, **kwargs):
         configuration = QuicConfiguration(is_client=False)
         configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
 
         server = Context(
-            alpn_protocols=alpn_protocols, is_client=False, max_early_data=0xFFFFFFFF
+            alpn_protocols=alpn_protocols,
+            is_client=False,
+            max_early_data=0xFFFFFFFF,
+            **kwargs
         )
         server.certificate = configuration.certificate
         server.certificate_private_key = configuration.private_key
@@ -245,11 +248,9 @@ class ContextTest(TestCase):
         server.handle_message(server_input, server_buf)
 
     def test_server_unsupported_cipher_suite(self):
-        client = self.create_client()
-        client._cipher_suites = [tls.CipherSuite.AES_128_GCM_SHA256]
+        client = self.create_client(cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256])
 
-        server = self.create_server()
-        server._cipher_suites = [tls.CipherSuite.AES_256_GCM_SHA384]
+        server = self.create_server(cipher_suites=[tls.CipherSuite.AES_256_GCM_SHA384])
 
         with self.assertRaises(tls.AlertHandshakeFailure) as cm:
             self._server_fail_hello(client, server)
