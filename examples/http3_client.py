@@ -288,6 +288,7 @@ async def run(
     include: bool,
     output_dir: Optional[str],
     local_port: int,
+    zero_rtt: bool,
 ) -> None:
     # parse URL
     parsed = urlparse(urls[0])
@@ -309,6 +310,7 @@ async def run(
         create_protocol=HttpClient,
         session_ticket_handler=save_session_ticket,
         local_port=local_port,
+        wait_connected=not zero_rtt,
     ) as client:
         client = cast(HttpClient, client)
 
@@ -408,6 +410,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--local-port", type=int, default=0, help="local port to bind for connections",
     )
+    parser.add_argument(
+        "--zero-rtt", action="store_true", help="try to send requests using 0-RTT"
+    )
 
     args = parser.parse_args()
 
@@ -457,5 +462,6 @@ if __name__ == "__main__":
             include=args.include,
             output_dir=args.output_dir,
             local_port=args.local_port,
+            zero_rtt=args.zero_rtt,
         )
     )
