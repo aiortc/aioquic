@@ -82,6 +82,7 @@ NEW_CONNECTION_ID_FRAME_CAPACITY = 1 + 8 + 8 + 1 + 20 + 16
 PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
 PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
 PING_FRAME_CAPACITY = 1
+RESET_STREAM_CAPACITY = 1 + 8 + 8 + 8
 RETIRE_CONNECTION_ID_CAPACITY = 1 + 8
 STREAMS_BLOCKED_CAPACITY = 1 + 8
 TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 8 + 8 + 8  # + reason length
@@ -233,6 +234,7 @@ class QuicConnection:
         self._ack_delay = K_GRANULARITY
         self._close_at: Optional[float] = None
         self._close_event: Optional[events.ConnectionTerminated] = None
+        self._reset_event: Optional[events.StreamReset] = None
         self._connect_called = False
         self._cryptos: Dict[tls.Epoch, CryptoPair] = {}
         self._crypto_buffers: Dict[tls.Epoch, Buffer] = {}
@@ -397,6 +399,27 @@ class QuicConnection:
             self._logger.debug(
                 "Switching to CID %s (%d)", dump_cid(self._peer_cid), self._peer_cid_seq
             )
+
+    def reset_stream(
+        self,
+        stream_id: int,
+        error_code: int = QuicErrorCode.NO_ERROR,
+    ) -> None:
+        """
+        Reset a stream.
+
+        :param stream_id: The ID of the stream to reset.
+        :param error_code: (optional) An error code indicating why the connection is
+                           being reset. Default: `QuicErrorCode.NO_ERROR`
+        """
+        stream = self._streams[stream_id] = QuicStream(stream_id=stream_id)
+
+        if self._state not in END_STATES:
+            self._reset_event = events.StreamReset(
+                error_code=error_code,
+                stream_id=stream_id
+            )
+            stream._reset_pending = True
 
     def close(
         self,
@@ -1913,6 +1936,12 @@ class QuicConnection:
         if delivery != QuicDeliveryState.ACKED:
             self._retire_connection_ids.append(sequence_number)
 
+    def _on_reset_stream_delivery(
+        self, delivery: QuicDeliveryState, stream: QuicStream
+        ) -> None:
+        if delivery != QuicDeliveryState.ACKED:
+            stream._reset_pending = True
+
     def _payload_received(
         self, context: QuicReceiveContext, plain: bytes
     ) -> Tuple[bool, bool]:
@@ -2317,6 +2346,17 @@ class QuicConnection:
                         ),
                     )
 
+            # RESET STREAM
+            for stream in self._streams.values():
+                if stream._reset_pending:
+                    self._write_stream_reset_frame(
+                        builder = builder,
+                        frame_type = QuicFrameType.RESET_STREAM,
+                        stream=stream,
+                        error_code = self._reset_event.error_code,
+                    )
+                    stream._reset_pending = False
+
             if builder.packet_is_empty:
                 break
             else:
@@ -2716,5 +2756,35 @@ class QuicConnection:
                 self._quic_logger.encode_streams_blocked_frame(
                     is_unidirectional=frame_type == QuicFrameType.STREAMS_BLOCKED_UNI,
                     limit=limit,
+                )
+            )
+
+    def _write_stream_reset_frame(
+        self,
+        builder: QuicPacketBuilder,
+        frame_type: QuicFrameType,
+        stream: QuicStream,
+        error_code: int
+        ) -> None:
+
+        buf = builder.start_frame(
+            frame_type=frame_type,
+            capacity= RESET_STREAM_CAPACITY,
+            handler=self._on_reset_stream_delivery,
+        )
+        buf.push_uint_var(stream.stream_id)
+        buf.push_uint_var(error_code)
+
+        length = len(size_uint_var(stream.stream_id))
+        final_size = size_uint_var(stream.stream_id) + length
+        buf.push_uint_var(final_size)
+
+        # log frame
+        if self._quic_logger is not None:
+            builder.quic_logger_frames.append(
+                self._quic_logger.encode_reset_stream_frame(
+                    error_code=error_code,
+                    final_size=final_size,
+                    stream_id=stream.stream_id,
                 )
             )
