@@ -1,7 +1,7 @@
 from typing import Optional
 
 from . import events
-from .packet import QuicStreamFrame
+from .packet import QuicResetStreamFrame, QuicStreamFrame
 from .packet_builder import QuicDeliveryState
 from .rangeset import RangeSet
 
@@ -33,8 +33,14 @@ class QuicStream:
         self._send_highest = 0
         self._send_pending = RangeSet()
         self._send_pending_eof = False
+        self._send_reset_error_code: Optional[int] = None
+        self._send_reset_pending = False
 
         self.__stream_id = stream_id
+
+    @property
+    def reset_pending(self) -> bool:
+        return self._send_reset_pending
 
     @property
     def stream_id(self) -> Optional[int]:
@@ -171,6 +177,12 @@ class QuicStream:
 
         return frame
 
+    def get_reset_frame(self) -> QuicResetStreamFrame:
+        self._send_reset_pending = False
+        return QuicResetStreamFrame(
+            error_code=self._send_reset_error_code, final_size=self._send_highest
+        )
+
     def on_data_delivery(
         self, delivery: QuicDeliveryState, start: int, stop: int
     ) -> None:
@@ -193,6 +205,21 @@ class QuicStream:
             if stop == self._send_buffer_fin:
                 self.send_buffer_empty = False
                 self._send_pending_eof = True
+
+    def on_reset_delivery(self, delivery: QuicDeliveryState) -> None:
+        """
+        Callback when a reset is ACK'd.
+        """
+        if delivery != QuicDeliveryState.ACKED:
+            self._send_reset_pending = True
+
+    def reset(self, error_code: int) -> None:
+        """
+        Abruptly terminate the sending part of the QUIC stream.
+        """
+        assert self._send_reset_error_code is None, "cannot call reset() more than once"
+        self._send_reset_error_code = error_code
+        self._send_reset_pending = True
 
     def write(self, data: bytes, end_stream: bool = False) -> None:
         """

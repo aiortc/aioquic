@@ -1749,6 +1749,16 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(type(event), events.PingAcknowledged)
             self.assertEqual(event.uid, 12345)
 
+    def test_send_reset_stream(self):
+        with client_and_server() as (client, server):
+            # client creates bidirectional stream
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(roundtrip(client, server), (1, 1))
+
+            # client resets stream
+            client.reset_stream(0, QuicErrorCode.NO_ERROR)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+
     def test_send_stream_data_over_max_streams_bidi(self):
         with client_and_server() as (client, server):
             # create streams
@@ -1821,11 +1831,23 @@ class QuicConnectionTest(TestCase):
             client.send_stream_data(1, b"hello")
             self.assertEqual(roundtrip(client, server), (1, 1))
 
-            # client create unidirectional stream
+            # client creates unidirectional stream
             client.send_stream_data(2, b"hello")
             self.assertEqual(roundtrip(client, server), (1, 1))
 
-            # client tries to send data on server-initial unidirectional stream
+            # client tries to reset unknown stream
+            with self.assertRaises(ValueError) as cm:
+                client.reset_stream(4, QuicErrorCode.NO_ERROR)
+            self.assertEqual(str(cm.exception), "Cannot reset an unknown stream")
+
+            # client tries to reset server-initiated unidirectional stream
+            with self.assertRaises(ValueError) as cm:
+                client.reset_stream(3, QuicErrorCode.NO_ERROR)
+            self.assertEqual(
+                str(cm.exception), "Cannot reset a peer-initiated unidirectional stream"
+            )
+
+            # client tries to send data on server-initiated unidirectional stream
             with self.assertRaises(ValueError) as cm:
                 client.send_stream_data(3, b"hello")
             self.assertEqual(

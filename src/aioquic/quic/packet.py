@@ -431,6 +431,12 @@ PROBING_FRAME_TYPES = frozenset(
 
 
 @dataclass
+class QuicResetStreamFrame:
+    error_code: int
+    final_size: int
+
+
+@dataclass
 class QuicStreamFrame:
     data: bytes = b""
     fin: bool = False

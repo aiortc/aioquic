@@ -82,6 +82,7 @@ NEW_CONNECTION_ID_FRAME_CAPACITY = 1 + 8 + 8 + 1 + 20 + 16
 PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
 PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
 PING_FRAME_CAPACITY = 1
+RESET_STREAM_CAPACITY = 1 + 8 + 8 + 8
 RETIRE_CONNECTION_ID_CAPACITY = 1 + 8
 STREAMS_BLOCKED_CAPACITY = 1 + 8
 TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 8 + 8 + 8  # + reason length
@@ -945,6 +946,23 @@ class QuicConnection:
         """
         assert self._handshake_complete, "cannot change key before handshake completes"
         self._cryptos[tls.Epoch.ONE_RTT].update_key()
+
+    def reset_stream(self, stream_id: int, error_code: int) -> None:
+        """
+        Abruptly terminate the sending part of a stream.
+
+        :param stream_id: The stream's ID.
+        :param error_code: An error code indicating why the stream is being reset.
+        """
+        if stream_id not in self._streams:
+            raise ValueError("Cannot reset an unknown stream")
+        if stream_is_client_initiated(
+            stream_id
+        ) != self._is_client and stream_is_unidirectional(stream_id):
+            raise ValueError("Cannot reset a peer-initiated unidirectional stream")
+
+        stream = self._streams[stream_id]
+        stream.reset(error_code)
 
     def send_ping(self, uid: int) -> None:
         """
@@ -2302,9 +2320,15 @@ class QuicConnection:
                 except QuicPacketBuilderStop:
                     break
 
-            # STREAM
+            # STREAM and RESET_STREAM
             for stream in self._streams.values():
-                if not stream.is_blocked and not stream.send_buffer_is_empty:
+                if stream.reset_pending:
+                    self._write_reset_stream_frame(
+                        builder=builder,
+                        frame_type=QuicFrameType.RESET_STREAM,
+                        stream=stream,
+                    )
+                elif not stream.is_blocked and not stream.send_buffer_is_empty:
                     self._remote_max_data_used += self._write_stream_frame(
                         builder=builder,
                         space=space,
@@ -2598,6 +2622,29 @@ class QuicConnection:
         # log frame
         if self._quic_logger is not None:
             builder.quic_logger_frames.append(self._quic_logger.encode_ping_frame())
+
+    def _write_reset_stream_frame(
+        self, builder: QuicPacketBuilder, frame_type: QuicFrameType, stream: QuicStream,
+    ) -> None:
+        buf = builder.start_frame(
+            frame_type=frame_type,
+            capacity=RESET_STREAM_CAPACITY,
+            handler=stream.on_reset_delivery,
+        )
+        reset = stream.get_reset_frame()
+        buf.push_uint_var(stream.stream_id)
+        buf.push_uint_var(reset.error_code)
+        buf.push_uint_var(reset.final_size)
+
+        # log frame
+        if self._quic_logger is not None:
+            builder.quic_logger_frames.append(
+                self._quic_logger.encode_reset_stream_frame(
+                    error_code=reset.error_code,
+                    final_size=reset.final_size,
+                    stream_id=stream.stream_id,
+                )
+            )
 
     def _write_retire_connection_id_frame(
         self, builder: QuicPacketBuilder, sequence_number: int
