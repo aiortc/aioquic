@@ -226,6 +226,7 @@ class QuicStream:
         Write some data bytes to the QUIC stream.
         """
         assert self._send_buffer_fin is None, "cannot call write() after FIN"
+        assert self._send_reset_error_code is None, "cannot call write() after reset()"
         size = len(data)
 
         if size:
