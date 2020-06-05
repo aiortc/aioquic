@@ -1,7 +1,7 @@
 from unittest import TestCase
 
 from aioquic.quic.events import StreamDataReceived
-from aioquic.quic.packet import QuicStreamFrame
+from aioquic.quic.packet import QuicErrorCode, QuicStreamFrame
 from aioquic.quic.packet_builder import QuicDeliveryState
 from aioquic.quic.stream import QuicStream
 
@@ -444,3 +444,20 @@ class QuicStreamTest(TestCase):
         frame = stream.get_frame(8)
         self.assertIsNone(frame)
         self.assertTrue(stream.send_buffer_is_empty)
+
+    def test_send_reset(self):
+        stream = QuicStream()
+
+        # reset is requested
+        stream.reset(QuicErrorCode.NO_ERROR)
+        self.assertTrue(stream.reset_pending)
+
+        # reset is sent
+        reset = stream.get_reset_frame()
+        self.assertEqual(reset.error_code, QuicErrorCode.NO_ERROR)
+        self.assertEqual(reset.final_size, 0)
+        self.assertFalse(stream.reset_pending)
+
+        # reset is lost
+        stream.on_reset_delivery(QuicDeliveryState.LOST)
+        self.assertTrue(stream.reset_pending)
