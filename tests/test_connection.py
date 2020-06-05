@@ -1835,16 +1835,19 @@ class QuicConnectionTest(TestCase):
             client.send_stream_data(2, b"hello")
             self.assertEqual(roundtrip(client, server), (1, 1))
 
-            # client tries to reset unknown stream
-            with self.assertRaises(ValueError) as cm:
-                client.reset_stream(4, QuicErrorCode.NO_ERROR)
-            self.assertEqual(str(cm.exception), "Cannot reset an unknown stream")
-
             # client tries to reset server-initiated unidirectional stream
             with self.assertRaises(ValueError) as cm:
                 client.reset_stream(3, QuicErrorCode.NO_ERROR)
             self.assertEqual(
-                str(cm.exception), "Cannot reset a peer-initiated unidirectional stream"
+                str(cm.exception),
+                "Cannot send data on peer-initiated unidirectional stream",
+            )
+
+            # client tries to reset unknown server-initiated bidirectional stream
+            with self.assertRaises(ValueError) as cm:
+                client.reset_stream(5, QuicErrorCode.NO_ERROR)
+            self.assertEqual(
+                str(cm.exception), "Cannot send data on unknown peer-initiated stream"
             )
 
             # client tries to send data on server-initiated unidirectional stream

@@ -193,7 +193,8 @@ class QuicConnection:
     The state machine is driven by three kinds of sources:
 
     - the API user requesting data to be send out (see :meth:`connect`,
-      :meth:`send_ping`, :meth:`send_datagram_data` and :meth:`send_stream_data`)
+      :meth:`reset_stream`, :meth:`send_ping`, :meth:`send_datagram_data`
+      and :meth:`send_stream_data`)
     - data being received from the network (see :meth:`receive_datagram`)
     - a timer firing (see :meth:`handle_timer`)
 
@@ -954,14 +955,7 @@ class QuicConnection:
         :param stream_id: The stream's ID.
         :param error_code: An error code indicating why the stream is being reset.
         """
-        if stream_id not in self._streams:
-            raise ValueError("Cannot reset an unknown stream")
-        if stream_is_client_initiated(
-            stream_id
-        ) != self._is_client and stream_is_unidirectional(stream_id):
-            raise ValueError("Cannot reset a peer-initiated unidirectional stream")
-
-        stream = self._streams[stream_id]
+        stream = self._get_or_create_stream_for_send(stream_id)
         stream.reset(error_code)
 
     def send_ping(self, uid: int) -> None:
@@ -990,19 +984,7 @@ class QuicConnection:
         :param data: The data to be sent.
         :param end_stream: If set to `True`, the FIN bit will be set.
         """
-        if stream_is_client_initiated(stream_id) != self._is_client:
-            if stream_id not in self._streams:
-                raise ValueError("Cannot send data on unknown peer-initiated stream")
-            if stream_is_unidirectional(stream_id):
-                raise ValueError(
-                    "Cannot send data on peer-initiated unidirectional stream"
-                )
-
-        try:
-            stream = self._streams[stream_id]
-        except KeyError:
-            self._create_stream(stream_id=stream_id)
-            stream = self._streams[stream_id]
+        stream = self._get_or_create_stream_for_send(stream_id)
         stream.write(data, end_stream=end_stream)
 
     # Private
@@ -1072,37 +1054,6 @@ class QuicConnection:
         self.tls.handle_message(b"", self._crypto_buffers)
         self._push_crypto_data()
 
-    def _create_stream(self, stream_id: int) -> QuicStream:
-        """
-        Create a QUIC stream in order to send data to the peer.
-        """
-        # determine limits
-        if stream_is_unidirectional(stream_id):
-            max_stream_data_local = 0
-            max_stream_data_remote = self._remote_max_stream_data_uni
-            max_streams = self._remote_max_streams_uni
-            streams_blocked = self._streams_blocked_uni
-        else:
-            max_stream_data_local = self._local_max_stream_data_bidi_local
-            max_stream_data_remote = self._remote_max_stream_data_bidi_remote
-            max_streams = self._remote_max_streams_bidi
-            streams_blocked = self._streams_blocked_bidi
-
-        # create stream
-        stream = self._streams[stream_id] = QuicStream(
-            stream_id=stream_id,
-            max_stream_data_local=max_stream_data_local,
-            max_stream_data_remote=max_stream_data_remote,
-        )
-
-        # mark stream as blocked if needed
-        if stream_id // 4 >= max_streams:
-            stream.is_blocked = True
-            streams_blocked.append(stream)
-            self._streams_blocked_pending = True
-
-        return stream
-
     def _discard_epoch(self, epoch: tls.Epoch) -> None:
         self._logger.debug("Discarding epoch %s", epoch)
         self._cryptos[epoch].teardown()
@@ -1159,6 +1110,48 @@ class QuicConnection:
                 max_stream_data_local=max_stream_data_local,
                 max_stream_data_remote=max_stream_data_remote,
             )
+        return stream
+
+    def _get_or_create_stream_for_send(self, stream_id):
+        """
+        Get or create a QUIC stream in order to send data to the peer.
+
+        This always occurs as a result of an API call.
+        """
+        if stream_is_client_initiated(stream_id) != self._is_client:
+            if stream_id not in self._streams:
+                raise ValueError("Cannot send data on unknown peer-initiated stream")
+            if stream_is_unidirectional(stream_id):
+                raise ValueError(
+                    "Cannot send data on peer-initiated unidirectional stream"
+                )
+
+        stream = self._streams.get(stream_id, None)
+        if stream is None:
+            # determine limits
+            if stream_is_unidirectional(stream_id):
+                max_stream_data_local = 0
+                max_stream_data_remote = self._remote_max_stream_data_uni
+                max_streams = self._remote_max_streams_uni
+                streams_blocked = self._streams_blocked_uni
+            else:
+                max_stream_data_local = self._local_max_stream_data_bidi_local
+                max_stream_data_remote = self._remote_max_stream_data_bidi_remote
+                max_streams = self._remote_max_streams_bidi
+                streams_blocked = self._streams_blocked_bidi
+
+            # create stream
+            stream = self._streams[stream_id] = QuicStream(
+                stream_id=stream_id,
+                max_stream_data_local=max_stream_data_local,
+                max_stream_data_remote=max_stream_data_remote,
+            )
+
+            # mark stream as blocked if needed
+            if stream_id // 4 >= max_streams:
+                stream.is_blocked = True
+                streams_blocked.append(stream)
+                self._streams_blocked_pending = True
         return stream
 
     def _handle_session_ticket(self, session_ticket: tls.SessionTicket) -> None:
