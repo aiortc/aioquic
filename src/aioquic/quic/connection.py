@@ -75,10 +75,9 @@ NetworkAddress = Any
 # frame sizes
 ACK_FRAME_CAPACITY = 64  # FIXME: this is arbitrary!
 APPLICATION_CLOSE_FRAME_CAPACITY = 1 + 8 + 8  # + reason length
+CONNECTION_LIMIT_FRAME_CAPACITY = 1 + 8
 HANDSHAKE_DONE_FRAME_CAPACITY = 1
-MAX_DATA_FRAME_CAPACITY = 1 + 8
 MAX_STREAM_DATA_FRAME_CAPACITY = 1 + 8 + 8
-MAX_STREAMS_FRAME_CAPACITY = 1 + 8
 NEW_CONNECTION_ID_FRAME_CAPACITY = 1 + 8 + 8 + 1 + 20 + 16
 PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
 PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
@@ -265,9 +264,11 @@ class QuicConnection:
         self._local_ack_delay_exponent = 3
         self._local_active_connection_id_limit = 8
         self._local_initial_source_connection_id = self._host_cids[0].cid
-        self._local_max_data = configuration.max_data
-        self._local_max_data_sent = configuration.max_data
-        self._local_max_data_used = 0
+        self._local_max_data = Limit(
+            frame_type=QuicFrameType.MAX_DATA,
+            name="max_data",
+            value=configuration.max_data,
+        )
         self._local_max_stream_data_bidi_local = configuration.max_stream_data
         self._local_max_stream_data_bidi_remote = configuration.max_stream_data
         self._local_max_stream_data_uni = configuration.max_stream_data
@@ -1489,7 +1490,9 @@ class QuicConnection:
         # log frame
         if self._quic_logger is not None:
             context.quic_logger_frames.append(
-                self._quic_logger.encode_max_data_frame(maximum=max_data)
+                self._quic_logger.encode_connection_limit_frame(
+                    frame_type=frame_type, maximum=max_data
+                )
             )
 
         if max_data > self._remote_max_data:
@@ -1540,7 +1543,7 @@ class QuicConnection:
         # log frame
         if self._quic_logger is not None:
             context.quic_logger_frames.append(
-                self._quic_logger.encode_max_streams_frame(
+                self._quic_logger.encode_connection_limit_frame(
                     frame_type=frame_type, maximum=max_streams
                 )
             )
@@ -1563,7 +1566,7 @@ class QuicConnection:
         # log frame
         if self._quic_logger is not None:
             context.quic_logger_frames.append(
-                self._quic_logger.encode_max_streams_frame(
+                self._quic_logger.encode_connection_limit_frame(
                     frame_type=frame_type, maximum=max_streams
                 )
             )
@@ -1829,7 +1832,7 @@ class QuicConnection:
                 reason_phrase="Over stream data limit",
             )
         newly_received = max(0, offset + length - stream._recv_highest)
-        if self._local_max_data_used + newly_received > self._local_max_data:
+        if self._local_max_data.used + newly_received > self._local_max_data.value:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.FLOW_CONTROL_ERROR,
                 frame_type=frame_type,
@@ -1839,7 +1842,7 @@ class QuicConnection:
         event = stream.add_frame(frame)
         if event is not None:
             self._events.append(event)
-        self._local_max_data_used += newly_received
+        self._local_max_data.used += newly_received
 
     def _handle_stream_data_blocked_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -1889,19 +1892,21 @@ class QuicConnection:
         if delivery == QuicDeliveryState.ACKED:
             space.ack_queue.subtract(0, highest_acked + 1)
 
+    def _on_connection_limit_delivery(
+        self, delivery: QuicDeliveryState, limit: Limit
+    ) -> None:
+        """
+        Callback when a MAX_DATA or MAX_STREAMS frame is acknowledged or lost.
+        """
+        if delivery != QuicDeliveryState.ACKED:
+            limit.sent = 0
+
     def _on_handshake_done_delivery(self, delivery: QuicDeliveryState) -> None:
         """
         Callback when a HANDSHAKE_DONE frame is acknowledged or lost.
         """
         if delivery != QuicDeliveryState.ACKED:
             self._handshake_done_pending = True
-
-    def _on_max_data_delivery(self, delivery: QuicDeliveryState) -> None:
-        """
-        Callback when a MAX_DATA frame is acknowledged or lost.
-        """
-        if delivery != QuicDeliveryState.ACKED:
-            self._local_max_data_sent = 0
 
     def _on_max_stream_data_delivery(
         self, delivery: QuicDeliveryState, stream: QuicStream
@@ -1911,15 +1916,6 @@ class QuicConnection:
         """
         if delivery != QuicDeliveryState.ACKED:
             stream.max_stream_data_local_sent = 0
-
-    def _on_max_streams_delivery(
-        self, delivery: QuicDeliveryState, max_streams: Limit
-    ) -> None:
-        """
-        Callback when a MAX_STREAMS frame is acknowledged or lost.
-        """
-        if delivery != QuicDeliveryState.ACKED:
-            max_streams.sent = 0
 
     def _on_new_connection_id_delivery(
         self, delivery: QuicDeliveryState, connection_id: QuicConnectionId
@@ -2128,7 +2124,7 @@ class QuicConnection:
             ack_delay_exponent=self._local_ack_delay_exponent,
             active_connection_id_limit=self._local_active_connection_id_limit,
             max_idle_timeout=int(self._configuration.idle_timeout * 1000),
-            initial_max_data=self._local_max_data,
+            initial_max_data=self._local_max_data.value,
             initial_max_stream_data_bidi_local=self._local_max_stream_data_bidi_local,
             initial_max_stream_data_bidi_remote=self._local_max_stream_data_bidi_remote,
             initial_max_stream_data_uni=self._local_max_stream_data_uni,
@@ -2486,46 +2482,29 @@ class QuicConnection:
         """
         Raise MAX_DATA or MAX_STREAMS if needed.
         """
-        if self._local_max_data_used * 2 > self._local_max_data:
-            self._local_max_data *= 2
-            self._logger.debug("Local max_data raised to %d", self._local_max_data)
-        if self._local_max_data_sent != self._local_max_data:
-            buf = builder.start_frame(
-                QuicFrameType.MAX_DATA,
-                capacity=MAX_DATA_FRAME_CAPACITY,
-                handler=self._on_max_data_delivery,
-            )
-            buf.push_uint_var(self._local_max_data)
-            self._local_max_data_sent = self._local_max_data
-
-            # log frame
-            if self._quic_logger is not None:
-                builder.quic_logger_frames.append(
-                    self._quic_logger.encode_max_data_frame(self._local_max_data)
-                )
-
-        for max_streams in (self._local_max_streams_bidi, self._local_max_streams_uni):
-            if max_streams.used * 2 > max_streams.value:
-                max_streams.value *= 2
-                self._logger.debug(
-                    "Local %s raised to %d", max_streams.name, max_streams.value
-                )
-            if max_streams.value != max_streams.sent:
+        for limit in (
+            self._local_max_data,
+            self._local_max_streams_bidi,
+            self._local_max_streams_uni,
+        ):
+            if limit.used * 2 > limit.value:
+                limit.value *= 2
+                self._logger.debug("Local %s raised to %d", limit.name, limit.value)
+            if limit.value != limit.sent:
                 buf = builder.start_frame(
-                    max_streams.frame_type,
-                    capacity=MAX_STREAMS_FRAME_CAPACITY,
-                    handler=self._on_max_streams_delivery,
-                    handler_args=(max_streams,),
+                    limit.frame_type,
+                    capacity=CONNECTION_LIMIT_FRAME_CAPACITY,
+                    handler=self._on_connection_limit_delivery,
+                    handler_args=(limit,),
                 )
-                buf.push_uint_var(max_streams.value)
-                max_streams.sent = max_streams.value
+                buf.push_uint_var(limit.value)
+                limit.sent = limit.value
 
                 # log frame
                 if self._quic_logger is not None:
                     builder.quic_logger_frames.append(
-                        self._quic_logger.encode_max_streams_frame(
-                            frame_type=max_streams.frame_type,
-                            maximum=max_streams.value,
+                        self._quic_logger.encode_connection_limit_frame(
+                            frame_type=limit.frame_type, maximum=limit.value,
                         )
                     )
 
