@@ -1112,7 +1112,7 @@ class QuicConnection:
             )
         return stream
 
-    def _get_or_create_stream_for_send(self, stream_id):
+    def _get_or_create_stream_for_send(self, stream_id: int) -> QuicStream:
         """
         Get or create a QUIC stream in order to send data to the peer.
 
