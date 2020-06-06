@@ -10,6 +10,7 @@ from .packet import (
     PACKET_TYPE_ONE_RTT,
     PACKET_TYPE_RETRY,
     PACKET_TYPE_ZERO_RTT,
+    QuicFrameType,
     QuicStreamFrame,
     QuicTransportParameters,
 )
@@ -93,11 +94,13 @@ class QuicLoggerTrace:
             "stream_id": str(stream_id),
         }
 
-    def encode_max_streams_frame(self, is_unidirectional: bool, maximum: int) -> Dict:
+    def encode_max_streams_frame(self, frame_type: int, maximum: int) -> Dict:
         return {
             "frame_type": "max_streams",
             "maximum": str(maximum),
-            "stream_type": "unidirectional" if is_unidirectional else "bidirectional",
+            "stream_type": "unidirectional"
+            if frame_type == QuicFrameType.MAX_STREAMS_UNI
+            else "bidirectional",
         }
 
     def encode_new_connection_id_frame(
