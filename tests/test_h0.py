@@ -2,6 +2,7 @@ from unittest import TestCase
 
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.events import DataReceived, HeadersReceived
+from aioquic.quic.events import StreamDataReceived
 
 from .test_connection import client_and_server, transfer
 
@@ -139,6 +140,47 @@ class H0ConnectionTest(TestCase):
 
             self.assertTrue(isinstance(events[0], HeadersReceived))
             self.assertEqual(events[0].headers, [])
+            self.assertEqual(events[0].stream_id, stream_id)
+            self.assertEqual(events[0].stream_ended, False)
+
+            self.assertTrue(isinstance(events[1], DataReceived))
+            self.assertEqual(events[1].data, b"")
+            self.assertEqual(events[1].stream_id, stream_id)
+            self.assertEqual(events[1].stream_ended, True)
+
+    def test_fragmented_request(self):
+        with h0_client_and_server() as (quic_client, quic_server):
+            h0_server = H0Connection(quic_server)
+            stream_id = 0
+
+            # receive first fragment of the request
+            events = h0_server.handle_event(
+                StreamDataReceived(
+                    data=b"GET /012", end_stream=False, stream_id=stream_id
+                )
+            )
+            self.assertEqual(len(events), 0)
+
+            # receive second fragment of the request
+            events = h0_server.handle_event(
+                StreamDataReceived(
+                    data=b"34567890", end_stream=False, stream_id=stream_id
+                )
+            )
+
+            # receive final fragment of the request
+            events = h0_server.handle_event(
+                StreamDataReceived(
+                    data=b"123456\r\n", end_stream=True, stream_id=stream_id
+                )
+            )
+            self.assertEqual(len(events), 2)
+
+            self.assertTrue(isinstance(events[0], HeadersReceived))
+            self.assertEqual(
+                events[0].headers,
+                [(b":method", b"GET"), (b":path", b"/01234567890123456")],
+            )
             self.assertEqual(events[0].stream_id, stream_id)
             self.assertEqual(events[0].stream_ended, False)
 
