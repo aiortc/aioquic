@@ -1149,7 +1149,7 @@ class QuicConnectionTest(TestCase):
     def test_handle_max_stream_data_frame(self):
         with client_and_server() as (client, server):
             # client creates bidirectional stream 0
-            stream = client._create_stream(stream_id=0)
+            stream = client._get_or_create_stream_for_send(stream_id=0)
             self.assertEqual(stream.max_stream_data_remote, 1048576)
 
             # client receives MAX_STREAM_DATA raising limit
@@ -1689,7 +1689,7 @@ class QuicConnectionTest(TestCase):
     def test_send_max_stream_data_retransmit(self):
         with client_and_server() as (client, server):
             # client creates bidirectional stream 0
-            stream = client._create_stream(stream_id=0)
+            stream = client._get_or_create_stream_for_send(stream_id=0)
             client.send_stream_data(0, b"hello")
             self.assertEqual(stream.max_stream_data_local, 1048576)
             self.assertEqual(stream.max_stream_data_local_sent, 1048576)
