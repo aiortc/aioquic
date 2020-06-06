@@ -1438,7 +1438,7 @@ class QuicConnectionTest(TestCase):
     def test_handle_stream_frame_over_max_data(self):
         with client_and_server() as (client, server):
             # artificially raise received data counter
-            client._local_max_data_used = client._local_max_data
+            client._local_max_data.used = client._local_max_data.value
 
             # client receives STREAM frame
             frame_type = QuicFrameType.STREAM_BASE | 4
@@ -1672,18 +1672,32 @@ class QuicConnectionTest(TestCase):
     def test_send_max_data_retransmit(self):
         with client_and_server() as (client, server):
             # artificially raise received data counter
-            client._local_max_data_used = client._local_max_data
+            client._local_max_data.used = client._local_max_data.value
+            self.assertEqual(client._local_max_data.sent, 1048576)
+            self.assertEqual(client._local_max_data.used, 1048576)
+            self.assertEqual(client._local_max_data.value, 1048576)
             self.assertEqual(server._remote_max_data, 1048576)
 
             # MAX_DATA is sent and lost
             self.assertEqual(drop(client), 1)
-            self.assertEqual(client._local_max_data_sent, 2097152)
+            self.assertEqual(client._local_max_data.sent, 2097152)
+            self.assertEqual(client._local_max_data.used, 1048576)
+            self.assertEqual(client._local_max_data.value, 2097152)
             self.assertEqual(server._remote_max_data, 1048576)
 
+            # MAX_DATA loss is detected
+            client._on_connection_limit_delivery(
+                QuicDeliveryState.LOST, client._local_max_data
+            )
+            self.assertEqual(client._local_max_data.sent, 0)
+            self.assertEqual(client._local_max_data.used, 1048576)
+            self.assertEqual(client._local_max_data.value, 2097152)
+
             # MAX_DATA is retransmitted and acked
-            client._on_max_data_delivery(QuicDeliveryState.LOST)
-            self.assertEqual(client._local_max_data_sent, 0)
             self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertEqual(client._local_max_data.sent, 2097152)
+            self.assertEqual(client._local_max_data.used, 1048576)
+            self.assertEqual(client._local_max_data.value, 2097152)
             self.assertEqual(server._remote_max_data, 2097152)
 
     def test_send_max_stream_data_retransmit(self):
@@ -1736,11 +1750,16 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(server._local_max_streams_bidi.used, 65)
             self.assertEqual(server._local_max_streams_bidi.value, 256)
 
-            # MAX_DATA is retransmitted and acked
-            server._on_max_streams_delivery(
+            # MAX_STREAMS loss is detected
+            server._on_connection_limit_delivery(
                 QuicDeliveryState.LOST, server._local_max_streams_bidi
             )
+            self.assertEqual(client._remote_max_streams_bidi, 128)
             self.assertEqual(server._local_max_streams_bidi.sent, 0)
+            self.assertEqual(server._local_max_streams_bidi.used, 65)
+            self.assertEqual(server._local_max_streams_bidi.value, 256)
+
+            # MAX_STREAMS is retransmitted and acked
             self.assertEqual(roundtrip(server, client), (1, 1))
             self.assertEqual(client._remote_max_streams_bidi, 256)
             self.assertEqual(server._local_max_streams_bidi.sent, 256)

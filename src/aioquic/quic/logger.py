@@ -68,6 +68,18 @@ class QuicLoggerTrace:
 
         return attrs
 
+    def encode_connection_limit_frame(self, frame_type: int, maximum: int) -> Dict:
+        if frame_type == QuicFrameType.MAX_DATA:
+            return {"frame_type": "max_data", "maximum": str(maximum)}
+        else:
+            return {
+                "frame_type": "max_streams",
+                "maximum": str(maximum),
+                "stream_type": "unidirectional"
+                if frame_type == QuicFrameType.MAX_STREAMS_UNI
+                else "bidirectional",
+            }
+
     def encode_crypto_frame(self, frame: QuicStreamFrame) -> Dict:
         return {
             "frame_type": "crypto",
@@ -84,23 +96,11 @@ class QuicLoggerTrace:
     def encode_handshake_done_frame(self) -> Dict:
         return {"frame_type": "handshake_done"}
 
-    def encode_max_data_frame(self, maximum: int) -> Dict:
-        return {"frame_type": "max_data", "maximum": str(maximum)}
-
     def encode_max_stream_data_frame(self, maximum: int, stream_id: int) -> Dict:
         return {
             "frame_type": "max_stream_data",
             "maximum": str(maximum),
             "stream_id": str(stream_id),
-        }
-
-    def encode_max_streams_frame(self, frame_type: int, maximum: int) -> Dict:
-        return {
-            "frame_type": "max_streams",
-            "maximum": str(maximum),
-            "stream_type": "unidirectional"
-            if frame_type == QuicFrameType.MAX_STREAMS_UNI
-            else "bidirectional",
         }
 
     def encode_new_connection_id_frame(
