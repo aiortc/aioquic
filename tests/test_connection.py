@@ -1719,6 +1719,34 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(stream.max_stream_data_local, 2097152)
             self.assertEqual(stream.max_stream_data_local_sent, 2097152)
 
+    def test_send_max_streams_retransmit(self):
+        with client_and_server() as (client, server):
+            # client opens 65 streams
+            client.send_stream_data(4 * 64, b"Z")
+            self.assertEqual(transfer(client, server), 1)
+            self.assertEqual(client._remote_max_streams_bidi, 128)
+            self.assertEqual(server._local_max_streams_bidi.sent, 128)
+            self.assertEqual(server._local_max_streams_bidi.used, 65)
+            self.assertEqual(server._local_max_streams_bidi.value, 128)
+
+            # MAX_STREAMS is sent and lost
+            self.assertEqual(drop(server), 1)
+            self.assertEqual(client._remote_max_streams_bidi, 128)
+            self.assertEqual(server._local_max_streams_bidi.sent, 256)
+            self.assertEqual(server._local_max_streams_bidi.used, 65)
+            self.assertEqual(server._local_max_streams_bidi.value, 256)
+
+            # MAX_DATA is retransmitted and acked
+            server._on_max_streams_delivery(
+                QuicDeliveryState.LOST, server._local_max_streams_bidi
+            )
+            self.assertEqual(server._local_max_streams_bidi.sent, 0)
+            self.assertEqual(roundtrip(server, client), (1, 1))
+            self.assertEqual(client._remote_max_streams_bidi, 256)
+            self.assertEqual(server._local_max_streams_bidi.sent, 256)
+            self.assertEqual(server._local_max_streams_bidi.used, 65)
+            self.assertEqual(server._local_max_streams_bidi.value, 256)
+
     def test_send_ping(self):
         with client_and_server() as (client, server):
             consume_events(client)
