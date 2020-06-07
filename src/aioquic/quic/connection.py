@@ -1072,10 +1072,11 @@ class QuicConnection:
         self._push_crypto_data()
 
     def _discard_epoch(self, epoch: tls.Epoch) -> None:
-        self._logger.debug("Discarding epoch %s", epoch)
-        self._cryptos[epoch].teardown()
-        self._loss.discard_space(self._spaces[epoch])
-        self._spaces[epoch].discarded = True
+        if not self._spaces[epoch].discarded:
+            self._logger.debug("Discarding epoch %s", epoch)
+            self._cryptos[epoch].teardown()
+            self._loss.discard_space(self._spaces[epoch])
+            self._spaces[epoch].discarded = True
 
     def _find_network_path(self, addr: NetworkAddress) -> QuicNetworkPath:
         # check existing network paths
