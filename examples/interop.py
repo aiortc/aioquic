@@ -358,7 +358,23 @@ async def test_rebinding(server: Server, configuration: QuicConfiguration):
         # cause more traffic
         await protocol.ping()
 
-        server.result |= Result.B
+        # check log
+        path_challenges = 0
+        for stamp, category, event, data in configuration.quic_logger.to_dict()[
+            "traces"
+        ][0]["events"]:
+            if (
+                category == "transport"
+                and event == "packet_received"
+                and data["packet_type"] == "1RTT"
+            ):
+                for frame in data["frames"]:
+                    if frame["frame_type"] == "path_challenge":
+                        path_challenges += 1
+        if path_challenges:
+            server.result |= Result.B
+        else:
+            protocol._quic._logger.warning("No PATH_CHALLENGE received")
 
 
 async def test_spin_bit(server: Server, configuration: QuicConfiguration):
