@@ -111,7 +111,7 @@ SERVERS = [
     Server("quic-go", "quic.seemann.io", port=443, retry_port=443),
     Server("quiche", "quic.tech", port=8443, retry_port=8444),
     Server("quicly", "quic.examp1e.net"),
-    Server("quinn", "ralith.com"),
+    Server("quinn", "h3.stammw.eu", port=443),
 ]
 
 
