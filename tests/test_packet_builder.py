@@ -179,6 +179,38 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 1)
 
+    def test_long_header_ping_only(self):
+        """
+        The payload is too short to provide enough data for header protection,
+        so padding needs to be applied.
+        """
+        builder = create_builder()
+        crypto = create_crypto()
+
+        # HANDSHAKE, with only a PING frame
+        builder.start_packet(PACKET_TYPE_HANDSHAKE, crypto)
+        builder.start_frame(QuicFrameType.PING)
+        self.assertFalse(builder.packet_is_empty)
+
+        # check datagrams
+        datagrams, packets = builder.flush()
+        self.assertEqual(len(datagrams), 1)
+        self.assertEqual(len(datagrams[0]), 45)
+        self.assertEqual(
+            packets,
+            [
+                QuicSentPacket(
+                    epoch=Epoch.HANDSHAKE,
+                    in_flight=True,
+                    is_ack_eliciting=True,
+                    is_crypto_packet=False,
+                    packet_number=0,
+                    packet_type=PACKET_TYPE_HANDSHAKE,
+                    sent_bytes=45,
+                )
+            ],
+        )
+
     def test_long_header_then_short_header(self):
         builder = create_builder()
         crypto = create_crypto()
@@ -567,3 +599,35 @@ class QuicPacketBuilderTest(TestCase):
 
         # check builder
         self.assertEqual(builder.packet_number, 2)
+
+    def test_short_header_ping_only(self):
+        """
+        The payload is too short to provide enough data for header protection,
+        so padding needs to be applied.
+        """
+        builder = create_builder()
+        crypto = create_crypto()
+
+        # HANDSHAKE, with only a PING frame
+        builder.start_packet(PACKET_TYPE_ONE_RTT, crypto)
+        builder.start_frame(QuicFrameType.PING)
+        self.assertFalse(builder.packet_is_empty)
+
+        # check datagrams
+        datagrams, packets = builder.flush()
+        self.assertEqual(len(datagrams), 1)
+        self.assertEqual(len(datagrams[0]), 29)
+        self.assertEqual(
+            packets,
+            [
+                QuicSentPacket(
+                    epoch=Epoch.ONE_RTT,
+                    in_flight=True,
+                    is_ack_eliciting=True,
+                    is_crypto_packet=False,
+                    packet_number=0,
+                    packet_type=PACKET_TYPE_ONE_RTT,
+                    sent_bytes=29,
+                )
+            ],
+        )
