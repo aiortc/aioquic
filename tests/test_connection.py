@@ -462,7 +462,7 @@ class QuicConnectionTest(TestCase):
         now = client.get_timer()  # ~0.625
         client.handle_timer(now=now)
         items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [44])
+        self.assertEqual(datagram_sizes(items), [45])
         self.assertAlmostEqual(client.get_timer(), 1.875)
 
         # server receives PING, discards INITIAL and sends ACK

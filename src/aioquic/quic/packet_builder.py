@@ -261,22 +261,35 @@ class QuicPacketBuilder:
         buf = self._buffer
         packet_size = buf.tell() - self._packet_start
         if packet_size > self._header_size:
-            # pad initial datagram
+            # padding to ensure sufficient sample size
+            padding_size = (
+                PACKET_NUMBER_MAX_SIZE
+                - PACKET_NUMBER_SEND_SIZE
+                + self._header_size
+                - packet_size
+            )
+
+            # padding for initial datagram
             if (
                 self._is_client
                 and self._packet_type == PACKET_TYPE_INITIAL
                 and self._packet.is_crypto_packet
+                and self.remaining_flight_space
+                and self.remaining_flight_space > padding_size
             ):
-                if self.remaining_flight_space:
-                    buf.push_bytes(bytes(self.remaining_flight_space))
-                    packet_size = buf.tell() - self._packet_start
-                    self._packet.in_flight = True
+                padding_size = self.remaining_flight_space
 
-                    # log frame
-                    if self._quic_logger is not None:
-                        self._packet.quic_logger_frames.append(
-                            self._quic_logger.encode_padding_frame()
-                        )
+            # write padding
+            if padding_size > 0:
+                buf.push_bytes(bytes(padding_size))
+                packet_size += padding_size
+                self._packet.in_flight = True
+
+                # log frame
+                if self._quic_logger is not None:
+                    self._packet.quic_logger_frames.append(
+                        self._quic_logger.encode_padding_frame()
+                    )
 
             # write header
             if self._packet_long_header:
@@ -309,25 +322,6 @@ class QuicPacketBuilder:
                 )
                 buf.push_bytes(self._peer_cid)
                 buf.push_uint16(self._packet_number & 0xFFFF)
-
-                # check whether we need padding
-                padding_size = (
-                    PACKET_NUMBER_MAX_SIZE
-                    - PACKET_NUMBER_SEND_SIZE
-                    + self._header_size
-                    - packet_size
-                )
-                if padding_size > 0:
-                    buf.seek(self._packet_start + packet_size)
-                    buf.push_bytes(bytes(padding_size))
-                    packet_size += padding_size
-                    self._packet.in_flight = True
-
-                    # log frame
-                    if self._quic_logger is not None:
-                        self._packet.quic_logger_frames.append(
-                            self._quic_logger.encode_padding_frame()
-                        )
 
             # encrypt in place
             plain = buf.data_slice(self._packet_start, self._packet_start + packet_size)
