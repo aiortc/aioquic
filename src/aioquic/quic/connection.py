@@ -4,6 +4,7 @@ import os
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
+from functools import partial
 from typing import Any, Deque, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from .. import tls
@@ -1240,12 +1241,30 @@ class QuicConnection:
         self.tls.update_traffic_key_cb = self._update_traffic_key
 
         # packet spaces
-        self._cryptos = {
-            tls.Epoch.INITIAL: CryptoPair(),
-            tls.Epoch.ZERO_RTT: CryptoPair(),
-            tls.Epoch.HANDSHAKE: CryptoPair(),
-            tls.Epoch.ONE_RTT: CryptoPair(),
-        }
+        def create_crypto_pair(epoch: tls.Epoch) -> CryptoPair:
+            epoch_name = ["initial", "0rtt", "handshake", "1rtt"][epoch.value]
+            secret_names = [
+                "server_%s_secret" % epoch_name,
+                "client_%s_secret" % epoch_name,
+            ]
+            recv_secret_name = secret_names[not self._is_client]
+            send_secret_name = secret_names[self._is_client]
+            return CryptoPair(
+                recv_setup_cb=partial(self._log_key_updated, recv_secret_name),
+                recv_teardown_cb=partial(self._log_key_retired, recv_secret_name),
+                send_setup_cb=partial(self._log_key_updated, send_secret_name),
+                send_teardown_cb=partial(self._log_key_retired, send_secret_name),
+            )
+
+        self._cryptos = dict(
+            (epoch, create_crypto_pair(epoch))
+            for epoch in (
+                tls.Epoch.INITIAL,
+                tls.Epoch.ZERO_RTT,
+                tls.Epoch.HANDSHAKE,
+                tls.Epoch.ONE_RTT,
+            )
+        )
         self._crypto_buffers = {
             tls.Epoch.INITIAL: Buffer(capacity=CRYPTO_BUFFER_SIZE),
             tls.Epoch.HANDSHAKE: Buffer(capacity=CRYPTO_BUFFER_SIZE),
@@ -1882,6 +1901,28 @@ class QuicConnection:
                     is_unidirectional=frame_type == QuicFrameType.STREAMS_BLOCKED_UNI,
                     limit=limit,
                 )
+            )
+
+    def _log_key_retired(self, key_type: str, trigger: str) -> None:
+        """
+        Log a key retirement.
+        """
+        if self._quic_logger is not None:
+            self._quic_logger.log_event(
+                category="security",
+                event="key_retired",
+                data={"key_type": key_type, "trigger": trigger},
+            )
+
+    def _log_key_updated(self, key_type: str, trigger: str) -> None:
+        """
+        Log a key update.
+        """
+        if self._quic_logger is not None:
+            self._quic_logger.log_event(
+                category="security",
+                event="key_updated",
+                data={"key_type": key_type, "trigger": trigger},
             )
 
     def _on_ack_delivery(
