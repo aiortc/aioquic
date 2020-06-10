@@ -200,18 +200,9 @@ class QuicPacketRecovery:
         if self._quic_logger is not None:
             self._log_metrics_updated()
 
-    def get_earliest_loss_space(self) -> Optional[QuicPacketSpace]:
-        loss_space = None
-        for space in self.spaces:
-            if space.loss_time is not None and (
-                loss_space is None or space.loss_time < loss_space.loss_time
-            ):
-                loss_space = space
-        return loss_space
-
     def get_loss_detection_time(self) -> float:
         # loss timer
-        loss_space = self.get_earliest_loss_space()
+        loss_space = self.get_loss_space()
         if loss_space is not None:
             return loss_space.loss_time
 
@@ -227,6 +218,15 @@ class QuicPacketRecovery:
             return self._time_of_last_sent_ack_eliciting_packet + timeout
 
         return None
+
+    def get_loss_space(self) -> Optional[QuicPacketSpace]:
+        loss_space = None
+        for space in self.spaces:
+            if space.loss_time is not None and (
+                loss_space is None or space.loss_time < loss_space.loss_time
+            ):
+                loss_space = space
+        return loss_space
 
     def get_probe_timeout(self) -> float:
         return (
@@ -319,7 +319,7 @@ class QuicPacketRecovery:
         self._pto_count = 0
 
     def on_loss_detection_timeout(self, now: float) -> None:
-        loss_space = self.get_earliest_loss_space()
+        loss_space = self.get_loss_space()
         if loss_space is not None:
             self._detect_loss(loss_space, now=now)
         else:
