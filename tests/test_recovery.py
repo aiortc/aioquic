@@ -68,7 +68,7 @@ class QuicPacketRecoveryTest(TestCase):
         self.ONE_RTT_SPACE = QuicPacketSpace()
 
         self.recovery = QuicPacketRecovery(
-            is_client_without_1rtt=False, send_probe=send_probe
+            peer_completed_address_validation=True, send_probe=send_probe
         )
         self.recovery.spaces = [
             self.INITIAL_SPACE,

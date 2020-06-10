@@ -152,12 +152,12 @@ class QuicPacketRecovery:
 
     def __init__(
         self,
-        is_client_without_1rtt: bool,
+        peer_completed_address_validation: bool,
         send_probe: Callable[[], None],
         quic_logger: Optional[QuicLoggerTrace] = None,
     ) -> None:
-        self.is_client_without_1rtt = is_client_without_1rtt
         self.max_ack_delay = 0.025
+        self.peer_completed_address_validation = peer_completed_address_validation
         self.spaces: List[QuicPacketSpace] = []
 
         # callbacks
@@ -217,7 +217,7 @@ class QuicPacketRecovery:
 
         # packet timer
         if (
-            self.is_client_without_1rtt
+            not self.peer_completed_address_validation
             or sum(space.ack_eliciting_in_flight for space in self.spaces) > 0
         ):
             if not self._rtt_initialized:

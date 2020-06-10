@@ -332,7 +332,7 @@ class QuicConnection:
 
         # loss recovery
         self._loss = QuicPacketRecovery(
-            is_client_without_1rtt=self._is_client,
+            peer_completed_address_validation=not self._is_client,
             quic_logger=self._quic_logger,
             send_probe=self._send_probe,
         )
@@ -1412,7 +1412,7 @@ class QuicConnection:
                     self._handshake_confirmed = True
                     self._handshake_done_pending = True
 
-                self._loss.is_client_without_1rtt = False
+                self._loss.peer_completed_address_validation = True
                 self._replenish_connection_ids()
                 self._events.append(
                     events.HandshakeCompleted(
