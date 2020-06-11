@@ -1350,7 +1350,7 @@ class Context:
             assert input_buf.eof()
 
     def _build_session_ticket(
-        self, new_session_ticket: NewSessionTicket
+        self, new_session_ticket: NewSessionTicket, other_extensions: List[Extension]
     ) -> SessionTicket:
         resumption_master_secret = self.key_schedule.derive_secret(b"res master")
         resumption_secret = hkdf_expand_label(
@@ -1369,7 +1369,7 @@ class Context:
             not_valid_after=timestamp
             + datetime.timedelta(seconds=new_session_ticket.ticket_lifetime),
             not_valid_before=timestamp,
-            other_extensions=self.handshake_extensions,
+            other_extensions=other_extensions,
             resumption_secret=resumption_secret,
             server_name=self._server_name,
             ticket=new_session_ticket.ticket,
@@ -1635,7 +1635,9 @@ class Context:
 
         # notify application
         if self.new_session_ticket_cb is not None:
-            ticket = self._build_session_ticket(new_session_ticket)
+            ticket = self._build_session_ticket(
+                new_session_ticket, self.received_extensions
+            )
             self.new_session_ticket_cb(ticket)
 
     def _server_handle_hello(
@@ -1886,7 +1888,9 @@ class Context:
             push_new_session_ticket(onertt_buf, self._new_session_ticket)
 
             # notify application
-            ticket = self._build_session_ticket(self._new_session_ticket)
+            ticket = self._build_session_ticket(
+                self._new_session_ticket, self.handshake_extensions
+            )
             self.new_session_ticket_cb(ticket)
 
         self._set_state(State.SERVER_EXPECT_FINISHED)
