@@ -7,7 +7,7 @@ from .rangeset import RangeSet
 
 # loss detection
 K_PACKET_THRESHOLD = 3
-K_INITIAL_RTT = 0.5  # seconds
+K_INITIAL_RTT = 0.25  # seconds
 K_GRANULARITY = 0.001  # seconds
 K_TIME_THRESHOLD = 9 / 8
 K_MICRO_SECOND = 0.000001
