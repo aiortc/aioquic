@@ -292,7 +292,7 @@ class QuicConnection:
         self._peer_token = b""
         self._quic_logger: Optional[QuicLoggerTrace] = None
         self._remote_ack_delay_exponent = 3
-        self._remote_active_connection_id_limit = 0
+        self._remote_active_connection_id_limit = 2
         self._remote_max_idle_timeout = 0.0  # seconds
         self._remote_max_data = 0
         self._remote_max_data_used = 0
