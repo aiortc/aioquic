@@ -3,7 +3,7 @@ from typing import Callable, Optional, Tuple
 
 from .._crypto import AEAD, CryptoError, HeaderProtection
 from ..tls import CipherSuite, cipher_suite_hash, hkdf_expand_label, hkdf_extract
-from .packet import decode_packet_number, is_long_header
+from .packet import QuicProtocolVersion, decode_packet_number, is_long_header
 
 CIPHER_SUITES = {
     CipherSuite.AES_128_GCM_SHA256: (b"aes-128-ecb", b"aes-128-gcm"),
@@ -11,7 +11,8 @@ CIPHER_SUITES = {
     CipherSuite.CHACHA20_POLY1305_SHA256: (b"chacha20", b"chacha20-poly1305"),
 }
 INITIAL_CIPHER_SUITE = CipherSuite.AES_128_GCM_SHA256
-INITIAL_SALT = binascii.unhexlify("c3eef712c72ebb5a11a7d2432bb46365bef9f502")
+INITIAL_SALT_DRAFT_23 = binascii.unhexlify("c3eef712c72ebb5a11a7d2432bb46365bef9f502")
+INITIAL_SALT_DRAFT_29 = binascii.unhexlify("afbfec289993d24c9e9786f19c6111e04390a899")
 SAMPLE_SIZE = 16
 
 
@@ -188,8 +189,13 @@ class CryptoPair:
         else:
             recv_label, send_label = b"client in", b"server in"
 
+        if version < QuicProtocolVersion.DRAFT_29:
+            initial_salt = INITIAL_SALT_DRAFT_23
+        else:
+            initial_salt = INITIAL_SALT_DRAFT_29
+
         algorithm = cipher_suite_hash(INITIAL_CIPHER_SUITE)
-        initial_secret = hkdf_extract(algorithm, INITIAL_SALT, cid)
+        initial_secret = hkdf_extract(algorithm, initial_salt, cid)
         self.recv.setup(
             cipher_suite=INITIAL_CIPHER_SUITE,
             secret=hkdf_expand_label(
