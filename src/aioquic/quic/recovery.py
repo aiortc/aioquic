@@ -211,15 +211,14 @@ class QuicPacketRecovery:
             not self.peer_completed_address_validation
             or sum(space.ack_eliciting_in_flight for space in self.spaces) > 0
         ):
-            if not self._rtt_initialized:
-                timeout = 2 * K_INITIAL_RTT * (2 ** self._pto_count)
-            else:
-                timeout = self.get_probe_timeout() * (2 ** self._pto_count)
+            timeout = self.get_probe_timeout() * (2 ** self._pto_count)
             return self._time_of_last_sent_ack_eliciting_packet + timeout
 
         return None
 
     def get_probe_timeout(self) -> float:
+        if not self._rtt_initialized:
+            return 2 * K_INITIAL_RTT
         return (
             self._rtt_smoothed
             + max(4 * self._rtt_variance, K_GRANULARITY)
