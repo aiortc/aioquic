@@ -77,10 +77,10 @@ class PacketTest(TestCase):
         self.assertEqual(header.rest_length, 184)
         self.assertEqual(buf.tell(), 18)
 
-    def test_pull_retry(self):
+    def test_pull_retry_draft_28(self):
         original_destination_cid = binascii.unhexlify("fbbd219b7363b64b")
 
-        data = load("retry.bin")
+        data = load("retry_draft_28.bin")
         buf = Buffer(data=data)
         header = pull_quic_header(buf, host_cid_length=8)
         self.assertTrue(header.is_long_header)
@@ -107,7 +107,55 @@ class PacketTest(TestCase):
 
         # check integrity
         self.assertEqual(
-            get_retry_integrity_tag(buf.data_slice(0, 109), original_destination_cid,),
+            get_retry_integrity_tag(
+                buf.data_slice(0, 109), original_destination_cid, version=header.version
+            ),
+            header.integrity_tag,
+        )
+
+        # serialize
+        encoded = encode_quic_retry(
+            version=header.version,
+            source_cid=header.source_cid,
+            destination_cid=header.destination_cid,
+            original_destination_cid=original_destination_cid,
+            retry_token=header.token,
+        )
+        self.assertEqual(encoded, data)
+
+    def test_pull_retry_draft_29(self):
+        original_destination_cid = binascii.unhexlify("fbbd219b7363b64b")
+
+        data = load("retry_draft_29.bin")
+        buf = Buffer(data=data)
+        header = pull_quic_header(buf, host_cid_length=8)
+        self.assertTrue(header.is_long_header)
+        self.assertEqual(header.version, QuicProtocolVersion.DRAFT_29)
+        self.assertEqual(header.packet_type, PACKET_TYPE_RETRY)
+        self.assertEqual(header.destination_cid, binascii.unhexlify("e9d146d8d14cb28e"))
+        self.assertEqual(
+            header.source_cid,
+            binascii.unhexlify("0b0a205a648fcf82d85f128b67bbe08053e6"),
+        )
+        self.assertEqual(
+            header.token,
+            binascii.unhexlify(
+                "44397a35d698393c134b08a932737859f446d3aadd00ed81540c8d8de172"
+                "906d3e7a111b503f9729b8928e7528f9a86a4581f9ebb4cb3b53c283661e"
+                "8530741a99192ee56914c5626998ec0f"
+            ),
+        )
+        self.assertEqual(
+            header.integrity_tag, binascii.unhexlify("e65b170337b611270f10f4e633b6f51b")
+        )
+        self.assertEqual(header.rest_length, 0)
+        self.assertEqual(buf.tell(), 125)
+
+        # check integrity
+        self.assertEqual(
+            get_retry_integrity_tag(
+                buf.data_slice(0, 109), original_destination_cid, version=header.version
+            ),
             header.integrity_tag,
         )
 

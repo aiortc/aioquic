@@ -754,6 +754,7 @@ class QuicConnection:
                 integrity_tag = get_retry_integrity_tag(
                     buf.data_slice(start_off, buf.tell() - RETRY_INTEGRITY_TAG_SIZE),
                     self._peer_cid,
+                    version=header.version,
                 )
 
                 if (
