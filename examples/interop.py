@@ -13,8 +13,7 @@ from dataclasses import dataclass, field
 from enum import Flag
 from typing import Optional, cast
 
-import requests
-import urllib3
+import httpx
 from http3_client import HttpClient
 from quic_logger import QuicDirectoryLogger
 
@@ -407,7 +406,7 @@ async def test_throughput(server: Server, configuration: QuicConfiguration):
 
         # perform HTTP request over TCP
         start = time.time()
-        response = requests.get("https://" + server.host + path, verify=False)
+        response = httpx.get("https://" + server.host + path, verify=False)
         tcp_octets = len(response.content)
         tcp_elapsed = time.time() - start
         assert tcp_octets == size, "HTTP/TCP response size mismatch"
@@ -531,9 +530,6 @@ if __name__ == "__main__":
         servers = list(filter(lambda x: x.name == args.server, servers))
     if args.test:
         tests = list(filter(lambda x: x[0] == args.test, tests))
-
-    # disable requests SSL warnings
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
