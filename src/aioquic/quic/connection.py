@@ -332,6 +332,7 @@ class QuicConnection:
 
         # loss recovery
         self._loss = QuicPacketRecovery(
+            initial_rtt=configuration.initial_rtt,
             peer_completed_address_validation=not self._is_client,
             quic_logger=self._quic_logger,
             send_probe=self._send_probe,
