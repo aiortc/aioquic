@@ -88,6 +88,7 @@ class QuicConfiguration:
         default_factory=lambda: [
             QuicProtocolVersion.DRAFT_29,
             QuicProtocolVersion.DRAFT_28,
+            QuicProtocolVersion.DRAFT_27,
         ]
     )
     verify_mode: Optional[int] = None
