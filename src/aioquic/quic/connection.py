@@ -2181,7 +2181,10 @@ class QuicConnection:
             if self._configuration.quantum_readiness_test
             else None,
         )
-        if not self._is_client:
+        if not self._is_client and (
+            self._version >= QuicProtocolVersion.DRAFT_28
+            or self._retry_source_connection_id
+        ):
             quic_transport_parameters.original_destination_connection_id = (
                 self._original_destination_connection_id
             )
