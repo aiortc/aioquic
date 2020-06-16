@@ -117,7 +117,7 @@ Running the examples
 
 `aioquic` comes with a number of examples illustrating various QUIC usecases.
 
-You can browse these examples here: https://github.com/aiortc/aioquic/tree/master/examples
+You can browse these examples here: https://github.com/aiortc/aioquic/tree/main/examples
 
 License
 -------
