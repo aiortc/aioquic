@@ -95,7 +95,6 @@ SERVERS = [
     Server(
         "msquic",
         "quic.westus.cloudapp.azure.com",
-        port=443,
         structured_logging=True,
         throughput_file_suffix=".txt",
         verify_mode=ssl.CERT_NONE,
@@ -321,16 +320,19 @@ async def test_migration(server: Server, configuration: QuicConfiguration):
         # cause some traffic
         await protocol.ping()
 
-        # change connection ID and replace transport
-        protocol.change_connection_id()
+        # replace transport
         protocol._transport.close()
         await loop.create_datagram_endpoint(lambda: protocol, local_addr=("::", 0))
+
+        # change connection ID
+        protocol.change_connection_id()
 
         # cause more traffic
         await protocol.ping()
 
         # check log
         dcids = set()
+        path_challenges = 0
         for stamp, category, event, data in configuration.quic_logger.to_dict()[
             "traces"
         ][0]["events"]:
@@ -340,7 +342,15 @@ async def test_migration(server: Server, configuration: QuicConfiguration):
                 and data["packet_type"] == "1RTT"
             ):
                 dcids.add(data["header"]["dcid"])
-        if len(dcids) == 2:
+                for frame in data["frames"]:
+                    if frame["frame_type"] == "path_challenge":
+                        path_challenges += 1
+
+        if not path_challenges:
+            protocol._quic._logger.warning("No PATH_CHALLENGE received")
+        elif len(dcids) < 2:
+            protocol._quic._logger.warning("DCID did not change")
+        else:
             server.result |= Result.M
 
 
@@ -371,10 +381,10 @@ async def test_rebinding(server: Server, configuration: QuicConfiguration):
                 for frame in data["frames"]:
                     if frame["frame_type"] == "path_challenge":
                         path_challenges += 1
-        if path_challenges:
-            server.result |= Result.B
-        else:
+        if not path_challenges:
             protocol._quic._logger.warning("No PATH_CHALLENGE received")
+        else:
+            server.result |= Result.B
 
 
 async def test_spin_bit(server: Server, configuration: QuicConfiguration):
