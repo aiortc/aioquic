@@ -312,6 +312,7 @@ class QuicConnection:
         self._streams_blocked_bidi: List[QuicStream] = []
         self._streams_blocked_uni: List[QuicStream] = []
         self._version: Optional[int] = None
+        self._version_negotiation_count = 0
 
         if self._is_client:
             self._original_destination_connection_id = self._peer_cid
@@ -703,6 +704,7 @@ class QuicConnection:
                 self._is_client
                 and self._state == QuicConnectionState.FIRSTFLIGHT
                 and header.version == QuicProtocolVersion.NEGOTIATION
+                and not self._version_negotiation_count
             ):
                 # version negotiation
                 versions = []
@@ -734,6 +736,7 @@ class QuicConnection:
                     self._close_end()
                     return
                 self._version = QuicProtocolVersion(max(common))
+                self._version_negotiation_count += 1
                 self._logger.info("Retrying with %s", self._version)
                 self._connect(now=now)
                 return
