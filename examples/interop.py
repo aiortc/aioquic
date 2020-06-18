@@ -100,10 +100,15 @@ SERVERS = [
         verify_mode=ssl.CERT_NONE,
     ),
     Server(
-        "mvfst", "fb.mvfst.net", port=443, push_path="/push", structured_logging=True
+        "mvfst",
+        "fb.mvfst.net",
+        port=443,
+        push_path="/push",
+        retry_port=None,
+        structured_logging=True,
     ),
     Server("ngtcp2", "nghttp2.org", push_path="/?push=/100"),
-    Server("ngx_quic", "cloudflare-quic.com", port=443, retry_port=443),
+    Server("ngx_quic", "cloudflare-quic.com", port=443, retry_port=None),
     Server("pandora", "pandora.cm.in.tum.de", verify_mode=ssl.CERT_NONE),
     Server("picoquic", "test.privateoctopus.com", structured_logging=True),
     Server("quant", "quant.eggert.org", http3=False),
@@ -145,6 +150,10 @@ async def test_handshake_and_close(server: Server, configuration: QuicConfigurat
 
 
 async def test_stateless_retry(server: Server, configuration: QuicConfiguration):
+    # skip test if there is not retry port
+    if server.retry_port is None:
+        return
+
     async with connect(
         server.host, server.retry_port, configuration=configuration
     ) as protocol:
