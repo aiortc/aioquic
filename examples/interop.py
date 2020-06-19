@@ -78,7 +78,7 @@ class Server:
     session_resumption_port: Optional[int] = None
     structured_logging: bool = False
     throughput: bool = True
-    throughput_file_suffix: str = ""
+    throughput_path: Optional[str] = "/%(size)d"
     verify_mode: Optional[int] = None
 
 
@@ -88,15 +88,17 @@ SERVERS = [
         "aioquic", "quic.aiortc.org", port=443, push_path="/", structured_logging=True
     ),
     Server("ats", "quic.ogre.com"),
-    Server("f5", "f5quic.com", retry_port=4433, throughput=False),
-    Server("haskell", "mew.org", structured_logging=True),
+    Server("f5", "f5quic.com", retry_port=4433, throughput_path=None),
+    Server(
+        "haskell", "mew.org", structured_logging=True, throughput_path="/num/%(size)s"
+    ),
     Server("gquic", "quic.rocks", retry_port=None),
     Server("lsquic", "http3-test.litespeedtech.com", push_path="/200?push=/100"),
     Server(
         "msquic",
         "quic.westus.cloudapp.azure.com",
         structured_logging=True,
-        throughput_file_suffix=".txt",
+        throughput_path="/%(size)d.txt",
         verify_mode=ssl.CERT_NONE,
     ),
     Server(
@@ -416,12 +418,12 @@ async def test_spin_bit(server: Server, configuration: QuicConfiguration):
 
 async def test_throughput(server: Server, configuration: QuicConfiguration):
     failures = 0
-    if not server.throughput:
+    if server.throughput_path is None:
         return
 
     for size in [5000000, 10000000]:
-        print("Testing %d bytes download" % size)
-        path = "/%d%s" % (size, server.throughput_file_suffix)
+        path = server.throughput_path % {"size": size}
+        print("Testing %d bytes download: %s" % (size, path))
 
         # perform HTTP request over TCP
         start = time.time()
