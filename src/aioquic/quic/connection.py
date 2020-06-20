@@ -2330,11 +2330,11 @@ class QuicConnection:
                         )
 
                 # RETIRE_CONNECTION_ID
-                while self._retire_connection_ids:
-                    sequence_number = self._retire_connection_ids.pop(0)
+                for sequence_number in self._retire_connection_ids[:]:
                     self._write_retire_connection_id_frame(
                         builder=builder, sequence_number=sequence_number
                     )
+                    self._retire_connection_ids.pop(0)
 
                 # STREAMS_BLOCKED
                 if self._streams_blocked_pending:
