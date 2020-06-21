@@ -286,8 +286,9 @@ class QuicConnection:
         self._pacing_at: Optional[float] = None
         self._packet_number = 0
         self._parameters_received = False
-        self._peer_cid = os.urandom(configuration.connection_id_length)
-        self._peer_cid_seq: Optional[int] = None
+        self._peer_cid = QuicConnectionId(
+            cid=os.urandom(configuration.connection_id_length), sequence_number=None
+        )
         self._peer_cid_available: List[QuicConnectionId] = []
         self._peer_token = b""
         self._quic_logger: Optional[QuicLoggerTrace] = None
@@ -315,7 +316,7 @@ class QuicConnection:
         self._version_negotiation_count = 0
 
         if self._is_client:
-            self._original_destination_connection_id = self._peer_cid
+            self._original_destination_connection_id = self._peer_cid.cid
         else:
             self._original_destination_connection_id = (
                 original_destination_connection_id
@@ -407,18 +408,10 @@ class QuicConnection:
         """
         if self._peer_cid_available:
             # retire previous CID
-            self._logger.debug(
-                "Retiring CID %s (%d)", dump_cid(self._peer_cid), self._peer_cid_seq
-            )
-            self._retire_connection_ids.append(self._peer_cid_seq)
+            self._retire_peer_cid(self._peer_cid)
 
             # assign new CID
-            connection_id = self._peer_cid_available.pop(0)
-            self._peer_cid_seq = connection_id.sequence_number
-            self._peer_cid = connection_id.cid
-            self._logger.debug(
-                "Switching to CID %s (%d)", dump_cid(self._peer_cid), self._peer_cid_seq
-            )
+            self._consume_peer_cid()
 
     def close(
         self,
@@ -483,7 +476,7 @@ class QuicConnection:
             host_cid=self.host_cid,
             is_client=self._is_client,
             packet_number=self._packet_number,
-            peer_cid=self._peer_cid,
+            peer_cid=self._peer_cid.cid,
             peer_token=self._peer_token,
             quic_logger=self._quic_logger,
             spin_bit=self._spin_bit,
@@ -560,7 +553,7 @@ class QuicConnection:
                                 "scid": dump_cid(self.host_cid)
                                 if is_long_header(packet.packet_type)
                                 else "",
-                                "dcid": dump_cid(self._peer_cid),
+                                "dcid": dump_cid(self._peer_cid.cid),
                             },
                             "frames": packet.quic_logger_frames,
                         },
@@ -757,7 +750,7 @@ class QuicConnection:
                 # calculate stateless retry integrity tag
                 integrity_tag = get_retry_integrity_tag(
                     buf.data_slice(start_off, buf.tell() - RETRY_INTEGRITY_TAG_SIZE),
-                    self._peer_cid,
+                    self._peer_cid.cid,
                     version=header.version,
                 )
 
@@ -780,7 +773,7 @@ class QuicConnection:
                             },
                         )
 
-                    self._peer_cid = header.source_cid
+                    self._peer_cid.cid = header.source_cid
                     self._peer_token = header.token
                     self._retry_source_connection_id = header.source_cid
                     self._stateless_retry_count += 1
@@ -878,9 +871,9 @@ class QuicConnection:
                 self._discard_epoch(tls.Epoch.INITIAL)
 
             # update state
-            if self._peer_cid_seq is None:
-                self._peer_cid = header.source_cid
-                self._peer_cid_seq = 0
+            if self._peer_cid.sequence_number is None:
+                self._peer_cid.cid = header.source_cid
+                self._peer_cid.sequence_number = 0
 
             if self._state == QuicConnectionState.FIRSTFLIGHT:
                 self._set_state(QuicConnectionState.CONNECTED)
@@ -1040,6 +1033,19 @@ class QuicConnection:
                 reason_phrase="Stream is receive-only",
             )
 
+    def _consume_peer_cid(self) -> None:
+        """
+        Update the destination connection ID by taking the next
+        available connection ID provided by the peer.
+        """
+
+        self._peer_cid = self._peer_cid_available.pop(0)
+        self._logger.debug(
+            "Switching to CID %s (%d)",
+            dump_cid(self._peer_cid.cid),
+            self._peer_cid.sequence_number,
+        )
+
     def _close_begin(self, is_initiator: bool, now: float) -> None:
         """
         Begin the close procedure.
@@ -1072,7 +1078,7 @@ class QuicConnection:
         assert self._is_client
 
         self._close_at = now + self._configuration.idle_timeout
-        self._initialize(self._peer_cid)
+        self._initialize(self._peer_cid.cid)
 
         self.tls.handle_message(b"", self._crypto_buffers)
         self._push_crypto_data()
@@ -1624,13 +1630,45 @@ class QuicConnection:
                 )
             )
 
-        self._peer_cid_available.append(
+        # determine which CIDs to retire
+        change_cid = False
+        retire = list(
+            filter(
+                lambda c: c.sequence_number < retire_prior_to, self._peer_cid_available
+            )
+        )
+        if self._peer_cid.sequence_number < retire_prior_to:
+            change_cid = True
+            retire.insert(0, self._peer_cid)
+
+        # update available CIDs
+        self._peer_cid_available = list(
+            filter(
+                lambda c: c.sequence_number >= retire_prior_to, self._peer_cid_available
+            )
+        ) + [
             QuicConnectionId(
                 cid=connection_id,
                 sequence_number=sequence_number,
                 stateless_reset_token=stateless_reset_token,
             )
-        )
+        ]
+
+        # retire previous CIDs
+        for quic_connection_id in retire:
+            self._retire_peer_cid(quic_connection_id)
+
+        # assign new CID if we retired the active one
+        if change_cid:
+            self._consume_peer_cid()
+
+        # check number of active connection IDs, including the selected one
+        if 1 + len(self._peer_cid_available) > self._local_active_connection_id_limit:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.CONNECTION_ID_LIMIT_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Too many active connection IDs",
+            )
 
     def _handle_new_token_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -2060,6 +2098,17 @@ class QuicConnection:
                 )
             )
             self._host_cid_seq += 1
+
+    def _retire_peer_cid(self, connection_id: QuicConnectionId) -> None:
+        """
+        Retire a destination connection ID.
+        """
+        self._logger.debug(
+            "Retiring CID %s (%d)",
+            dump_cid(connection_id.cid),
+            connection_id.sequence_number,
+        )
+        self._retire_connection_ids.append(connection_id.sequence_number)
 
     def _push_crypto_data(self) -> None:
         for epoch, buf in self._crypto_buffers.items():
