@@ -874,13 +874,15 @@ class QuicConnectionTest(TestCase):
         client = create_standalone_client(self)
 
         builder = QuicPacketBuilder(
-            host_cid=client._peer_cid,
+            host_cid=client._peer_cid.cid,
             is_client=False,
             peer_cid=client.host_cid,
             version=client._version,
         )
         crypto = CryptoPair()
-        crypto.setup_initial(client._peer_cid, is_client=False, version=client._version)
+        crypto.setup_initial(
+            client._peer_cid.cid, is_client=False, version=client._version
+        )
         crypto.encrypt_packet_real = crypto.encrypt_packet
 
         def encrypt_packet(plain_header, plain_payload, packet_number):
@@ -912,13 +914,15 @@ class QuicConnectionTest(TestCase):
         client = create_standalone_client(self)
 
         builder = QuicPacketBuilder(
-            host_cid=client._peer_cid,
+            host_cid=client._peer_cid.cid,
             is_client=False,
             peer_cid=client.host_cid,
             version=0xFF000011,  # DRAFT_16
         )
         crypto = CryptoPair()
-        crypto.setup_initial(client._peer_cid, is_client=False, version=client._version)
+        crypto.setup_initial(
+            client._peer_cid.cid, is_client=False, version=client._version
+        )
         builder.start_packet(PACKET_TYPE_INITIAL, crypto)
         buf = builder.start_frame(QuicFrameType.PADDING)
         buf.push_bytes(bytes(builder.remaining_flight_space))
@@ -935,7 +939,7 @@ class QuicConnectionTest(TestCase):
                 version=client._version,
                 source_cid=binascii.unhexlify("85abb547bf28be97"),
                 destination_cid=client.host_cid,
-                original_destination_cid=client._peer_cid,
+                original_destination_cid=client._peer_cid.cid,
                 retry_token=bytes(16),
             ),
             SERVER_ADDR,
@@ -951,7 +955,7 @@ class QuicConnectionTest(TestCase):
                 version=client._version,
                 source_cid=binascii.unhexlify("85abb547bf28be97"),
                 destination_cid=binascii.unhexlify("c98343fe8f5f0ff4"),
-                original_destination_cid=client._peer_cid,
+                original_destination_cid=client._peer_cid.cid,
                 retry_token=bytes(16),
             ),
             SERVER_ADDR,
@@ -1225,6 +1229,51 @@ class QuicConnectionTest(TestCase):
                 Buffer(data=encode_uint_var(127)),
             )
             self.assertEqual(client._remote_max_streams_uni, 129)
+
+    def test_handle_new_connection_id_over_limit(self):
+        with client_and_server() as (client, server):
+            buf = Buffer(capacity=100)
+            buf.push_uint_var(8)  # sequence_number
+            buf.push_uint_var(0)  # retire_prior_to
+            buf.push_uint_var(8)
+            buf.push_bytes(bytes(8))
+            buf.push_bytes(bytes(16))
+            buf.seek(0)
+
+            # client receives NEW_CONNECTION_ID
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_new_connection_id_frame(
+                    client_receive_context(client),
+                    QuicFrameType.NEW_CONNECTION_ID,
+                    buf,
+                )
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.CONNECTION_ID_LIMIT_ERROR
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.NEW_CONNECTION_ID)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Too many active connection IDs"
+            )
+
+    def test_handle_new_connection_id_with_retire_prior_to(self):
+        with client_and_server() as (client, server):
+            buf = Buffer(capacity=100)
+            buf.push_uint_var(8)  # sequence_number
+            buf.push_uint_var(2)  # retire_prior_to
+            buf.push_uint_var(8)
+            buf.push_bytes(bytes(8))
+            buf.push_bytes(bytes(16))
+            buf.seek(0)
+
+            # client receives NEW_CONNECTION_ID
+            client._handle_new_connection_id_frame(
+                client_receive_context(client), QuicFrameType.NEW_CONNECTION_ID, buf,
+            )
+
+            self.assertEqual(client._peer_cid.sequence_number, 2)
+            self.assertEqual(
+                sequence_numbers(client._peer_cid_available), [3, 4, 5, 6, 7, 8]
+            )
 
     def test_handle_new_token_frame(self):
         with client_and_server() as (client, server):
@@ -1947,7 +1996,7 @@ class QuicConnectionTest(TestCase):
         # no common version, no retry
         client.receive_datagram(
             encode_quic_version_negotiation(
-                source_cid=client._peer_cid,
+                source_cid=client._peer_cid.cid,
                 destination_cid=client.host_cid,
                 supported_versions=[0xFF000011],  # DRAFT_16
             ),
@@ -1970,7 +2019,7 @@ class QuicConnectionTest(TestCase):
         # found a common version, retry
         client.receive_datagram(
             encode_quic_version_negotiation(
-                source_cid=client._peer_cid,
+                source_cid=client._peer_cid.cid,
                 destination_cid=client.host_cid,
                 supported_versions=[client._version],
             ),
@@ -1985,7 +2034,7 @@ class QuicConnectionTest(TestCase):
         builder = QuicPacketBuilder(
             host_cid=client.host_cid,
             is_client=True,
-            peer_cid=client._peer_cid,
+            peer_cid=client._peer_cid.cid,
             version=client._version,
         )
         crypto = CryptoPair()
