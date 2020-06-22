@@ -1819,6 +1819,13 @@ class QuicConnection:
                 self._quic_logger.encode_retire_connection_id_frame(sequence_number)
             )
 
+        if sequence_number >= self._host_cid_seq:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                frame_type=frame_type,
+                reason_phrase="Cannot retire unknown connection ID",
+            )
+
         # find the connection ID by sequence number
         for index, connection_id in enumerate(self._host_cids):
             if connection_id.sequence_number == sequence_number:

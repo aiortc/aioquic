@@ -1481,6 +1481,30 @@ class QuicConnectionTest(TestCase):
                 sequence_numbers(client._host_cids), [0, 1, 2, 3, 4, 5, 6, 7]
             )
 
+    def test_handle_retire_connection_id_frame_invalid_sequence_number(self):
+        with client_and_server() as (client, server):
+            self.assertEqual(
+                sequence_numbers(client._host_cids), [0, 1, 2, 3, 4, 5, 6, 7]
+            )
+
+            # client receives RETIRE_CONNECTION_ID
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_retire_connection_id_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RETIRE_CONNECTION_ID,
+                    Buffer(data=b"\x08"),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION)
+            self.assertEqual(
+                cm.exception.frame_type, QuicFrameType.RETIRE_CONNECTION_ID
+            )
+            self.assertEqual(
+                cm.exception.reason_phrase, "Cannot retire unknown connection ID"
+            )
+            self.assertEqual(
+                sequence_numbers(client._host_cids), [0, 1, 2, 3, 4, 5, 6, 7]
+            )
+
     def test_handle_stop_sending_frame(self):
         with client_and_server() as (client, server):
             # client creates bidirectional stream 0
