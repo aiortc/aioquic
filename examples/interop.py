@@ -71,13 +71,13 @@ class Server:
     host: str
     port: int = 4433
     http3: bool = True
+    http3_port: Optional[int] = None
     retry_port: Optional[int] = 4434
     path: str = "/"
     push_path: Optional[str] = None
     result: Result = field(default_factory=lambda: Result(0))
     session_resumption_port: Optional[int] = None
     structured_logging: bool = False
-    throughput: bool = True
     throughput_path: Optional[str] = "/%(size)d"
     verify_mode: Optional[int] = None
 
@@ -98,7 +98,7 @@ SERVERS = [
         "msquic",
         "quic.westus.cloudapp.azure.com",
         structured_logging=True,
-        throughput_path="/%(size)d.txt",
+        throughput_path=None,  # "/%(size)d.txt",
         verify_mode=ssl.CERT_NONE,
     ),
     Server(
@@ -109,14 +109,20 @@ SERVERS = [
         retry_port=None,
         structured_logging=True,
     ),
-    Server("ngtcp2", "nghttp2.org", push_path="/?push=/100"),
+    Server(
+        "ngtcp2",
+        "nghttp2.org",
+        push_path="/?push=/100",
+        structured_logging=True,
+        throughput_path=None,
+    ),
     Server("ngx_quic", "cloudflare-quic.com", port=443, retry_port=None),
     Server("pandora", "pandora.cm.in.tum.de", verify_mode=ssl.CERT_NONE),
     Server("picoquic", "test.privateoctopus.com", structured_logging=True),
-    Server("quant", "quant.eggert.org", http3=False),
+    Server("quant", "quant.eggert.org", http3=False, structured_logging=True),
     Server("quic-go", "interop.seemann.io", port=443, retry_port=443),
     Server("quiche", "quic.tech", port=8443, retry_port=8444),
-    Server("quicly", "quic.examp1e.net"),
+    Server("quicly", "quic.examp1e.net", http3_port=443),
     Server("quinn", "h3.stammw.eu", port=443),
 ]
 
@@ -204,15 +210,13 @@ async def test_http_0(server: Server, configuration: QuicConfiguration):
 
 
 async def test_http_3(server: Server, configuration: QuicConfiguration):
+    port = server.http3_port or server.port
     if server.path is None:
         return
 
     configuration.alpn_protocols = H3_ALPN
     async with connect(
-        server.host,
-        server.port,
-        configuration=configuration,
-        create_protocol=HttpClient,
+        server.host, port, configuration=configuration, create_protocol=HttpClient,
     ) as protocol:
         protocol = cast(HttpClient, protocol)
 
@@ -447,14 +451,13 @@ async def test_throughput(server: Server, configuration: QuicConfiguration):
         # perform HTTP request over QUIC
         if server.http3:
             configuration.alpn_protocols = H3_ALPN
+            port = server.http3_port or server.port
         else:
             configuration.alpn_protocols = H0_ALPN
+            port = server.port
         start = time.time()
         async with connect(
-            server.host,
-            server.port,
-            configuration=configuration,
-            create_protocol=HttpClient,
+            server.host, port, configuration=configuration, create_protocol=HttpClient,
         ) as protocol:
             protocol = cast(HttpClient, protocol)
 
@@ -501,7 +504,7 @@ async def run(servers, tests, quic_log=False, secrets_log_file=None) -> None:
                 verify_mode=server.verify_mode,
             )
             if test_name == "test_throughput":
-                timeout = 60
+                timeout = 120
             else:
                 timeout = 10
             try:
