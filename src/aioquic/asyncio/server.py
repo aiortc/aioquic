@@ -27,7 +27,7 @@ class QuicServer(asyncio.DatagramProtocol):
         create_protocol: Callable = QuicConnectionProtocol,
         session_ticket_fetcher: Optional[SessionTicketFetcher] = None,
         session_ticket_handler: Optional[SessionTicketHandler] = None,
-        stateless_retry: bool = False,
+        retry: bool = False,
         stream_handler: Optional[QuicStreamHandler] = None,
     ) -> None:
         self._configuration = configuration
@@ -40,7 +40,7 @@ class QuicServer(asyncio.DatagramProtocol):
 
         self._stream_handler = stream_handler
 
-        if stateless_retry:
+        if retry:
             self._retry = QuicRetryTokenHandler()
         else:
             self._retry = None
@@ -88,7 +88,7 @@ class QuicServer(asyncio.DatagramProtocol):
             and len(data) >= 1200
             and header.packet_type == PACKET_TYPE_INITIAL
         ):
-            # stateless retry
+            # retry
             if self._retry is not None:
                 if not header.token:
                     # create a retry token
@@ -171,7 +171,7 @@ async def serve(
     create_protocol: Callable = QuicConnectionProtocol,
     session_ticket_fetcher: Optional[SessionTicketFetcher] = None,
     session_ticket_handler: Optional[SessionTicketHandler] = None,
-    stateless_retry: bool = False,
+    retry: bool = False,
     stream_handler: QuicStreamHandler = None,
 ) -> QuicServer:
     """
@@ -192,8 +192,8 @@ async def serve(
     * ``session_ticket_handler`` is a callback which is invoked by the TLS
       engine when a new session ticket is issued. It should store the session
       ticket for future lookup.
-    * ``stateless_retry`` specifies whether a stateless retry should be
-      performed prior to handling new connections.
+    * ``retry`` specifies whether client addresses should be validated prior to
+      the cryptographic handshake using a retry packet.
     * ``stream_handler`` is a callback which is invoked whenever a stream is
       created. It must accept two arguments: a :class:`asyncio.StreamReader`
       and a :class:`asyncio.StreamWriter`.
@@ -207,7 +207,7 @@ async def serve(
             create_protocol=create_protocol,
             session_ticket_fetcher=session_ticket_fetcher,
             session_ticket_handler=session_ticket_handler,
-            stateless_retry=stateless_retry,
+            retry=retry,
             stream_handler=stream_handler,
         ),
         local_addr=(host, port),

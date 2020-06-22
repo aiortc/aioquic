@@ -151,7 +151,7 @@ async def test_handshake_and_close(server: Server, configuration: QuicConfigurat
     server.result |= Result.C
 
 
-async def test_stateless_retry(server: Server, configuration: QuicConfiguration):
+async def test_retry(server: Server, configuration: QuicConfiguration):
     # skip test if there is not retry port
     if server.retry_port is None:
         return
