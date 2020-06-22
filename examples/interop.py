@@ -324,16 +324,12 @@ async def test_key_update(server: Server, configuration: QuicConfiguration):
         server.result |= Result.U
 
 
-async def test_migration(server: Server, configuration: QuicConfiguration):
+async def test_server_cid_change(server: Server, configuration: QuicConfiguration):
     async with connect(
         server.host, server.port, configuration=configuration
     ) as protocol:
         # cause some traffic
         await protocol.ping()
-
-        # replace transport
-        protocol._transport.close()
-        await loop.create_datagram_endpoint(lambda: protocol, local_addr=("::", 0))
 
         # change connection ID
         protocol.change_connection_id()
@@ -341,31 +337,10 @@ async def test_migration(server: Server, configuration: QuicConfiguration):
         # cause more traffic
         await protocol.ping()
 
-        # check log
-        dcids = set()
-        path_challenges = 0
-        for stamp, category, event, data in configuration.quic_logger.to_dict()[
-            "traces"
-        ][0]["events"]:
-            if (
-                category == "transport"
-                and event == "packet_received"
-                and data["packet_type"] == "1RTT"
-            ):
-                dcids.add(data["header"]["dcid"])
-                for frame in data["frames"]:
-                    if frame["frame_type"] == "path_challenge":
-                        path_challenges += 1
-
-        if not path_challenges:
-            protocol._quic._logger.warning("No PATH_CHALLENGE received")
-        elif len(dcids) < 2:
-            protocol._quic._logger.warning("DCID did not change")
-        else:
-            server.result |= Result.M
+        server.result |= Result.M
 
 
-async def test_rebinding(server: Server, configuration: QuicConfiguration):
+async def test_nat_rebinding(server: Server, configuration: QuicConfiguration):
     async with connect(
         server.host, server.port, configuration=configuration
     ) as protocol:
@@ -396,6 +371,43 @@ async def test_rebinding(server: Server, configuration: QuicConfiguration):
             protocol._quic._logger.warning("No PATH_CHALLENGE received")
         else:
             server.result |= Result.B
+
+
+async def test_address_mobility(server: Server, configuration: QuicConfiguration):
+    async with connect(
+        server.host, server.port, configuration=configuration
+    ) as protocol:
+        # cause some traffic
+        await protocol.ping()
+
+        # replace transport
+        protocol._transport.close()
+        await loop.create_datagram_endpoint(lambda: protocol, local_addr=("::", 0))
+
+        # change connection ID
+        protocol.change_connection_id()
+
+        # cause more traffic
+        await protocol.ping()
+
+        # check log
+        path_challenges = 0
+        for stamp, category, event, data in configuration.quic_logger.to_dict()[
+            "traces"
+        ][0]["events"]:
+            if (
+                category == "transport"
+                and event == "packet_received"
+                and data["packet_type"] == "1RTT"
+            ):
+                for frame in data["frames"]:
+                    if frame["frame_type"] == "path_challenge":
+                        path_challenges += 1
+
+        if not path_challenges:
+            protocol._quic._logger.warning("No PATH_CHALLENGE received")
+        else:
+            server.result |= Result.A
 
 
 async def test_spin_bit(server: Server, configuration: QuicConfiguration):
