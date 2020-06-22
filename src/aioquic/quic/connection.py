@@ -1630,6 +1630,14 @@ class QuicConnection:
                 )
             )
 
+        # sanity check
+        if retire_prior_to > sequence_number:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                frame_type=frame_type,
+                reason_phrase="retire_prior_to is greater than the sequence_number",
+            )
+
         # determine which CIDs to retire
         change_cid = False
         retire = list(
