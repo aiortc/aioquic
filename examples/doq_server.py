@@ -100,17 +100,13 @@ if __name__ == "__main__":
         help="load the TLS certificate from the specified file",
     )
     parser.add_argument(
-        "-r",
         "--resolver",
         type=str,
         default="8.8.8.8",
         help="Upstream Classic DNS resolver to use",
     )
     parser.add_argument(
-        "-s",
-        "--stateless-retry",
-        action="store_true",
-        help="send a stateless retry for new connections",
+        "--retry", action="store_true", help="send a retry for new connections",
     )
     parser.add_argument(
         "-q",
@@ -156,7 +152,7 @@ if __name__ == "__main__":
             create_protocol=DnsServerProtocol,
             session_ticket_fetcher=ticket_store.pop,
             session_ticket_handler=ticket_store.add,
-            stateless_retry=args.stateless_retry,
+            retry=args.retry,
         )
     )
     try:

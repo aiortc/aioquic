@@ -304,12 +304,12 @@ class QuicConnection:
         self._remote_max_stream_data_uni = 0
         self._remote_max_streams_bidi = 0
         self._remote_max_streams_uni = 0
+        self._retry_count = 0
         self._retry_source_connection_id = retry_source_connection_id
         self._spaces: Dict[tls.Epoch, QuicPacketSpace] = {}
         self._spin_bit = False
         self._spin_highest_pn = 0
         self._state = QuicConnectionState.FIRSTFLIGHT
-        self._stateless_retry_count = 0
         self._streams: Dict[int, QuicStream] = {}
         self._streams_blocked_bidi: List[QuicStream] = []
         self._streams_blocked_uni: List[QuicStream] = []
@@ -748,7 +748,7 @@ class QuicConnection:
                 return
 
             if self._is_client and header.packet_type == PACKET_TYPE_RETRY:
-                # calculate stateless retry integrity tag
+                # calculate retry integrity tag
                 integrity_tag = get_retry_integrity_tag(
                     buf.data_slice(start_off, buf.tell() - RETRY_INTEGRITY_TAG_SIZE),
                     self._peer_cid.cid,
@@ -758,7 +758,7 @@ class QuicConnection:
                 if (
                     header.destination_cid == self.host_cid
                     and header.integrity_tag == integrity_tag
-                    and not self._stateless_retry_count
+                    and not self._retry_count
                 ):
                     if self._quic_logger is not None:
                         self._quic_logger.log_event(
@@ -776,9 +776,9 @@ class QuicConnection:
 
                     self._peer_cid.cid = header.source_cid
                     self._peer_token = header.token
+                    self._retry_count += 1
                     self._retry_source_connection_id = header.source_cid
-                    self._stateless_retry_count += 1
-                    self._logger.info("Performing stateless retry")
+                    self._logger.info("Performing retry")
                     self._connect(now=now)
                 return
 

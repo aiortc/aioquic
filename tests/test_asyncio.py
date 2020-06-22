@@ -240,14 +240,12 @@ class HighLevelTest(TestCase):
         )
         self.assertEqual(response, b"gnip")
 
-    def test_connect_and_serve_with_stateless_retry(self):
+    def test_connect_and_serve_with_retry(self):
         run(self.run_server())
         response = run(self.run_client())
         self.assertEqual(response, b"gnip")
 
-    def test_connect_and_serve_with_stateless_retry_bad_original_destination_connection_id(
-        self,
-    ):
+    def test_connect_and_serve_with_retry_bad_original_destination_connection_id(self):
         """
         If the server's transport parameters do not have the correct
         original_destination_connection_id the connection must fail.
@@ -258,13 +256,11 @@ class HighLevelTest(TestCase):
             protocol._quic._original_destination_connection_id = None
             return protocol
 
-        run(self.run_server(create_protocol=create_protocol, stateless_retry=True))
+        run(self.run_server(create_protocol=create_protocol, retry=True))
         with self.assertRaises(ConnectionError):
             run(self.run_client())
 
-    def test_connect_and_serve_with_stateless_retry_bad_retry_source_connection_id(
-        self,
-    ):
+    def test_connect_and_serve_with_retry_bad_retry_source_connection_id(self):
         """
         If the server's transport parameters do not have the correct
         retry_source_connection_id the connection must fail.
@@ -275,15 +271,15 @@ class HighLevelTest(TestCase):
             protocol._quic._retry_source_connection_id = None
             return protocol
 
-        run(self.run_server(create_protocol=create_protocol, stateless_retry=True))
+        run(self.run_server(create_protocol=create_protocol, retry=True))
         with self.assertRaises(ConnectionError):
             run(self.run_client())
 
     @patch("aioquic.quic.retry.QuicRetryTokenHandler.validate_token")
-    def test_connect_and_serve_with_stateless_retry_bad_token(self, mock_validate):
+    def test_connect_and_serve_with_retry_bad_token(self, mock_validate):
         mock_validate.side_effect = ValueError("Decryption failed.")
 
-        run(self.run_server(stateless_retry=True))
+        run(self.run_server(retry=True))
         with self.assertRaises(ConnectionError):
             run(
                 self.run_client(
