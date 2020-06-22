@@ -1230,6 +1230,26 @@ class QuicConnectionTest(TestCase):
             )
             self.assertEqual(client._remote_max_streams_uni, 129)
 
+    def test_handle_new_connection_id_duplicate(self):
+        with client_and_server() as (client, server):
+            buf = Buffer(capacity=100)
+            buf.push_uint_var(7)  # sequence_number
+            buf.push_uint_var(0)  # retire_prior_to
+            buf.push_uint_var(8)
+            buf.push_bytes(bytes(8))
+            buf.push_bytes(bytes(16))
+            buf.seek(0)
+
+            # client receives NEW_CONNECTION_ID
+            client._handle_new_connection_id_frame(
+                client_receive_context(client), QuicFrameType.NEW_CONNECTION_ID, buf,
+            )
+
+            self.assertEqual(client._peer_cid.sequence_number, 0)
+            self.assertEqual(
+                sequence_numbers(client._peer_cid_available), [1, 2, 3, 4, 5, 6, 7]
+            )
+
     def test_handle_new_connection_id_over_limit(self):
         with client_and_server() as (client, server):
             buf = Buffer(capacity=100)

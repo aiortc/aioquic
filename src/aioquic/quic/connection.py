@@ -5,7 +5,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
-from typing import Any, Deque, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Any, Deque, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from .. import tls
 from ..buffer import UINT_VAR_MAX, Buffer, BufferReadError, size_uint_var
@@ -290,6 +290,7 @@ class QuicConnection:
             cid=os.urandom(configuration.connection_id_length), sequence_number=None
         )
         self._peer_cid_available: List[QuicConnectionId] = []
+        self._peer_cid_sequence_numbers: Set[int] = set([0])
         self._peer_token = b""
         self._quic_logger: Optional[QuicLoggerTrace] = None
         self._remote_ack_delay_exponent = 3
@@ -1654,13 +1655,16 @@ class QuicConnection:
             filter(
                 lambda c: c.sequence_number >= retire_prior_to, self._peer_cid_available
             )
-        ) + [
-            QuicConnectionId(
-                cid=connection_id,
-                sequence_number=sequence_number,
-                stateless_reset_token=stateless_reset_token,
+        )
+        if sequence_number not in self._peer_cid_sequence_numbers:
+            self._peer_cid_available.append(
+                QuicConnectionId(
+                    cid=connection_id,
+                    sequence_number=sequence_number,
+                    stateless_reset_token=stateless_reset_token,
+                )
             )
-        ]
+            self._peer_cid_sequence_numbers.add(sequence_number)
 
         # retire previous CIDs
         for quic_connection_id in retire:
