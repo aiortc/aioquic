@@ -256,7 +256,7 @@ class QuicConnection:
             QuicConnectionId(
                 cid=os.urandom(configuration.connection_id_length),
                 sequence_number=0,
-                stateless_reset_token=os.urandom(16),
+                stateless_reset_token=os.urandom(16) if not self._is_client else None,
                 was_sent=True,
             )
         ]
@@ -2183,6 +2183,14 @@ class QuicConnection:
                     frame_type=QuicFrameType.CRYPTO,
                     reason_phrase="active_connection_id_limit must be no less than 2",
                 )
+            if (
+                self._is_client
+                and self._peer_cid.sequence_number == 0
+                and quic_transport_parameters.stateless_reset_token is not None
+            ):
+                self._peer_cid.stateless_reset_token = (
+                    quic_transport_parameters.stateless_reset_token
+                )
 
         # store remote parameters
         if not from_session_ticket:
@@ -2232,6 +2240,7 @@ class QuicConnection:
             quantum_readiness=b"Q" * 1200
             if self._configuration.quantum_readiness_test
             else None,
+            stateless_reset_token=self._host_cids[0].stateless_reset_token,
         )
         if not self._is_client and (
             self._version >= QuicProtocolVersion.DRAFT_28

@@ -382,7 +382,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1050])
+        self.assertEqual(datagram_sizes(items), [1280, 1068])
         self.assertAlmostEqual(server.get_timer(), 0.45)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -446,7 +446,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1050])
+        self.assertEqual(datagram_sizes(items), [1280, 1068])
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -482,7 +482,7 @@ class QuicConnectionTest(TestCase):
         now = server.get_timer()
         server.handle_timer(now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 874])
+        self.assertEqual(datagram_sizes(items), [1280, 892])
         self.assertAlmostEqual(server.get_timer(), 0.65)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 3)
@@ -542,7 +542,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1050])
+        self.assertEqual(datagram_sizes(items), [1280, 1068])
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
