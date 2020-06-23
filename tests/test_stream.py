@@ -1,9 +1,9 @@
 from unittest import TestCase
 
-from aioquic.quic.events import StreamDataReceived
+from aioquic.quic.events import StreamDataReceived, StreamReset
 from aioquic.quic.packet import QuicErrorCode, QuicStreamFrame
 from aioquic.quic.packet_builder import QuicDeliveryState
-from aioquic.quic.stream import QuicStream
+from aioquic.quic.stream import FinalSizeError, QuicStream
 
 
 class QuicStreamTest(TestCase):
@@ -153,10 +153,17 @@ class QuicStreamTest(TestCase):
 
     def test_recv_fin_then_data(self):
         stream = QuicStream(stream_id=0)
-        stream.add_frame(QuicStreamFrame(offset=0, data=b"", fin=True))
-        with self.assertRaises(Exception) as cm:
+        stream.add_frame(QuicStreamFrame(offset=0, data=b"0123", fin=True))
+
+        # data beyond final size
+        with self.assertRaises(FinalSizeError) as cm:
             stream.add_frame(QuicStreamFrame(offset=0, data=b"01234567"))
-        self.assertEqual(str(cm.exception), "Data received beyond FIN")
+        self.assertEqual(str(cm.exception), "Data received beyond final size")
+
+        # final size would be lowered
+        with self.assertRaises(FinalSizeError) as cm:
+            stream.add_frame(QuicStreamFrame(offset=0, data=b"01", fin=True))
+        self.assertEqual(str(cm.exception), "Cannot change final size")
 
     def test_recv_fin_twice(self):
         stream = QuicStream(stream_id=0)
@@ -180,6 +187,43 @@ class QuicStreamTest(TestCase):
             stream.add_frame(QuicStreamFrame(offset=0, data=b"", fin=True)),
             StreamDataReceived(data=b"", end_stream=True, stream_id=0),
         )
+
+    def test_recv_reset(self):
+        stream = QuicStream(stream_id=0)
+        self.assertEqual(
+            stream.handle_reset(final_size=4),
+            StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
+        )
+
+    def test_recv_reset_after_fin(self):
+        stream = QuicStream(stream_id=0)
+        stream.add_frame(QuicStreamFrame(offset=0, data=b"0123", fin=True)),
+        self.assertEqual(
+            stream.handle_reset(final_size=4),
+            StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
+        )
+
+    def test_recv_reset_twice(self):
+        stream = QuicStream(stream_id=0)
+        self.assertEqual(
+            stream.handle_reset(final_size=4),
+            StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
+        )
+        self.assertEqual(
+            stream.handle_reset(final_size=4),
+            StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
+        )
+
+    def test_recv_reset_twice_final_size_error(self):
+        stream = QuicStream(stream_id=0)
+        self.assertEqual(
+            stream.handle_reset(final_size=4),
+            StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
+        )
+
+        with self.assertRaises(FinalSizeError) as cm:
+            stream.handle_reset(final_size=5)
+        self.assertEqual(str(cm.exception), "Cannot change final size")
 
     def test_send_data(self):
         stream = QuicStream()

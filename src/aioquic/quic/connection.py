@@ -43,7 +43,7 @@ from .packet_builder import (
     QuicPacketBuilderStop,
 )
 from .recovery import K_GRANULARITY, QuicPacketRecovery, QuicPacketSpace
-from .stream import QuicStream
+from .stream import FinalSizeError, QuicStream
 
 logger = logging.getLogger("quic")
 
@@ -1824,10 +1824,16 @@ class QuicConnection:
             error_code,
             final_size,
         )
-        stream.handle_reset(final_size=final_size)
-        self._events.append(
-            events.StreamReset(error_code=error_code, stream_id=stream_id)
-        )
+        try:
+            event = stream.handle_reset(error_code=error_code, final_size=final_size)
+        except FinalSizeError as exc:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FINAL_SIZE_ERROR,
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
+        if event is not None:
+            self._events.append(event)
         self._local_max_data.used += newly_received
 
     def _handle_retire_connection_id_frame(
@@ -1947,7 +1953,14 @@ class QuicConnection:
             )
 
         # process data
-        event = stream.add_frame(frame)
+        try:
+            event = stream.add_frame(frame)
+        except FinalSizeError as exc:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FINAL_SIZE_ERROR,
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
         if event is not None:
             self._events.append(event)
         self._local_max_data.used += newly_received

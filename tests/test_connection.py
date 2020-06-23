@@ -1431,6 +1431,44 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(event.error_code, QuicErrorCode.INTERNAL_ERROR)
             self.assertEqual(event.stream_id, stream_id)
 
+    def test_handle_reset_stream_frame_final_size_error(self):
+        stream_id = 0
+        with client_and_server() as (client, server):
+            # client creates bidirectional stream
+            client.send_stream_data(stream_id=stream_id, data=b"hello")
+            consume_events(client)
+
+            # client receives RESET_STREAM at offset 8
+            client._handle_reset_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM,
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(QuicErrorCode.NO_ERROR)
+                    + encode_uint_var(8)
+                ),
+            )
+
+            event = client.next_event()
+            self.assertEqual(type(event), events.StreamReset)
+            self.assertEqual(event.error_code, QuicErrorCode.NO_ERROR)
+            self.assertEqual(event.stream_id, stream_id)
+
+            # client receives RESET_STREAM at offset 5
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM,
+                    Buffer(
+                        data=encode_uint_var(stream_id)
+                        + encode_uint_var(QuicErrorCode.NO_ERROR)
+                        + encode_uint_var(5)
+                    ),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.FINAL_SIZE_ERROR)
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.RESET_STREAM)
+            self.assertEqual(cm.exception.reason_phrase, "Cannot change final size")
+
     def test_handle_reset_stream_frame_over_max_data(self):
         stream_id = 0
         with client_and_server() as (client, server):
@@ -1585,6 +1623,37 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(cm.exception.error_code, QuicErrorCode.STREAM_STATE_ERROR)
             self.assertEqual(cm.exception.frame_type, QuicFrameType.STOP_SENDING)
             self.assertEqual(cm.exception.reason_phrase, "Stream is receive-only")
+
+    def test_handle_stream_frame_final_size_error(self):
+        with client_and_server() as (client, server):
+            frame_type = QuicFrameType.STREAM_BASE | 7
+            stream_id = 1
+
+            # client receives FIN at offset 8
+            client._handle_stream_frame(
+                client_receive_context(client),
+                frame_type,
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(8)
+                    + encode_uint_var(0)
+                ),
+            )
+
+            # client receives FIN at offset 5
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_stream_frame(
+                    client_receive_context(client),
+                    frame_type,
+                    Buffer(
+                        data=encode_uint_var(stream_id)
+                        + encode_uint_var(5)
+                        + encode_uint_var(0)
+                    ),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.FINAL_SIZE_ERROR)
+            self.assertEqual(cm.exception.frame_type, frame_type)
+            self.assertEqual(cm.exception.reason_phrase, "Cannot change final size")
 
     def test_handle_stream_frame_over_largest_offset(self):
         with client_and_server() as (client, server):
