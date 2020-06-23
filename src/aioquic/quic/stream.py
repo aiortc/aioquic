@@ -129,6 +129,12 @@ class QuicStream:
         except IndexError:
             return self._send_buffer_stop
 
+    def handle_reset(self, final_size: int) -> None:
+        """
+        Handle an abrupt termination of the receiving part of the QUIC stream.
+        """
+        self._recv_buffer_fin = final_size
+
     def get_frame(
         self, max_size: int, max_offset: Optional[int] = None
     ) -> Optional[QuicStreamFrame]:

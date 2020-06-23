@@ -1409,22 +1409,74 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(buf.tell(), 10)
 
     def test_handle_reset_stream_frame(self):
+        stream_id = 0
         with client_and_server() as (client, server):
-            # client creates bidirectional stream 0
-            client.send_stream_data(stream_id=0, data=b"hello")
+            # client creates bidirectional stream
+            client.send_stream_data(stream_id=stream_id, data=b"hello")
             consume_events(client)
 
             # client receives RESET_STREAM
             client._handle_reset_stream_frame(
                 client_receive_context(client),
                 QuicFrameType.RESET_STREAM,
-                Buffer(data=binascii.unhexlify("000100")),
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(QuicErrorCode.INTERNAL_ERROR)
+                    + encode_uint_var(0)
+                ),
             )
 
             event = client.next_event()
             self.assertEqual(type(event), events.StreamReset)
             self.assertEqual(event.error_code, QuicErrorCode.INTERNAL_ERROR)
-            self.assertEqual(event.stream_id, 0)
+            self.assertEqual(event.stream_id, stream_id)
+
+    def test_handle_reset_stream_frame_over_max_data(self):
+        stream_id = 0
+        with client_and_server() as (client, server):
+            # client creates bidirectional stream
+            client.send_stream_data(stream_id=stream_id, data=b"hello")
+            consume_events(client)
+
+            # artificially raise received data counter
+            client._local_max_data.used = client._local_max_data.value
+
+            # client receives RESET_STREAM frame
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM,
+                    Buffer(
+                        data=encode_uint_var(stream_id)
+                        + encode_uint_var(QuicErrorCode.NO_ERROR)
+                        + encode_uint_var(1)
+                    ),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.FLOW_CONTROL_ERROR)
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.RESET_STREAM)
+            self.assertEqual(cm.exception.reason_phrase, "Over connection data limit")
+
+    def test_handle_reset_stream_frame_over_max_stream_data(self):
+        stream_id = 0
+        with client_and_server() as (client, server):
+            # client creates bidirectional stream
+            client.send_stream_data(stream_id=stream_id, data=b"hello")
+            consume_events(client)
+
+            # client receives STREAM frame
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM,
+                    Buffer(
+                        data=encode_uint_var(stream_id)
+                        + encode_uint_var(QuicErrorCode.NO_ERROR)
+                        + encode_uint_var(client._local_max_stream_data_bidi_local + 1)
+                    ),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.FLOW_CONTROL_ERROR)
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.RESET_STREAM)
+            self.assertEqual(cm.exception.reason_phrase, "Over stream data limit")
 
     def test_handle_reset_stream_frame_send_only(self):
         with client_and_server() as (client, server):

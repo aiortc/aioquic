@@ -1801,16 +1801,34 @@ class QuicConnection:
         # check stream direction
         self._assert_stream_can_receive(frame_type, stream_id)
 
+        # check flow-control limits
+        stream = self._get_or_create_stream(frame_type, stream_id)
+        if final_size > stream.max_stream_data_local:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FLOW_CONTROL_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Over stream data limit",
+            )
+        newly_received = max(0, final_size - stream._recv_highest)
+        if self._local_max_data.used + newly_received > self._local_max_data.value:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FLOW_CONTROL_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Over connection data limit",
+            )
+
+        # process reset
         self._logger.info(
             "Stream %d reset by peer (error code %d, final size %d)",
             stream_id,
             error_code,
             final_size,
         )
-        # stream = self._get_or_create_stream(frame_type, stream_id)
+        stream.handle_reset(final_size=final_size)
         self._events.append(
             events.StreamReset(error_code=error_code, stream_id=stream_id)
         )
+        self._local_max_data.used += newly_received
 
     def _handle_retire_connection_id_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -1928,6 +1946,7 @@ class QuicConnection:
                 reason_phrase="Over connection data limit",
             )
 
+        # process data
         event = stream.add_frame(frame)
         if event is not None:
             self._events.append(event)
