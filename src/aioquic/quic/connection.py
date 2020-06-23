@@ -717,6 +717,11 @@ class QuicConnection:
                             "frames": [],
                         },
                     )
+                if self._version in versions:
+                    self._logger.warning(
+                        "Version negotiation packet contains %s" % self._version
+                    )
+                    return
                 common = set(self._configuration.supported_versions).intersection(
                     versions
                 )
@@ -778,7 +783,9 @@ class QuicConnection:
                     self._peer_token = header.token
                     self._retry_count += 1
                     self._retry_source_connection_id = header.source_cid
-                    self._logger.info("Performing retry")
+                    self._logger.info(
+                        "Retrying with token (%d bytes)" % len(header.token)
+                    )
                     self._connect(now=now)
                 return
 

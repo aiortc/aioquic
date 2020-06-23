@@ -21,6 +21,7 @@ from aioquic.quic.packet import (
     PACKET_TYPE_INITIAL,
     QuicErrorCode,
     QuicFrameType,
+    QuicProtocolVersion,
     QuicTransportParameters,
     encode_quic_retry,
     encode_quic_version_negotiation,
@@ -2083,6 +2084,21 @@ class QuicConnectionTest(TestCase):
             event.reason_phrase, "Could not find a common protocol version"
         )
 
+    def test_version_negotiation_ignore(self):
+        client = create_standalone_client(self)
+
+        # version negotiation contains the client's version
+        client.receive_datagram(
+            encode_quic_version_negotiation(
+                source_cid=client._peer_cid.cid,
+                destination_cid=client.host_cid,
+                supported_versions=[client._version],
+            ),
+            SERVER_ADDR,
+            now=time.time(),
+        )
+        self.assertEqual(drop(client), 0)
+
     def test_version_negotiation_ok(self):
         client = create_standalone_client(self)
 
@@ -2091,7 +2107,7 @@ class QuicConnectionTest(TestCase):
             encode_quic_version_negotiation(
                 source_cid=client._peer_cid.cid,
                 destination_cid=client.host_cid,
-                supported_versions=[client._version],
+                supported_versions=[QuicProtocolVersion.DRAFT_28],
             ),
             SERVER_ADDR,
             now=time.time(),
