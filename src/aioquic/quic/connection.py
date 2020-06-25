@@ -2567,8 +2567,11 @@ class QuicConnection:
             # PING (probe)
             if (
                 self._probe_pending
-                and epoch == tls.Epoch.HANDSHAKE
                 and not self._handshake_complete
+                and (
+                    epoch == tls.Epoch.HANDSHAKE
+                    or not self._cryptos[tls.Epoch.HANDSHAKE].send.is_valid()
+                )
             ):
                 self._write_ping_frame(builder, comment="probe")
                 self._probe_pending = False

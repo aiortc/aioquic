@@ -273,7 +273,7 @@ class QuicPacketBuilder:
             if (
                 self._is_client
                 and self._packet_type == PACKET_TYPE_INITIAL
-                and self._packet.is_crypto_packet
+                and self._packet.is_ack_eliciting
                 and self.remaining_flight_space
                 and self.remaining_flight_space > padding_size
             ):
