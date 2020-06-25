@@ -198,6 +198,9 @@ class QuicPacketRecovery:
         space.ack_eliciting_in_flight = 0
         space.loss_time = None
 
+        # reset PTO count
+        self._pto_count = 0
+
         if self._quic_logger is not None:
             self._log_metrics_updated()
 
@@ -304,10 +307,11 @@ class QuicPacketRecovery:
 
         self._detect_loss(space, now=now)
 
+        # reset PTO count
+        self._pto_count = 0
+
         if self._quic_logger is not None:
             self._log_metrics_updated(log_rtt=log_rtt)
-
-        self._pto_count = 0
 
     def on_loss_detection_timeout(self, now: float) -> None:
         loss_space = self._get_loss_space()
