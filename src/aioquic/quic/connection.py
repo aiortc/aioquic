@@ -1326,6 +1326,13 @@ class QuicConnection:
                 self._quic_logger.encode_ack_frame(ack_rangeset, ack_delay)
             )
 
+        # check whether peer completed address validation
+        if not self._loss.peer_completed_address_validation and context.epoch in (
+            tls.Epoch.HANDSHAKE,
+            tls.Epoch.ONE_RTT,
+        ):
+            self._loss.peer_completed_address_validation = True
+
         self._loss.on_ack_received(
             space=self._spaces[context.epoch],
             ack_rangeset=ack_rangeset,
@@ -1431,7 +1438,6 @@ class QuicConnection:
                     self._handshake_confirmed = True
                     self._handshake_done_pending = True
 
-                self._loss.peer_completed_address_validation = True
                 self._replenish_connection_ids()
                 self._events.append(
                     events.HandshakeCompleted(
@@ -1515,6 +1521,7 @@ class QuicConnection:
         if not self._handshake_confirmed:
             self._discard_epoch(tls.Epoch.HANDSHAKE)
             self._handshake_confirmed = True
+            self._loss.peer_completed_address_validation = True
 
     def _handle_max_data_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
