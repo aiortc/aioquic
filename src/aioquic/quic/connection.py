@@ -457,6 +457,9 @@ class QuicConnection:
         self._version = self._configuration.supported_versions[0]
         self._connect(now=now)
 
+    def retrieve_peer_address(self) -> Tuple[bytes, NetworkAddress]:
+        return self._network_paths[0].addr
+
     def datagrams_to_send(self, now: float) -> List[Tuple[bytes, NetworkAddress]]:
         """
         Return a list of `(data, addr)` tuples of datagrams which need to be
