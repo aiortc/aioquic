@@ -400,7 +400,9 @@ if __name__ == "__main__":
         help="log QUIC events to QLOG files in the specified directory",
     )
     parser.add_argument(
-        "--retry", action="store_true", help="send a retry for new connections",
+        "--retry",
+        action="store_true",
+        help="send a retry for new connections",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="increase logging verbosity"

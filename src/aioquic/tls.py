@@ -279,7 +279,9 @@ def verify_certificate(
     )
     openssl_assert(
         lib.X509_STORE_load_locations(
-            store, openssl_encode_path(certifi.where()), openssl_encode_path(None),
+            store,
+            openssl_encode_path(certifi.where()),
+            openssl_encode_path(None),
         ),
         "X509_STORE_load_locations",
     )

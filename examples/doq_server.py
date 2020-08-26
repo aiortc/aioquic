@@ -106,7 +106,9 @@ if __name__ == "__main__":
         help="Upstream Classic DNS resolver to use",
     )
     parser.add_argument(
-        "--retry", action="store_true", help="send a retry for new connections",
+        "--retry",
+        action="store_true",
+        help="send a retry for new connections",
     )
     parser.add_argument(
         "-q",

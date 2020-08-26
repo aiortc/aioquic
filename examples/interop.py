@@ -216,7 +216,10 @@ async def test_http_3(server: Server, configuration: QuicConfiguration):
 
     configuration.alpn_protocols = H3_ALPN
     async with connect(
-        server.host, port, configuration=configuration, create_protocol=HttpClient,
+        server.host,
+        port,
+        configuration=configuration,
+        create_protocol=HttpClient,
     ) as protocol:
         protocol = cast(HttpClient, protocol)
 
@@ -457,7 +460,10 @@ async def test_throughput(server: Server, configuration: QuicConfiguration):
             port = server.port
         start = time.time()
         async with connect(
-            server.host, port, configuration=configuration, create_protocol=HttpClient,
+            server.host,
+            port,
+            configuration=configuration,
+            create_protocol=HttpClient,
         ) as protocol:
             protocol = cast(HttpClient, protocol)
 

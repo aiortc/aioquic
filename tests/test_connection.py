@@ -1017,7 +1017,9 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(
             client._close_event,
             events.ConnectionTerminated(
-                error_code=QuicErrorCode.NO_ERROR, frame_type=None, reason_phrase="",
+                error_code=QuicErrorCode.NO_ERROR,
+                frame_type=None,
+                reason_phrase="",
             ),
         )
 
@@ -1243,7 +1245,9 @@ class QuicConnectionTest(TestCase):
 
             # client receives NEW_CONNECTION_ID
             client._handle_new_connection_id_frame(
-                client_receive_context(client), QuicFrameType.NEW_CONNECTION_ID, buf,
+                client_receive_context(client),
+                QuicFrameType.NEW_CONNECTION_ID,
+                buf,
             )
 
             self.assertEqual(client._peer_cid.sequence_number, 0)
@@ -1288,7 +1292,9 @@ class QuicConnectionTest(TestCase):
 
             # client receives NEW_CONNECTION_ID
             client._handle_new_connection_id_frame(
-                client_receive_context(client), QuicFrameType.NEW_CONNECTION_ID, buf,
+                client_receive_context(client),
+                QuicFrameType.NEW_CONNECTION_ID,
+                buf,
             )
 
             self.assertEqual(client._peer_cid.sequence_number, 2)
@@ -1314,7 +1320,8 @@ class QuicConnectionTest(TestCase):
                     buf,
                 )
             self.assertEqual(
-                cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION,
+                cm.exception.error_code,
+                QuicErrorCode.PROTOCOL_VIOLATION,
             )
             self.assertEqual(cm.exception.frame_type, QuicFrameType.NEW_CONNECTION_ID)
             self.assertEqual(

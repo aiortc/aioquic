@@ -133,7 +133,9 @@ class HighLevelTest(TestCase):
         run(
             self.run_server(
                 configuration=QuicConfiguration(
-                    certificate=certificate, private_key=private_key, is_client=False,
+                    certificate=certificate,
+                    private_key=private_key,
+                    is_client=False,
                 )
             )
         )
@@ -225,7 +227,9 @@ class HighLevelTest(TestCase):
         )
 
         # first request
-        response = run(self.run_client(session_ticket_handler=save_ticket),)
+        response = run(
+            self.run_client(session_ticket_handler=save_ticket),
+        )
         self.assertEqual(response, b"gnip")
 
         self.assertIsNotNone(client_ticket)

@@ -2680,7 +2680,8 @@ class QuicConnection:
                 if self._quic_logger is not None:
                     builder.quic_logger_frames.append(
                         self._quic_logger.encode_connection_limit_frame(
-                            frame_type=limit.frame_type, maximum=limit.value,
+                            frame_type=limit.frame_type,
+                            maximum=limit.value,
                         )
                     )
 
@@ -2825,7 +2826,10 @@ class QuicConnection:
             builder.quic_logger_frames.append(self._quic_logger.encode_ping_frame())
 
     def _write_reset_stream_frame(
-        self, builder: QuicPacketBuilder, frame_type: QuicFrameType, stream: QuicStream,
+        self,
+        builder: QuicPacketBuilder,
+        frame_type: QuicFrameType,
+        stream: QuicStream,
     ) -> None:
         buf = builder.start_frame(
             frame_type=frame_type,
