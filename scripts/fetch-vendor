@@ -30,6 +30,7 @@ logging.basicConfig(level=logging.INFO)
 
 # work around buggy 'tar' executable on Windows
 if sys.platform == "win32":
+    print(os.listdir("C:\\Program Files\\Git\\usr\\bin"))
     os.environ["PATH"] = "C:\\Program Files\\Git\\usr\\bin;" + os.environ["PATH"]
 
 # read config file
