@@ -93,7 +93,7 @@ jobs:
           CIBW_SKIP: cp27-* cp33-* cp34-* cp35-* pp27-*
           CIBW_TEST_COMMAND: python -m unittest discover -t {project} -s {project}/tests
         run: |
-          pip install cibuildwheel
+          pip install cibuildwheel==1.4.2
           cibuildwheel --output-dir dist
       - name: Upload wheels
         uses: actions/upload-artifact@v1
