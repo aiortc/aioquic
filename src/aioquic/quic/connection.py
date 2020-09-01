@@ -734,6 +734,7 @@ class QuicConnection:
                     )
                     self._close_end()
                     return
+                self._packet_number = 0
                 self._version = QuicProtocolVersion(max(common))
                 self._version_negotiation_count += 1
                 self._logger.info("Retrying with %s", self._version)
@@ -1305,7 +1306,6 @@ class QuicConnection:
         )
 
         self._loss.spaces = list(self._spaces.values())
-        self._packet_number = 0
 
     def _handle_ack_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
