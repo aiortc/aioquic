@@ -6,7 +6,7 @@ import pickle
 import ssl
 import time
 from collections import deque
-from typing import Callable, Deque, Dict, List, Optional, Union, cast
+from typing import BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
 from urllib.parse import urlparse
 
 import wsproto
@@ -205,7 +205,7 @@ class HttpClient(QuicConnectionProtocol):
             for http_event in self._http.handle_event(event):
                 self.http_event_received(http_event)
 
-    async def _request(self, request: HttpRequest):
+    async def _request(self, request: HttpRequest) -> Deque[H3Event]:
         stream_id = self._quic.get_next_available_stream_id()
         self._http.send_headers(
             stream_id=stream_id,
@@ -243,8 +243,10 @@ async def perform_http_request(
             data=data.encode(),
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
+        method = "POST"
     else:
         http_events = await client.get(url)
+        method = "GET"
     elapsed = time.time() - start
 
     # print speed
@@ -253,8 +255,8 @@ async def perform_http_request(
         if isinstance(http_event, DataReceived):
             octets += len(http_event.data)
     logger.info(
-        "Received %d bytes in %.1f s (%.3f Mbps)"
-        % (octets, elapsed, octets * 8 / elapsed / 1000000)
+        "Response received for %s %s : %d bytes in %.1f s (%.3f Mbps)"
+        % (method, urlparse(url).path, octets, elapsed, octets * 8 / elapsed / 1000000)
     )
 
     # output response
@@ -263,15 +265,54 @@ async def perform_http_request(
             output_dir, os.path.basename(urlparse(url).path) or "index.html"
         )
         with open(output_path, "wb") as output_file:
-            for http_event in http_events:
-                if isinstance(http_event, HeadersReceived) and include:
-                    headers = b""
-                    for k, v in http_event.headers:
-                        headers += k + b": " + v + b"\r\n"
-                    if headers:
-                        output_file.write(headers + b"\r\n")
-                elif isinstance(http_event, DataReceived):
-                    output_file.write(http_event.data)
+            write_response(
+                http_events=http_events, include=include, output_file=output_file
+            )
+
+
+def process_http_pushes(
+    client: HttpClient,
+    include: bool,
+    output_dir: Optional[str],
+) -> None:
+    for _, http_events in client.pushes.items():
+        method = ""
+        octets = 0
+        path = ""
+        for http_event in http_events:
+            if isinstance(http_event, DataReceived):
+                octets += len(http_event.data)
+            elif isinstance(http_event, PushPromiseReceived):
+                for header, value in http_event.headers:
+                    if header == b":method":
+                        method = value.decode()
+                    elif header == b":path":
+                        path = value.decode()
+        logger.info("Push received for %s %s : %s bytes", method, path, octets)
+
+        # output response
+        if output_dir is not None:
+            output_path = os.path.join(
+                output_dir, os.path.basename(path) or "index.html"
+            )
+            with open(output_path, "wb") as output_file:
+                write_response(
+                    http_events=http_events, include=include, output_file=output_file
+                )
+
+
+def write_response(
+    http_events: Deque[H3Event], output_file: BinaryIO, include: bool
+) -> None:
+    for http_event in http_events:
+        if isinstance(http_event, HeadersReceived) and include:
+            headers = b""
+            for k, v in http_event.headers:
+                headers += k + b": " + v + b"\r\n"
+            if headers:
+                output_file.write(headers + b"\r\n")
+        elif isinstance(http_event, DataReceived):
+            output_file.write(http_event.data)
 
 
 def save_session_ticket(ticket: SessionTicket) -> None:
@@ -344,6 +385,9 @@ async def run(
                 for url in urls
             ]
             await asyncio.gather(*coros)
+
+            # process http pushes
+            process_http_pushes(client=client, include=include, output_dir=output_dir)
 
 
 if __name__ == "__main__":
