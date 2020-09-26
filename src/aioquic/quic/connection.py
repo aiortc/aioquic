@@ -203,7 +203,7 @@ class QuicConnection:
     The state machine is driven by three kinds of sources:
 
     - the API user requesting data to be send out (see :meth:`connect`,
-      :meth:`reset_stream`, :meth:`send_ping`, :meth:`send_datagram_data`
+      :meth:`reset_stream`, :meth:`send_ping`, :meth:`send_datagram_frame`
       and :meth:`send_stream_data`)
     - data being received from the network (see :meth:`receive_datagram`)
     - a timer firing (see :meth:`handle_timer`)
