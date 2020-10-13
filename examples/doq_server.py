@@ -89,7 +89,6 @@ if __name__ == "__main__":
         "-k",
         "--private-key",
         type=str,
-        required=True,
         help="load the TLS private key from the specified file",
     )
     parser.add_argument(

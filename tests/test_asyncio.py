@@ -16,6 +16,7 @@ from aioquic.quic.logger import QuicLogger
 from .utils import (
     SERVER_CACERTFILE,
     SERVER_CERTFILE,
+    SERVER_COMBINED,
     SERVER_KEYFILE,
     SKIP_TESTS,
     generate_ec_certificate,
@@ -391,3 +392,14 @@ class HighLevelTest(TestCase):
         server = run(self.run_server())
         server.datagram_received(binascii.unhexlify("c00000000080"), ("1.2.3.4", 1234))
         server.close()
+
+    def test_combined_key(self):
+        config1 = QuicConfiguration()
+        config2 = QuicConfiguration()
+        config1.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        config2.load_cert_chain(SERVER_COMBINED)
+
+        self.assertEqual(config1.certificate, config2.certificate)
+        self.assertEqual(
+            config1.private_key.private_numbers(), config2.private_key.private_numbers()
+        )
