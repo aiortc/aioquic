@@ -400,6 +400,3 @@ class HighLevelTest(TestCase):
         config2.load_cert_chain(SERVER_COMBINED)
 
         self.assertEqual(config1.certificate, config2.certificate)
-        self.assertEqual(
-            config1.private_key.private_numbers(), config2.private_key.private_numbers()
-        )
