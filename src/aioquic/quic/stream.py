@@ -83,6 +83,7 @@ class QuicStream:
             frame.data = frame.data[-pos:]
             frame.offset -= pos
             pos = 0
+            count = len(frame.data)
 
         # marked received range
         if frame_end > frame.offset:

@@ -108,6 +108,12 @@ class QuicStreamTest(TestCase):
         self.assertEqual(list(stream._recv_ranges), [])
         self.assertEqual(stream._recv_buffer_start, 8)
 
+        # add data again at offset 0
+        self.assertEqual(stream.add_frame(QuicStreamFrame(offset=0, data=b"01")), None)
+        self.assertEqual(bytes(stream._recv_buffer), b"")
+        self.assertEqual(list(stream._recv_ranges), [])
+        self.assertEqual(stream._recv_buffer_start, 8)
+
     def test_recv_already_partially_consumed(self):
         stream = QuicStream(stream_id=0)
 
@@ -123,6 +129,27 @@ class QuicStreamTest(TestCase):
         self.assertEqual(bytes(stream._recv_buffer), b"")
         self.assertEqual(list(stream._recv_ranges), [])
         self.assertEqual(stream._recv_buffer_start, 16)
+
+    def test_recv_already_partially_consumed_2(self):
+        stream = QuicStream(stream_id=0)
+
+        self.assertEqual(
+            stream.add_frame(QuicStreamFrame(offset=0, data=b"01234567")),
+            StreamDataReceived(data=b"01234567", end_stream=False, stream_id=0),
+        )
+
+        self.assertEqual(
+            stream.add_frame(QuicStreamFrame(offset=16, data=b"abcdefgh")),
+            None,
+        )
+
+        self.assertEqual(
+            stream.add_frame(QuicStreamFrame(offset=2, data=b"23456789012345")),
+            StreamDataReceived(data=b"89012345abcdefgh", end_stream=False, stream_id=0),
+        )
+        self.assertEqual(bytes(stream._recv_buffer), b"")
+        self.assertEqual(list(stream._recv_ranges), [])
+        self.assertEqual(stream._recv_buffer_start, 24)
 
     def test_recv_fin(self):
         stream = QuicStream(stream_id=0)
