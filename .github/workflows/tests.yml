@@ -43,8 +43,8 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           choco install openssl --no-progress
-          echo "::set-env name=CL::/IC:\Progra~1\OpenSSL-Win64\include"
-          echo "::set-env name=LINK::/LIBPATH:C:\Progra~1\OpenSSL-Win64\lib"
+          echo "::set-env name=INCLUDE::C:\Progra~1\OpenSSL-Win64\include"
+          echo "::set-env name=LIB::C:\Progra~1\OpenSSL-Win64\lib"
       - name: Run tests
         run: |
           python -m pip install -U pip setuptools wheel
@@ -77,6 +77,7 @@ jobs:
   package-wheel:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
@@ -89,11 +90,11 @@ jobs:
           CIBW_BEFORE_BUILD: python scripts/fetch-vendor /tmp/vendor
           CIBW_BEFORE_BUILD_WINDOWS: python scripts\fetch-vendor C:\cibw\vendor
           CIBW_ENVIRONMENT: AIOQUIC_SKIP_TESTS=ipv6,loss CFLAGS=-I/tmp/vendor/include LDFLAGS=-L/tmp/vendor/lib
-          CIBW_ENVIRONMENT_WINDOWS: AIOQUIC_SKIP_TESTS=ipv6,loss CL="/IC:\cibw\vendor\include" LINK="/LIBPATH:C:\cibw\vendor\lib"
+          CIBW_ENVIRONMENT_WINDOWS: AIOQUIC_SKIP_TESTS=ipv6,loss INCLUDE=C:\\cibw\\vendor\\include LIB=C:\\cibw\\vendor\\lib
           CIBW_SKIP: cp27-* cp33-* cp34-* cp35-* pp27-*
           CIBW_TEST_COMMAND: python -m unittest discover -t {project} -s {project}/tests
         run: |
-          pip install cibuildwheel==1.4.2
+          pip install cibuildwheel
           cibuildwheel --output-dir dist
       - name: Upload wheels
         uses: actions/upload-artifact@v1
