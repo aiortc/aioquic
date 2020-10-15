@@ -183,7 +183,7 @@ def hkdf_extract(
 
 
 def load_pem_private_key(
-    data: bytes, password: Optional[bytes]
+    data: bytes, password: Optional[bytes] = None
 ) -> Union[dsa.DSAPrivateKey, ec.EllipticCurvePrivateKey, rsa.RSAPrivateKey]:
     """
     Load a PEM-encoded private key.
