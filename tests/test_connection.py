@@ -279,10 +279,10 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(
                 labels,
                 [
-                    "QUIC_SERVER_HANDSHAKE_TRAFFIC_SECRET",
-                    "QUIC_CLIENT_HANDSHAKE_TRAFFIC_SECRET",
-                    "QUIC_SERVER_TRAFFIC_SECRET_0",
-                    "QUIC_CLIENT_TRAFFIC_SECRET_0",
+                    "SERVER_HANDSHAKE_TRAFFIC_SECRET",
+                    "CLIENT_HANDSHAKE_TRAFFIC_SECRET",
+                    "SERVER_TRAFFIC_SECRET_0",
+                    "CLIENT_TRAFFIC_SECRET_0",
                 ],
             )
 
