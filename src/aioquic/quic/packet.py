@@ -45,6 +45,8 @@ class QuicErrorCode(IntEnum):
     INVALID_TOKEN = 0xB
     APPLICATION_ERROR = 0xC
     CRYPTO_BUFFER_EXCEEDED = 0xD
+    KEY_UPDATE_ERROR = 0xE
+    AEAD_LIMIT_REACHED = 0xF
     CRYPTO_ERROR = 0x100
 
 
@@ -53,6 +55,9 @@ class QuicProtocolVersion(IntEnum):
     DRAFT_27 = 0xFF00001B
     DRAFT_28 = 0xFF00001C
     DRAFT_29 = 0xFF00001D
+    DRAFT_30 = 0xFF00001E
+    DRAFT_31 = 0xFF00001F
+    DRAFT_32 = 0xFF000020
 
 
 @dataclass
