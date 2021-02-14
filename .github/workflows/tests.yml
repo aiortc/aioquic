@@ -86,8 +86,12 @@ jobs:
       - uses: actions/setup-python@v1
         with:
           python-version: 3.7
+      - name: Install QEMU
+        if: matrix.os == 'ubuntu-latest'
+        uses: docker/setup-qemu-action@v1
       - name: Build wheels
         env:
+          CIBW_ARCHS_LINUX: auto aarch64
           CIBW_BEFORE_BUILD: python scripts/fetch-vendor /tmp/vendor
           CIBW_BEFORE_BUILD_WINDOWS: python scripts\fetch-vendor C:\cibw\vendor
           CIBW_ENVIRONMENT: AIOQUIC_SKIP_TESTS=ipv6,loss CFLAGS=-I/tmp/vendor/include LDFLAGS=-L/tmp/vendor/lib
