@@ -1937,6 +1937,15 @@ class QuicConnectionTest(TestCase):
                 "original_destination_connection_id is not allowed for clients",
             )
 
+    def test_payload_received_empty(self):
+        with client_and_server() as (client, server):
+            # client receives empty payload
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._payload_received(client_receive_context(client), b"")
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION)
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.PADDING)
+            self.assertEqual(cm.exception.reason_phrase, "Packet contains no frames")
+
     def test_payload_received_padding_only(self):
         with client_and_server() as (client, server):
             # client receives padding only
