@@ -10,6 +10,7 @@ from aioquic.buffer import UINT_VAR_MAX, Buffer, encode_uint_var
 from aioquic.quic import events
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.connection import (
+    STREAM_COUNT_MAX,
     QuicConnection,
     QuicConnectionError,
     QuicNetworkPath,
@@ -1213,6 +1214,22 @@ class QuicConnectionTest(TestCase):
             )
             self.assertEqual(client._remote_max_streams_bidi, 129)
 
+            # client receives invalid MAX_STREAMS_BIDI
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_max_streams_bidi_frame(
+                    client_receive_context(client),
+                    QuicFrameType.MAX_STREAMS_BIDI,
+                    Buffer(data=encode_uint_var(STREAM_COUNT_MAX + 1)),
+                )
+            self.assertEqual(
+                cm.exception.error_code,
+                QuicErrorCode.FRAME_ENCODING_ERROR,
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.MAX_STREAMS_BIDI)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Maximum Streams cannot exceed 2^60"
+            )
+
     def test_handle_max_streams_uni_frame(self):
         with client_and_server() as (client, server):
             self.assertEqual(client._remote_max_streams_uni, 128)
@@ -1232,6 +1249,22 @@ class QuicConnectionTest(TestCase):
                 Buffer(data=encode_uint_var(127)),
             )
             self.assertEqual(client._remote_max_streams_uni, 129)
+
+            # client receives invalid MAX_STREAMS_UNI
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_max_streams_uni_frame(
+                    client_receive_context(client),
+                    QuicFrameType.MAX_STREAMS_UNI,
+                    Buffer(data=encode_uint_var(STREAM_COUNT_MAX + 1)),
+                )
+            self.assertEqual(
+                cm.exception.error_code,
+                QuicErrorCode.FRAME_ENCODING_ERROR,
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.MAX_STREAMS_UNI)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Maximum Streams cannot exceed 2^60"
+            )
 
     def test_handle_new_connection_id_duplicate(self):
         with client_and_server() as (client, server):
@@ -1800,6 +1833,22 @@ class QuicConnectionTest(TestCase):
                 client_receive_context(client),
                 QuicFrameType.STREAMS_BLOCKED_UNI,
                 Buffer(data=b"\x00"),
+            )
+
+            # client receives invalid STREAMS_BLOCKED_UNI
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_streams_blocked_frame(
+                    client_receive_context(client),
+                    QuicFrameType.STREAMS_BLOCKED_UNI,
+                    Buffer(data=encode_uint_var(STREAM_COUNT_MAX + 1)),
+                )
+            self.assertEqual(
+                cm.exception.error_code,
+                QuicErrorCode.FRAME_ENCODING_ERROR,
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.STREAMS_BLOCKED_UNI)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Maximum Streams cannot exceed 2^60"
             )
 
     def test_parse_transport_parameters(self):
