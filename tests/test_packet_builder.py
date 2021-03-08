@@ -24,13 +24,15 @@ def create_builder(is_client=False):
         peer_cid=bytes(8),
         peer_token=b"",
         spin_bit=False,
-        version=QuicProtocolVersion.DRAFT_28,
+        version=QuicProtocolVersion.VERSION_1,
     )
 
 
 def create_crypto():
     crypto = CryptoPair()
-    crypto.setup_initial(bytes(8), is_client=True, version=QuicProtocolVersion.DRAFT_28)
+    crypto.setup_initial(
+        bytes(8), is_client=True, version=QuicProtocolVersion.VERSION_1
+    )
     return crypto
 
 

@@ -672,7 +672,7 @@ class TlsTest(TestCase):
             hello.other_extensions,
             [
                 (
-                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
                     CLIENT_QUIC_TRANSPORT_PARAMETERS,
                 )
             ],
@@ -861,7 +861,7 @@ class TlsTest(TestCase):
             hello.other_extensions,
             [
                 (
-                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
                     CLIENT_QUIC_TRANSPORT_PARAMETERS,
                 )
             ],
@@ -912,7 +912,7 @@ class TlsTest(TestCase):
             ],
             other_extensions=[
                 (
-                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
                     CLIENT_QUIC_TRANSPORT_PARAMETERS,
                 )
             ],
@@ -1115,7 +1115,7 @@ class TlsTest(TestCase):
             EncryptedExtensions(
                 other_extensions=[
                     (
-                        tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                        tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
                         SERVER_QUIC_TRANSPORT_PARAMETERS,
                     )
                 ]
@@ -1141,7 +1141,7 @@ class TlsTest(TestCase):
                 other_extensions=[
                     (tls.ExtensionType.SERVER_NAME, b""),
                     (
-                        tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                        tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
                         SERVER_QUIC_TRANSPORT_PARAMETERS_2,
                     ),
                 ],
@@ -1167,7 +1167,7 @@ class TlsTest(TestCase):
                 other_extensions=[
                     (tls.ExtensionType.SERVER_NAME, b""),
                     (
-                        tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                        tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
                         SERVER_QUIC_TRANSPORT_PARAMETERS_3,
                     ),
                 ],
