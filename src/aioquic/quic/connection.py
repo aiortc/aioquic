@@ -2143,6 +2143,7 @@ class QuicConnection:
         """
         buf = Buffer(data=plain)
 
+        frame_found = False
         is_ack_eliciting = False
         is_probing = None
         while not buf.eof():
@@ -2177,6 +2178,8 @@ class QuicConnection:
                 )
 
             # update ACK only / probing flags
+            frame_found = True
+
             if frame_type not in NON_ACK_ELICITING_FRAME_TYPES:
                 is_ack_eliciting = True
 
@@ -2184,6 +2187,13 @@ class QuicConnection:
                 is_probing = False
             elif is_probing is None:
                 is_probing = True
+
+        if not frame_found:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                frame_type=QuicFrameType.PADDING,
+                reason_phrase="Packet contains no frames",
+            )
 
         return is_ack_eliciting, bool(is_probing)
 
