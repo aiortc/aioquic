@@ -637,7 +637,7 @@ class QuicConnection:
             if self._close_event is None:
                 self._close_event = events.ConnectionTerminated(
                     error_code=QuicErrorCode.INTERNAL_ERROR,
-                    frame_type=None,
+                    frame_type=QuicFrameType.PADDING,
                     reason_phrase="Idle timeout",
                 )
             self._close_end()
@@ -742,7 +742,7 @@ class QuicConnection:
                     self._logger.error("Could not find a common protocol version")
                     self._close_event = events.ConnectionTerminated(
                         error_code=QuicErrorCode.INTERNAL_ERROR,
-                        frame_type=None,
+                        frame_type=QuicFrameType.PADDING,
                         reason_phrase="Could not find a common protocol version",
                     )
                     self._close_end()
@@ -858,7 +858,7 @@ class QuicConnection:
             if plain_header[0] & reserved_mask:
                 self.close(
                     error_code=QuicErrorCode.PROTOCOL_VIOLATION,
-                    frame_type=None,
+                    frame_type=QuicFrameType.PADDING,
                     reason_phrase="Reserved bits must be zero",
                 )
                 return

@@ -907,7 +907,7 @@ class QuicConnectionTest(TestCase):
             client._close_event,
             events.ConnectionTerminated(
                 error_code=QuicErrorCode.PROTOCOL_VIOLATION,
-                frame_type=None,
+                frame_type=QuicFrameType.PADDING,
                 reason_phrase="Reserved bits must be zero",
             ),
         )
@@ -2292,7 +2292,7 @@ class QuicConnectionTest(TestCase):
         event = client.next_event()
         self.assertEqual(type(event), events.ConnectionTerminated)
         self.assertEqual(event.error_code, QuicErrorCode.INTERNAL_ERROR)
-        self.assertEqual(event.frame_type, None)
+        self.assertEqual(event.frame_type, QuicFrameType.PADDING)
         self.assertEqual(
             event.reason_phrase, "Could not find a common protocol version"
         )
