@@ -29,6 +29,7 @@ from .packet import (
     QuicTransportParameters,
     get_retry_integrity_tag,
     get_spin_bit,
+    is_draft_version,
     is_long_header,
     pull_ack_frame,
     pull_quic_header,
@@ -106,6 +107,13 @@ def get_epoch(packet_type: int) -> tls.Epoch:
         return tls.Epoch.HANDSHAKE
     else:
         return tls.Epoch.ONE_RTT
+
+
+def get_transport_parameters_extension(version: int) -> tls.ExtensionType:
+    if is_draft_version(version):
+        return tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT
+    else:
+        return tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS
 
 
 def stream_is_client_initiated(stream_id: int) -> bool:
@@ -722,9 +730,9 @@ class QuicConnection:
                         "Version negotiation packet contains %s" % self._version
                     )
                     return
-                common = set(self._configuration.supported_versions).intersection(
-                    versions
-                )
+                common = [
+                    x for x in self._configuration.supported_versions if x in versions
+                ]
                 if not common:
                     self._logger.error("Could not find a common protocol version")
                     self._close_event = events.ConnectionTerminated(
@@ -735,7 +743,7 @@ class QuicConnection:
                     self._close_end()
                     return
                 self._packet_number = 0
-                self._version = QuicProtocolVersion(max(common))
+                self._version = QuicProtocolVersion(common[0])
                 self._version_negotiation_count += 1
                 self._logger.info("Retrying with %s", self._version)
                 self._connect(now=now)
@@ -1228,7 +1236,7 @@ class QuicConnection:
         self.tls.certificate_private_key = self._configuration.private_key
         self.tls.handshake_extensions = [
             (
-                tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                get_transport_parameters_extension(self._version),
                 self._serialize_transport_parameters(),
             )
         ]
@@ -1246,7 +1254,7 @@ class QuicConnection:
             # parse saved QUIC transport parameters - for 0-RTT
             if session_ticket.max_early_data_size == MAX_EARLY_DATA:
                 for ext_type, ext_data in session_ticket.other_extensions:
-                    if ext_type == tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS:
+                    if ext_type == get_transport_parameters_extension(self._version):
                         self._parse_transport_parameters(
                             ext_data, from_session_ticket=True
                         )
@@ -1417,7 +1425,7 @@ class QuicConnection:
                 and self.tls.received_extensions is not None
             ):
                 for ext_type, ext_data in self.tls.received_extensions:
-                    if ext_type == tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS:
+                    if ext_type == get_transport_parameters_extension(self._version):
                         self._parse_transport_parameters(ext_data)
                         self._parameters_received = True
                         break
@@ -2307,10 +2315,7 @@ class QuicConnection:
             else None,
             stateless_reset_token=self._host_cids[0].stateless_reset_token,
         )
-        if not self._is_client and (
-            self._version >= QuicProtocolVersion.DRAFT_28
-            or self._retry_source_connection_id
-        ):
+        if not self._is_client:
             quic_transport_parameters.original_destination_connection_id = (
                 self._original_destination_connection_id
             )

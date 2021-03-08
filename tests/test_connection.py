@@ -2235,7 +2235,7 @@ class QuicConnectionTest(TestCase):
             encode_quic_version_negotiation(
                 source_cid=client._peer_cid.cid,
                 destination_cid=client.host_cid,
-                supported_versions=[QuicProtocolVersion.DRAFT_28],
+                supported_versions=[QuicProtocolVersion.DRAFT_29],
             ),
             SERVER_ADDR,
             now=time.time(),

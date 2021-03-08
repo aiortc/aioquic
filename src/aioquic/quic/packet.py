@@ -23,10 +23,10 @@ PACKET_TYPE_MASK = 0xF0
 
 CONNECTION_ID_MAX_SIZE = 20
 PACKET_NUMBER_MAX_SIZE = 4
-RETRY_AEAD_KEY_DRAFT_25 = binascii.unhexlify("4d32ecdb2a2133c841e4043df27d4430")
 RETRY_AEAD_KEY_DRAFT_29 = binascii.unhexlify("ccce187ed09a09d05728155a6cb96be1")
-RETRY_AEAD_NONCE_DRAFT_25 = binascii.unhexlify("4d1611d05513a552c587d575")
+RETRY_AEAD_KEY_VERSION_1 = binascii.unhexlify("be0c690b9f66575a1d766b54e368c84e")
 RETRY_AEAD_NONCE_DRAFT_29 = binascii.unhexlify("e54930f97f2136f0530a8c1c")
+RETRY_AEAD_NONCE_VERSION_1 = binascii.unhexlify("461599d35d632bf2239825bb")
 RETRY_INTEGRITY_TAG_SIZE = 16
 
 
@@ -52,8 +52,7 @@ class QuicErrorCode(IntEnum):
 
 class QuicProtocolVersion(IntEnum):
     NEGOTIATION = 0
-    DRAFT_27 = 0xFF00001B
-    DRAFT_28 = 0xFF00001C
+    VERSION_1 = 0x00000001
     DRAFT_29 = 0xFF00001D
     DRAFT_30 = 0xFF00001E
     DRAFT_31 = 0xFF00001F
@@ -102,12 +101,12 @@ def get_retry_integrity_tag(
     buf.push_bytes(packet_without_tag)
     assert buf.eof()
 
-    if version < QuicProtocolVersion.DRAFT_29:
-        aead_key = RETRY_AEAD_KEY_DRAFT_25
-        aead_nonce = RETRY_AEAD_NONCE_DRAFT_25
-    else:
+    if is_draft_version(version):
         aead_key = RETRY_AEAD_KEY_DRAFT_29
         aead_nonce = RETRY_AEAD_NONCE_DRAFT_29
+    else:
+        aead_key = RETRY_AEAD_KEY_VERSION_1
+        aead_nonce = RETRY_AEAD_NONCE_VERSION_1
 
     # run AES-128-GCM
     aead = AESGCM(aead_key)
@@ -118,6 +117,15 @@ def get_retry_integrity_tag(
 
 def get_spin_bit(first_byte: int) -> bool:
     return bool(first_byte & PACKET_SPIN_BIT)
+
+
+def is_draft_version(version: int) -> bool:
+    return version in (
+        QuicProtocolVersion.DRAFT_29,
+        QuicProtocolVersion.DRAFT_30,
+        QuicProtocolVersion.DRAFT_31,
+        QuicProtocolVersion.DRAFT_32,
+    )
 
 
 def is_long_header(first_byte: int) -> bool:
