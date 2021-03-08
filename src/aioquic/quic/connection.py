@@ -71,6 +71,7 @@ SECRETS_LABELS = [
     ],
 ]
 STREAM_FLAGS = 0x07
+STREAM_COUNT_MAX = 0x1000000000000000
 
 NetworkAddress = Any
 
@@ -1593,6 +1594,12 @@ class QuicConnection:
         This raises number of bidirectional streams we can initiate to the peer.
         """
         max_streams = buf.pull_uint_var()
+        if max_streams > STREAM_COUNT_MAX:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Maximum Streams cannot exceed 2^60",
+            )
 
         # log frame
         if self._quic_logger is not None:
@@ -1616,6 +1623,12 @@ class QuicConnection:
         This raises number of unidirectional streams we can initiate to the peer.
         """
         max_streams = buf.pull_uint_var()
+        if max_streams > STREAM_COUNT_MAX:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Maximum Streams cannot exceed 2^60",
+            )
 
         # log frame
         if self._quic_logger is not None:
@@ -2009,6 +2022,12 @@ class QuicConnection:
         Handle a STREAMS_BLOCKED frame.
         """
         limit = buf.pull_uint_var()
+        if limit > STREAM_COUNT_MAX:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Maximum Streams cannot exceed 2^60",
+            )
 
         # log frame
         if self._quic_logger is not None:
