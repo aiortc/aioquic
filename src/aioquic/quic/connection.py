@@ -14,6 +14,7 @@ from .configuration import QuicConfiguration
 from .crypto import CryptoError, CryptoPair, KeyUnavailableError
 from .logger import QuicLoggerTrace
 from .packet import (
+    CONNECTION_ID_MAX_SIZE,
     NON_ACK_ELICITING_FRAME_TYPES,
     PACKET_TYPE_HANDSHAKE,
     PACKET_TYPE_INITIAL,
@@ -22,6 +23,7 @@ from .packet import (
     PACKET_TYPE_ZERO_RTT,
     PROBING_FRAME_TYPES,
     RETRY_INTEGRITY_TAG_SIZE,
+    STATELESS_RESET_TOKEN_SIZE,
     QuicErrorCode,
     QuicFrameType,
     QuicProtocolVersion,
@@ -81,7 +83,9 @@ APPLICATION_CLOSE_FRAME_CAPACITY = 1 + 8 + 8  # + reason length
 CONNECTION_LIMIT_FRAME_CAPACITY = 1 + 8
 HANDSHAKE_DONE_FRAME_CAPACITY = 1
 MAX_STREAM_DATA_FRAME_CAPACITY = 1 + 8 + 8
-NEW_CONNECTION_ID_FRAME_CAPACITY = 1 + 8 + 8 + 1 + 20 + 16
+NEW_CONNECTION_ID_FRAME_CAPACITY = (
+    1 + 8 + 8 + 1 + CONNECTION_ID_MAX_SIZE + STATELESS_RESET_TOKEN_SIZE
+)
 PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
 PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
 PING_FRAME_CAPACITY = 1
@@ -1653,7 +1657,13 @@ class QuicConnection:
         retire_prior_to = buf.pull_uint_var()
         length = buf.pull_uint8()
         connection_id = buf.pull_bytes(length)
-        stateless_reset_token = buf.pull_bytes(16)
+        stateless_reset_token = buf.pull_bytes(STATELESS_RESET_TOKEN_SIZE)
+        if not connection_id or len(connection_id) > CONNECTION_ID_MAX_SIZE:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Length must be greater than 0 and less than 20",
+            )
 
         # log frame
         if self._quic_logger is not None:
@@ -1671,7 +1681,7 @@ class QuicConnection:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.PROTOCOL_VIOLATION,
                 frame_type=frame_type,
-                reason_phrase="retire_prior_to is greater than the sequence_number",
+                reason_phrase="Retire Prior To is greater than Sequence Number",
             )
 
         # determine which CIDs to retire

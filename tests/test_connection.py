@@ -1335,6 +1335,33 @@ class QuicConnectionTest(TestCase):
                 sequence_numbers(client._peer_cid_available), [3, 4, 5, 6, 7, 8]
             )
 
+    def test_handle_new_connection_id_with_connection_id_invalid(self):
+        with client_and_server() as (client, server):
+            buf = Buffer(capacity=100)
+            buf.push_uint_var(8)  # sequence_number
+            buf.push_uint_var(2)  # retire_prior_to
+            buf.push_uint_var(21)
+            buf.push_bytes(bytes(21))
+            buf.push_bytes(bytes(16))
+            buf.seek(0)
+
+            # client receives NEW_CONNECTION_ID
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_new_connection_id_frame(
+                    client_receive_context(client),
+                    QuicFrameType.NEW_CONNECTION_ID,
+                    buf,
+                )
+            self.assertEqual(
+                cm.exception.error_code,
+                QuicErrorCode.FRAME_ENCODING_ERROR,
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.NEW_CONNECTION_ID)
+            self.assertEqual(
+                cm.exception.reason_phrase,
+                "Length must be greater than 0 and less than 20",
+            )
+
     def test_handle_new_connection_id_with_retire_prior_to_invalid(self):
         with client_and_server() as (client, server):
             buf = Buffer(capacity=100)
@@ -1359,7 +1386,7 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(cm.exception.frame_type, QuicFrameType.NEW_CONNECTION_ID)
             self.assertEqual(
                 cm.exception.reason_phrase,
-                "retire_prior_to is greater than the sequence_number",
+                "Retire Prior To is greater than Sequence Number",
             )
 
     def test_handle_new_token_frame(self):
