@@ -20,6 +20,7 @@ from aioquic.quic.logger import QuicLoggerTrace
 logger = logging.getLogger("http3")
 
 H3_ALPN = ["h3", "h3-32", "h3-31", "h3-30", "h3-29"]
+RESERVED_SETTINGS = (0x0, 0x2, 0x3, 0x4, 0x5)
 
 
 class ErrorCode(IntEnum):
@@ -64,10 +65,14 @@ class HeadersState(Enum):
 
 
 class Setting(IntEnum):
-    QPACK_MAX_TABLE_CAPACITY = 1
-    SETTINGS_MAX_HEADER_LIST_SIZE = 6
-    QPACK_BLOCKED_STREAMS = 7
-    SETTINGS_NUM_PLACEHOLDERS = 9
+    QPACK_MAX_TABLE_CAPACITY = 0x1
+    SETTINGS_MAX_HEADER_LIST_SIZE = 0x6
+    QPACK_BLOCKED_STREAMS = 0x7
+    SETTINGS_NUM_PLACEHOLDERS = 0x9
+
+    #  Dummy setting to check it is correctly ignored by the peer.
+    # https://tools.ietf.org/html/draft-ietf-quic-http-34#section-7.2.4.1
+    DUMMY = 0x21
 
 
 class StreamType(IntEnum):
@@ -107,6 +112,10 @@ class MissingSettingsError(ProtocolError):
     error_code = ErrorCode.H3_MISSING_SETTINGS
 
 
+class SettingsError(ProtocolError):
+    error_code = ErrorCode.H3_SETTINGS_ERROR
+
+
 class StreamCreationError(ProtocolError):
     error_code = ErrorCode.H3_STREAM_CREATION_ERROR
 
@@ -141,11 +150,15 @@ def parse_max_push_id(data: bytes) -> int:
 
 def parse_settings(data: bytes) -> Dict[int, int]:
     buf = Buffer(data=data)
-    settings = []
+    settings: Dict[int, int] = {}
     while not buf.eof():
         setting = buf.pull_uint_var()
         value = buf.pull_uint_var()
-        settings.append((setting, value))
+        if setting in RESERVED_SETTINGS:
+            raise SettingsError("Setting identifier 0x%x is reserved" % setting)
+        if setting in settings:
+            raise SettingsError("Setting identifier 0x%x is included twice" % setting)
+        settings[setting] = value
     return dict(settings)
 
 
@@ -551,6 +564,7 @@ class H3Connection:
                     {
                         Setting.QPACK_MAX_TABLE_CAPACITY: self._max_table_capacity,
                         Setting.QPACK_BLOCKED_STREAMS: self._blocked_streams,
+                        Setting.DUMMY: 1,
                     }
                 ),
             ),

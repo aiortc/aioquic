@@ -1,7 +1,7 @@
 import binascii
 from unittest import TestCase
 
-from aioquic.buffer import encode_uint_var
+from aioquic.buffer import Buffer, encode_uint_var
 from aioquic.h3.connection import (
     H3_ALPN,
     ErrorCode,
@@ -9,9 +9,11 @@ from aioquic.h3.connection import (
     FrameUnexpected,
     H3Connection,
     Setting,
+    SettingsError,
     StreamType,
     encode_frame,
     encode_settings,
+    parse_settings,
 )
 from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived
 from aioquic.h3.exceptions import NoAvailablePushIDError
@@ -24,6 +26,7 @@ from .test_connection import client_and_server, transfer
 DUMMY_SETTINGS = {
     Setting.QPACK_MAX_TABLE_CAPACITY: 4096,
     Setting.QPACK_BLOCKED_STREAMS: 16,
+    Setting.DUMMY: 1,
 }
 
 
@@ -1369,3 +1372,29 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_server._stream[2].stream_type, 9)
             self.assertEqual(h3_server._stream[6].buffer, b"")
             self.assertEqual(h3_server._stream[6].stream_type, 64)
+
+
+class H3ParserTest(TestCase):
+    def test_parse_settings_duplicate_identifier(self):
+        buf = Buffer(capacity=1024)
+        buf.push_uint_var(1)
+        buf.push_uint_var(123)
+        buf.push_uint_var(1)
+        buf.push_uint_var(456)
+
+        with self.assertRaises(SettingsError) as cm:
+            parse_settings(buf.data)
+        self.assertEqual(
+            cm.exception.reason_phrase, "Setting identifier 0x1 is included twice"
+        )
+
+    def test_parse_settings_reserved_identifier(self):
+        buf = Buffer(capacity=1024)
+        buf.push_uint_var(0)
+        buf.push_uint_var(123)
+
+        with self.assertRaises(SettingsError) as cm:
+            parse_settings(buf.data)
+        self.assertEqual(
+            cm.exception.reason_phrase, "Setting identifier 0x0 is reserved"
+        )
