@@ -103,6 +103,10 @@ class QpackEncoderStreamError(ProtocolError):
     error_code = ErrorCode.QPACK_ENCODER_STREAM_ERROR
 
 
+class MissingSettingsError(ProtocolError):
+    error_code = ErrorCode.H3_MISSING_SETTINGS
+
+
 class StreamCreationError(ProtocolError):
     error_code = ErrorCode.H3_STREAM_CREATION_ERROR
 
@@ -221,6 +225,7 @@ class H3Connection:
         self._encoder = pylsqpack.Encoder()
         self._encoder_bytes_received = 0
         self._encoder_bytes_sent = 0
+        self._settings_received = False
         self._stream: Dict[int, H3Stream] = {}
 
         self._max_push_id: Optional[int] = 8 if self._is_client else None
@@ -404,6 +409,9 @@ class H3Connection:
         """
         Handle a frame received on the peer's control stream.
         """
+        if frame_type != FrameType.SETTINGS and not self._settings_received:
+            raise MissingSettingsError
+
         if frame_type == FrameType.SETTINGS:
             settings = parse_settings(frame_data)
             encoder = self._encoder.apply_settings(
@@ -411,6 +419,7 @@ class H3Connection:
                 blocked_streams=settings.get(Setting.QPACK_BLOCKED_STREAMS, 0),
             )
             self._quic.send_stream_data(self._local_encoder_stream_id, encoder)
+            self._settings_received = True
         elif frame_type == FrameType.MAX_PUSH_ID:
             if self._is_client:
                 raise FrameUnexpected("Servers must not send MAX_PUSH_ID")

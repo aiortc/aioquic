@@ -8,8 +8,10 @@ from aioquic.h3.connection import (
     FrameType,
     FrameUnexpected,
     H3Connection,
+    Setting,
     StreamType,
     encode_frame,
+    encode_settings,
 )
 from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived
 from aioquic.h3.exceptions import NoAvailablePushIDError
@@ -18,6 +20,11 @@ from aioquic.quic.events import StreamDataReceived
 from aioquic.quic.logger import QuicLogger
 
 from .test_connection import client_and_server, transfer
+
+DUMMY_SETTINGS = {
+    Setting.QPACK_MAX_TABLE_CAPACITY: 4096,
+    Setting.QPACK_BLOCKED_STREAMS: 16,
+}
 
 
 def h3_client_and_server():
@@ -175,17 +182,51 @@ class H3ConnectionTest(TestCase):
         )
         h3_server = H3Connection(quic_server)
 
+        # receive SETTINGS
         h3_server.handle_event(
             StreamDataReceived(
                 stream_id=2,
                 data=encode_uint_var(StreamType.CONTROL)
-                + encode_frame(FrameType.HEADERS, b""),
+                + encode_frame(FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)),
+                end_stream=False,
+            )
+        )
+        self.assertIsNone(quic_server.closed)
+
+        # receive unexpected HEADERS
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_frame(FrameType.HEADERS, b""),
                 end_stream=False,
             )
         )
         self.assertEqual(
             quic_server.closed,
             (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on control stream"),
+        )
+
+    def test_handle_control_frame_max_push_id_from_client_before_settings(self):
+        """
+        A server should not receive MAX_PUSH_ID before SETTINGS.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive unexpected MAX_PUSH_ID
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.MAX_PUSH_ID, b""),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (ErrorCode.H3_MISSING_SETTINGS, ""),
         )
 
     def test_handle_control_frame_max_push_id_from_server(self):
@@ -197,11 +238,22 @@ class H3ConnectionTest(TestCase):
         )
         h3_client = H3Connection(quic_client)
 
+        # receive SETTINGS
         h3_client.handle_event(
             StreamDataReceived(
                 stream_id=3,
                 data=encode_uint_var(StreamType.CONTROL)
-                + encode_frame(FrameType.MAX_PUSH_ID, b""),
+                + encode_frame(FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)),
+                end_stream=False,
+            )
+        )
+        self.assertIsNone(quic_client.closed)
+
+        # receive unexpected MAX_PUSH_ID
+        h3_client.handle_event(
+            StreamDataReceived(
+                stream_id=3,
+                data=encode_frame(FrameType.MAX_PUSH_ID, b""),
                 end_stream=False,
             )
         )
