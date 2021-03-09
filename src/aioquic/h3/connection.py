@@ -1,6 +1,7 @@
 import logging
+import re
 from enum import Enum, IntEnum
-from typing import Dict, List, Optional, Set
+from typing import Dict, FrozenSet, List, Optional, Set
 
 import pylsqpack
 
@@ -21,6 +22,7 @@ logger = logging.getLogger("http3")
 
 H3_ALPN = ["h3", "h3-32", "h3-31", "h3-30", "h3-29"]
 RESERVED_SETTINGS = (0x0, 0x2, 0x3, 0x4, 0x5)
+UPPERCASE = re.compile(b"[A-Z]")
 
 
 class ErrorCode(IntEnum):
@@ -108,6 +110,14 @@ class QpackEncoderStreamError(ProtocolError):
     error_code = ErrorCode.QPACK_ENCODER_STREAM_ERROR
 
 
+class FrameUnexpected(ProtocolError):
+    error_code = ErrorCode.H3_FRAME_UNEXPECTED
+
+
+class MessageError(ProtocolError):
+    error_code = ErrorCode.H3_MESSAGE_ERROR
+
+
 class MissingSettingsError(ProtocolError):
     error_code = ErrorCode.H3_MISSING_SETTINGS
 
@@ -118,10 +128,6 @@ class SettingsError(ProtocolError):
 
 class StreamCreationError(ProtocolError):
     error_code = ErrorCode.H3_STREAM_CREATION_ERROR
-
-
-class FrameUnexpected(ProtocolError):
-    error_code = ErrorCode.H3_FRAME_UNEXPECTED
 
 
 def encode_frame(frame_type: int, frame_data: bytes) -> bytes:
@@ -198,6 +204,95 @@ def qlog_encode_push_promise_frame(
         },
         "stream_id": str(stream_id),
     }
+
+
+def validate_headers(
+    headers: Headers,
+    allowed_pseudo_headers: FrozenSet[bytes],
+    required_pseudo_headers: FrozenSet[bytes],
+) -> None:
+    after_pseudo_headers = False
+    authority: Optional[bytes] = None
+    path: Optional[bytes] = None
+    scheme: Optional[bytes] = None
+    seen_pseudo_headers: Set[bytes] = set()
+    for key, value in headers:
+        if UPPERCASE.search(key):
+            raise MessageError("Header %r contains uppercase letters" % key)
+
+        if key.startswith(b":"):
+            # pseudo-headers
+            if after_pseudo_headers:
+                raise MessageError(
+                    "Pseudo-header %r is not allowed after regular headers" % key
+                )
+            if key not in allowed_pseudo_headers:
+                raise MessageError("Pseudo-header %r is not valid" % key)
+            if key in seen_pseudo_headers:
+                raise MessageError("Pseudo-header %r is included twice" % key)
+            seen_pseudo_headers.add(key)
+
+            # store value
+            if key == b":authority":
+                authority = value
+            elif key == b":path":
+                path = value
+            elif key == b":scheme":
+                scheme = value
+        else:
+            # regular headers
+            after_pseudo_headers = True
+
+    # check required pseudo-headers are present
+    missing = required_pseudo_headers.difference(seen_pseudo_headers)
+    if missing:
+        raise MessageError("Pseudo-headers %s are missing" % sorted(missing))
+
+    if scheme in (b"http", b"https"):
+        if not authority:
+            raise MessageError("Pseudo-header b':authority' cannot be empty")
+        if not path:
+            raise MessageError("Pseudo-header b':path' cannot be empty")
+
+
+def validate_push_promise_headers(headers: Headers) -> None:
+    validate_headers(
+        headers,
+        allowed_pseudo_headers=frozenset(
+            (b":method", b":scheme", b":authority", b":path")
+        ),
+        required_pseudo_headers=frozenset(
+            (b":method", b":scheme", b":authority", b":path")
+        ),
+    )
+
+
+def validate_request_headers(headers: Headers) -> None:
+    validate_headers(
+        headers,
+        allowed_pseudo_headers=frozenset(
+            # FIXME: The pseudo-header :protocol is not actually defined, but
+            # we use it for the WebSocket demo.
+            (b":method", b":scheme", b":authority", b":path", b":protocol")
+        ),
+        required_pseudo_headers=frozenset((b":method", b":scheme", b":path")),
+    )
+
+
+def validate_response_headers(headers: Headers) -> None:
+    validate_headers(
+        headers,
+        allowed_pseudo_headers=frozenset((b":status",)),
+        required_pseudo_headers=frozenset((b":status",)),
+    )
+
+
+def validate_trailers(headers: Headers) -> None:
+    validate_headers(
+        headers,
+        allowed_pseudo_headers=frozenset(),
+        required_pseudo_headers=frozenset(),
+    )
 
 
 class H3Stream:
@@ -481,6 +576,15 @@ class H3Connection:
             # try to decode HEADERS, may raise pylsqpack.StreamBlocked
             headers = self._decode_headers(stream.stream_id, frame_data)
 
+            # validate headers
+            if stream.headers_recv_state == HeadersState.INITIAL:
+                if self._is_client:
+                    validate_response_headers(headers)
+                else:
+                    validate_request_headers(headers)
+            else:
+                validate_trailers(headers)
+
             # log frame
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
@@ -516,6 +620,9 @@ class H3Connection:
             headers = self._decode_headers(
                 stream.stream_id, frame_data[frame_buf.tell() :]
             )
+
+            # validate headers
+            validate_push_promise_headers(headers)
 
             # log frame
             if self._quic_logger is not None:

@@ -8,12 +8,17 @@ from aioquic.h3.connection import (
     FrameType,
     FrameUnexpected,
     H3Connection,
+    MessageError,
     Setting,
     SettingsError,
     StreamType,
     encode_frame,
     encode_settings,
     parse_settings,
+    validate_push_promise_headers,
+    validate_request_headers,
+    validate_response_headers,
+    validate_trailers,
 )
 from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived
 from aioquic.h3.exceptions import NoAvailablePushIDError
@@ -1397,4 +1402,227 @@ class H3ParserTest(TestCase):
             parse_settings(buf.data)
         self.assertEqual(
             cm.exception.reason_phrase, "Setting identifier 0x0 is reserved"
+        )
+
+    def test_validate_push_promise_headers(self):
+        # OK
+        validate_push_promise_headers(
+            [
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":path", b"/"),
+                (b":authority", b"localhost"),
+            ]
+        )
+        validate_push_promise_headers(
+            [
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":path", b"/"),
+                (b":authority", b"localhost"),
+                (b"x-foo", b"bar"),
+            ]
+        )
+
+        # invalid pseudo-header
+        with self.assertRaises(MessageError) as cm:
+            validate_push_promise_headers([(b":status", b"foo")])
+        self.assertEqual(
+            cm.exception.reason_phrase, "Pseudo-header b':status' is not valid"
+        )
+
+        # duplicate pseudo-header
+        with self.assertRaises(MessageError) as cm:
+            validate_push_promise_headers(
+                [
+                    (b":method", b"GET"),
+                    (b":method", b"POST"),
+                ]
+            )
+        self.assertEqual(
+            cm.exception.reason_phrase, "Pseudo-header b':method' is included twice"
+        )
+
+        # pseudo-header after regular headers
+        with self.assertRaises(MessageError) as cm:
+            validate_push_promise_headers(
+                [
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":path", b"/"),
+                    (b"x-foo", b"bar"),
+                    (b":authority", b"foo"),
+                ]
+            )
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "Pseudo-header b':authority' is not allowed after regular headers",
+        )
+
+        # missing pseudo-headers
+        with self.assertRaises(MessageError) as cm:
+            validate_push_promise_headers(
+                [
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":path", b"/"),
+                ]
+            )
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "Pseudo-headers [b':authority'] are missing",
+        )
+
+    def test_validate_request_headers(self):
+        # OK
+        validate_request_headers(
+            [
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":path", b"/"),
+                (b":authority", b"localhost"),
+            ]
+        )
+        validate_request_headers(
+            [
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":path", b"/"),
+                (b":authority", b"localhost"),
+                (b"x-foo", b"bar"),
+            ]
+        )
+
+        # uppercase header
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers([(b"X-Foo", b"foo")])
+        self.assertEqual(
+            cm.exception.reason_phrase, "Header b'X-Foo' contains uppercase letters"
+        )
+
+        # invalid pseudo-header
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers([(b":status", b"foo")])
+        self.assertEqual(
+            cm.exception.reason_phrase, "Pseudo-header b':status' is not valid"
+        )
+
+        # duplicate pseudo-header
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers(
+                [
+                    (b":method", b"GET"),
+                    (b":method", b"POST"),
+                ]
+            )
+        self.assertEqual(
+            cm.exception.reason_phrase, "Pseudo-header b':method' is included twice"
+        )
+
+        # pseudo-header after regular headers
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers(
+                [
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":path", b"/"),
+                    (b"x-foo", b"bar"),
+                    (b":authority", b"foo"),
+                ]
+            )
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "Pseudo-header b':authority' is not allowed after regular headers",
+        )
+
+        # missing pseudo-headers
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers([(b":method", b"GET")])
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "Pseudo-headers [b':path', b':scheme'] are missing",
+        )
+
+        # empty :authority pseudo-header for http/https
+        for scheme in [b"http", b"https"]:
+            with self.assertRaises(MessageError) as cm:
+                validate_request_headers(
+                    [
+                        (b":method", b"GET"),
+                        (b":scheme", scheme),
+                        (b":authority", b""),
+                        (b":path", b"/"),
+                    ]
+                )
+            self.assertEqual(
+                cm.exception.reason_phrase,
+                "Pseudo-header b':authority' cannot be empty",
+            )
+
+        # empty :path pseudo-header for http/https
+        for scheme in [b"http", b"https"]:
+            with self.assertRaises(MessageError) as cm:
+                validate_request_headers(
+                    [
+                        (b":method", b"GET"),
+                        (b":scheme", scheme),
+                        (b":authority", b"localhost"),
+                        (b":path", b""),
+                    ]
+                )
+            self.assertEqual(
+                cm.exception.reason_phrase, "Pseudo-header b':path' cannot be empty"
+            )
+
+    def test_validate_response_headers(self):
+        # OK
+        validate_response_headers([(b":status", b"200")])
+        validate_response_headers(
+            [
+                (b":status", b"200"),
+                (b"x-foo", b"bar"),
+            ]
+        )
+
+        # invalid pseudo-header
+        with self.assertRaises(MessageError) as cm:
+            validate_response_headers([(b":method", b"GET")])
+        self.assertEqual(
+            cm.exception.reason_phrase, "Pseudo-header b':method' is not valid"
+        )
+
+        # duplicate pseudo-header
+        with self.assertRaises(MessageError) as cm:
+            validate_response_headers(
+                [
+                    (b":status", b"200"),
+                    (b":status", b"501"),
+                ]
+            )
+        self.assertEqual(
+            cm.exception.reason_phrase, "Pseudo-header b':status' is included twice"
+        )
+
+    def test_validate_trailers(self):
+        # OK
+        validate_trailers([(b"x-foo", b"bar")])
+
+        # invalid pseudo-header
+        with self.assertRaises(MessageError) as cm:
+            validate_trailers([(b":status", b"foo")])
+        self.assertEqual(
+            cm.exception.reason_phrase, "Pseudo-header b':status' is not valid"
+        )
+
+        # pseudo-header after regular headers
+        with self.assertRaises(MessageError) as cm:
+            validate_trailers(
+                [
+                    (b"x-foo", b"bar"),
+                    (b":authority", b"foo"),
+                ]
+            )
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "Pseudo-header b':authority' is not allowed after regular headers",
         )
