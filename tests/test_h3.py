@@ -185,7 +185,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(
             quic_server.closed,
-            (ErrorCode.HTTP_FRAME_UNEXPECTED, "Invalid frame type on control stream"),
+            (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on control stream"),
         )
 
     def test_handle_control_frame_max_push_id_from_server(self):
@@ -207,7 +207,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(
             quic_client.closed,
-            (ErrorCode.HTTP_FRAME_UNEXPECTED, "Servers must not send MAX_PUSH_ID"),
+            (ErrorCode.H3_FRAME_UNEXPECTED, "Servers must not send MAX_PUSH_ID"),
         )
 
     def test_handle_control_stream_duplicate(self):
@@ -235,7 +235,7 @@ class H3ConnectionTest(TestCase):
         self.assertEqual(
             quic_server.closed,
             (
-                ErrorCode.HTTP_STREAM_CREATION_ERROR,
+                ErrorCode.H3_STREAM_CREATION_ERROR,
                 "Only one control stream is allowed",
             ),
         )
@@ -260,7 +260,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(
             quic_client.closed,
-            (ErrorCode.HTTP_FRAME_UNEXPECTED, "Invalid frame type on push stream"),
+            (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on push stream"),
         )
 
     def test_handle_qpack_decoder_duplicate(self):
@@ -292,7 +292,7 @@ class H3ConnectionTest(TestCase):
         self.assertEqual(
             quic_client.closed,
             (
-                ErrorCode.HTTP_STREAM_CREATION_ERROR,
+                ErrorCode.H3_STREAM_CREATION_ERROR,
                 "Only one QPACK decoder stream is allowed",
             ),
         )
@@ -313,9 +313,7 @@ class H3ConnectionTest(TestCase):
                 end_stream=False,
             )
         )
-        self.assertEqual(
-            quic_client.closed, (ErrorCode.HTTP_QPACK_DECODER_STREAM_ERROR, "")
-        )
+        self.assertEqual(quic_client.closed, (ErrorCode.QPACK_DECODER_STREAM_ERROR, ""))
 
     def test_handle_qpack_encoder_duplicate(self):
         """
@@ -346,7 +344,7 @@ class H3ConnectionTest(TestCase):
         self.assertEqual(
             quic_client.closed,
             (
-                ErrorCode.HTTP_STREAM_CREATION_ERROR,
+                ErrorCode.H3_STREAM_CREATION_ERROR,
                 "Only one QPACK encoder stream is allowed",
             ),
         )
@@ -367,9 +365,7 @@ class H3ConnectionTest(TestCase):
                 end_stream=False,
             )
         )
-        self.assertEqual(
-            quic_client.closed, (ErrorCode.HTTP_QPACK_ENCODER_STREAM_ERROR, "")
-        )
+        self.assertEqual(quic_client.closed, (ErrorCode.QPACK_ENCODER_STREAM_ERROR, ""))
 
     def test_handle_request_frame_bad_headers(self):
         """
@@ -385,9 +381,7 @@ class H3ConnectionTest(TestCase):
                 stream_id=0, data=encode_frame(FrameType.HEADERS, b""), end_stream=False
             )
         )
-        self.assertEqual(
-            quic_server.closed, (ErrorCode.HTTP_QPACK_DECOMPRESSION_FAILED, "")
-        )
+        self.assertEqual(quic_server.closed, (ErrorCode.QPACK_DECOMPRESSION_FAILED, ""))
 
     def test_handle_request_frame_data_before_headers(self):
         """
@@ -406,7 +400,7 @@ class H3ConnectionTest(TestCase):
         self.assertEqual(
             quic_server.closed,
             (
-                ErrorCode.HTTP_FRAME_UNEXPECTED,
+                ErrorCode.H3_FRAME_UNEXPECTED,
                 "DATA frame is not allowed in this state",
             ),
         )
@@ -448,7 +442,7 @@ class H3ConnectionTest(TestCase):
         self.assertEqual(
             quic_server.closed,
             (
-                ErrorCode.HTTP_FRAME_UNEXPECTED,
+                ErrorCode.H3_FRAME_UNEXPECTED,
                 "HEADERS frame is not allowed in this state",
             ),
         )
@@ -471,7 +465,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(
             quic_server.closed,
-            (ErrorCode.HTTP_FRAME_UNEXPECTED, "Clients must not send PUSH_PROMISE"),
+            (ErrorCode.H3_FRAME_UNEXPECTED, "Clients must not send PUSH_PROMISE"),
         )
 
     def test_handle_request_frame_wrong_frame_type(self):
@@ -489,7 +483,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(
             quic_server.closed,
-            (ErrorCode.HTTP_FRAME_UNEXPECTED, "Invalid frame type on request stream"),
+            (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on request stream"),
         )
 
     def test_request(self):

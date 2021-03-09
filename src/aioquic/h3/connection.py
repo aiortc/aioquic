@@ -23,26 +23,26 @@ H3_ALPN = ["h3", "h3-32", "h3-31", "h3-30", "h3-29"]
 
 
 class ErrorCode(IntEnum):
-    HTTP_NO_ERROR = 0x100
-    HTTP_GENERAL_PROTOCOL_ERROR = 0x101
-    HTTP_INTERNAL_ERROR = 0x102
-    HTTP_STREAM_CREATION_ERROR = 0x103
-    HTTP_CLOSED_CRITICAL_STREAM = 0x104
-    HTTP_FRAME_UNEXPECTED = 0x105
-    HTTP_FRAME_ERROR = 0x106
-    HTTP_EXCESSIVE_LOAD = 0x107
-    HTTP_ID_ERROR = 0x108
-    HTTP_SETTINGS_ERROR = 0x109
-    HTTP_MISSING_SETTINGS = 0x10A
-    HTTP_REQUEST_REJECTED = 0x10B
-    HTTP_REQUEST_CANCELLED = 0x10C
-    HTTP_REQUEST_INCOMPLETE = 0x10D
-    HTTP_EARLY_RESPONSE = 0x10E
-    HTTP_CONNECT_ERROR = 0x10F
-    HTTP_VERSION_FALLBACK = 0x110
-    HTTP_QPACK_DECOMPRESSION_FAILED = 0x200
-    HTTP_QPACK_ENCODER_STREAM_ERROR = 0x201
-    HTTP_QPACK_DECODER_STREAM_ERROR = 0x202
+    H3_NO_ERROR = 0x100
+    H3_GENERAL_PROTOCOL_ERROR = 0x101
+    H3_INTERNAL_ERROR = 0x102
+    H3_STREAM_CREATION_ERROR = 0x103
+    H3_CLOSED_CRITICAL_STREAM = 0x104
+    H3_FRAME_UNEXPECTED = 0x105
+    H3_FRAME_ERROR = 0x106
+    H3_EXCESSIVE_LOAD = 0x107
+    H3_ID_ERROR = 0x108
+    H3_SETTINGS_ERROR = 0x109
+    H3_MISSING_SETTINGS = 0x10A
+    H3_REQUEST_REJECTED = 0x10B
+    H3_REQUEST_CANCELLED = 0x10C
+    H3_REQUEST_INCOMPLETE = 0x10D
+    H3_MESSAGE_ERROR = 0x10E
+    H3_CONNECT_ERROR = 0x10F
+    H3_VERSION_FALLBACK = 0x110
+    QPACK_DECOMPRESSION_FAILED = 0x200
+    QPACK_ENCODER_STREAM_ERROR = 0x201
+    QPACK_DECODER_STREAM_ERROR = 0x202
 
 
 class FrameType(IntEnum):
@@ -85,30 +85,30 @@ class ProtocolError(Exception):
     in :meth:`H3Connection.handle_event`.
     """
 
-    error_code = ErrorCode.HTTP_GENERAL_PROTOCOL_ERROR
+    error_code = ErrorCode.H3_GENERAL_PROTOCOL_ERROR
 
     def __init__(self, reason_phrase: str = ""):
         self.reason_phrase = reason_phrase
 
 
 class QpackDecompressionFailed(ProtocolError):
-    error_code = ErrorCode.HTTP_QPACK_DECOMPRESSION_FAILED
+    error_code = ErrorCode.QPACK_DECOMPRESSION_FAILED
 
 
 class QpackDecoderStreamError(ProtocolError):
-    error_code = ErrorCode.HTTP_QPACK_DECODER_STREAM_ERROR
+    error_code = ErrorCode.QPACK_DECODER_STREAM_ERROR
 
 
 class QpackEncoderStreamError(ProtocolError):
-    error_code = ErrorCode.HTTP_QPACK_ENCODER_STREAM_ERROR
+    error_code = ErrorCode.QPACK_ENCODER_STREAM_ERROR
 
 
 class StreamCreationError(ProtocolError):
-    error_code = ErrorCode.HTTP_STREAM_CREATION_ERROR
+    error_code = ErrorCode.H3_STREAM_CREATION_ERROR
 
 
 class FrameUnexpected(ProtocolError):
-    error_code = ErrorCode.HTTP_FRAME_UNEXPECTED
+    error_code = ErrorCode.H3_FRAME_UNEXPECTED
 
 
 def encode_frame(frame_type: int, frame_data: bytes) -> bytes:
