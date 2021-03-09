@@ -262,6 +262,39 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "Servers must not send MAX_PUSH_ID"),
         )
 
+    def test_handle_control_settings_twice(self):
+        """
+        We should not receive HEADERS on the control stream.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive SETTINGS
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)),
+                end_stream=False,
+            )
+        )
+        self.assertIsNone(quic_server.closed)
+
+        # receive unexpected SETTINGS
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_frame(FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (ErrorCode.H3_FRAME_UNEXPECTED, "SETTINGS have already been received"),
+        )
+
     def test_handle_control_stream_duplicate(self):
         """
         We must only receive a single control stream.

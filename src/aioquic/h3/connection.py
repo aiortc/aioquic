@@ -413,6 +413,8 @@ class H3Connection:
             raise MissingSettingsError
 
         if frame_type == FrameType.SETTINGS:
+            if self._settings_received:
+                raise FrameUnexpected("SETTINGS have already been received")
             settings = parse_settings(frame_data)
             encoder = self._encoder.apply_settings(
                 max_table_capacity=settings.get(Setting.QPACK_MAX_TABLE_CAPACITY, 0),
