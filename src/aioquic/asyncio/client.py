@@ -67,7 +67,10 @@ async def connect(
             local_host = "0.0.0.0"
         else:
             # other platforms support dual-stack sockets
-            addr = ("::ffff:" + addr[0], addr[1], 0, 0)
+            addr = ("::ffff:" + addr[0], addr[1])
+    else:
+        # force IPv6 four-tuple to a two-tuple
+        addr = (addr[0], addr[1])
 
     # prepare QUIC connection
     if configuration is None:

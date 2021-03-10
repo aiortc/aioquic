@@ -57,6 +57,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
 
         This method can only be called for clients and a single time.
         """
+        assert len(addr) == 2, "address must be a two-tuple"
         self._quic.connect(addr, now=self._loop.time())
         self.transmit()
 
@@ -132,7 +133,10 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         self._transport = cast(asyncio.DatagramTransport, transport)
 
     def datagram_received(self, data: Union[bytes, Text], addr: NetworkAddress) -> None:
-        self._quic.receive_datagram(cast(bytes, data), addr, now=self._loop.time())
+        # force IPv6 four-tuple to a two-tuple
+        addr = (addr[0], addr[1])
+        data = cast(bytes, data)
+        self._quic.receive_datagram(data, addr, now=self._loop.time())
         self._process_events()
         self.transmit()
 
