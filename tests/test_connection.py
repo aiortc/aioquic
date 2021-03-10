@@ -595,8 +595,27 @@ class QuicConnectionTest(TestCase):
         self.assertFalse(server._handshake_done_pending)
         self.assertEqual(datagram_sizes(items), [224])
 
+    def test_connect_with_no_transport_parameters(self):
+        def patch(client):
+            """
+            Patch client's TLS initialization to clear TLS extensions.
+            """
+            real_initialize = client._initialize
+
+            def patched_initialize(peer_cid: bytes):
+                real_initialize(peer_cid)
+                client.tls.handshake_extensions = []
+
+            client._initialize = patched_initialize
+
+        with client_and_server(client_patch=patch) as (client, server):
+            self.assertEqual(
+                server._close_event.reason_phrase,
+                "No QUIC transport parameters received",
+            )
+
     def test_connect_with_quantum_readiness(self):
-        with client_and_server(client_options={"quantum_readiness_test": True},) as (
+        with client_and_server(client_options={"quantum_readiness_test": True}) as (
             client,
             server,
         ):
@@ -847,6 +866,9 @@ class QuicConnectionTest(TestCase):
 
     def test_tls_error(self):
         def patch(client):
+            """
+            Patch the client's TLS initialization to send invalid TLS version.
+            """
             real_initialize = client._initialize
 
             def patched_initialize(peer_cid: bytes):
@@ -1888,6 +1910,36 @@ class QuicConnectionTest(TestCase):
         )
         client._parse_transport_parameters(data)
 
+    def test_parse_transport_parameters_malformed(self):
+        client = create_standalone_client(self)
+
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(b"0")
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(
+            cm.exception.reason_phrase, "Could not parse QUIC transport parameters"
+        )
+
+    def test_parse_transport_parameters_with_bad_ack_delay_exponent(self):
+        client = create_standalone_client(self)
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                ack_delay_exponent=21,
+                original_destination_connection_id=client.original_destination_connection_id,
+            )
+        )
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(cm.exception.reason_phrase, "ack_delay_exponent must be <= 20")
+
     def test_parse_transport_parameters_with_bad_active_connection_id_limit(self):
         client = create_standalone_client(self)
 
@@ -1908,6 +1960,42 @@ class QuicConnectionTest(TestCase):
                 cm.exception.reason_phrase,
                 "active_connection_id_limit must be no less than 2",
             )
+
+    def test_parse_transport_parameters_with_bad_max_ack_delay(self):
+        client = create_standalone_client(self)
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                max_ack_delay=2 ** 14,
+                original_destination_connection_id=client.original_destination_connection_id,
+            )
+        )
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(cm.exception.reason_phrase, "max_ack_delay must be < 2^14")
+
+    def test_parse_transport_parameters_with_bad_max_udp_payload_size(self):
+        client = create_standalone_client(self)
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                max_udp_payload_size=1199,
+                original_destination_connection_id=client.original_destination_connection_id,
+            )
+        )
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(
+            cm.exception.reason_phrase, "max_udp_payload_size must be >= 1200"
+        )
 
     def test_parse_transport_parameters_with_server_only_parameter(self):
         server_configuration = QuicConfiguration(
