@@ -112,11 +112,10 @@ async def run(configuration: QuicConfiguration, url: str, data: str) -> None:
     # parse URL
     parsed = urlparse(url)
     assert parsed.scheme == "https", "Only https:// URLs are supported."
-    if ":" in parsed.netloc:
-        host, port_str = parsed.netloc.split(":")
-        port = int(port_str)
+    host = parsed.hostname
+    if parsed.port is not None:
+        port = parsed.port
     else:
-        host = parsed.netloc
         port = 443
 
     async with connect(
