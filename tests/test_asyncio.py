@@ -56,9 +56,10 @@ def handle_stream(reader, writer):
 
 class HighLevelTest(TestCase):
     def setUp(self):
+        self.bogus_port = 1024
         self.server = None
         self.server_host = "localhost"
-        self.server_port = 4433
+        self.server_port = 0
 
     def tearDown(self):
         if self.server is not None:
@@ -105,11 +106,12 @@ class HighLevelTest(TestCase):
             configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
         self.server = await serve(
             host=host,
-            port=self.server_port,
+            port=0,
             configuration=configuration,
             stream_handler=handle_stream,
             **kwargs
         )
+        self.server_port = self.server._transport.get_extra_info("sockname")[1]
         return self.server
 
     def test_connect_and_serve(self):
@@ -306,7 +308,7 @@ class HighLevelTest(TestCase):
         with self.assertRaises(ConnectionError):
             run(
                 self.run_client(
-                    port=4400,
+                    port=self.bogus_port,
                     configuration=QuicConfiguration(is_client=True, idle_timeout=5),
                 )
             )
@@ -316,7 +318,7 @@ class HighLevelTest(TestCase):
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
             async with connect(
                 self.server_host,
-                4400,
+                self.bogus_port,
                 configuration=configuration,
                 wait_connected=False,
             ) as client:
