@@ -175,6 +175,10 @@ def pull_quic_header(buf: Buffer, host_cid_length: Optional[int] = None) -> Quic
             else:
                 rest_length = buf.pull_uint_var()
 
+            # check remainder length
+            if rest_length > buf.capacity - buf.tell():
+                raise ValueError("Packet payload is truncated")
+
         return QuicHeader(
             is_long_header=True,
             version=version,

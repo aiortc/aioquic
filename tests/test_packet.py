@@ -64,6 +64,12 @@ class PacketTest(TestCase):
         self.assertEqual(header.rest_length, 1262)
         self.assertEqual(buf.tell(), 18)
 
+    def test_pull_initial_client_truncated(self):
+        buf = Buffer(data=load("initial_client.bin")[0:100])
+        with self.assertRaises(ValueError) as cm:
+            pull_quic_header(buf, host_cid_length=8)
+        self.assertEqual(str(cm.exception), "Packet payload is truncated")
+
     def test_pull_initial_server(self):
         buf = Buffer(data=load("initial_server.bin"))
         header = pull_quic_header(buf, host_cid_length=8)
