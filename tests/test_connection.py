@@ -1997,6 +1997,26 @@ class QuicConnectionTest(TestCase):
             cm.exception.reason_phrase, "max_udp_payload_size must be >= 1200"
         )
 
+    def test_parse_transport_parameters_with_bad_initial_source_connection_id(self):
+        client = create_standalone_client(self)
+        client._initial_source_connection_id = binascii.unhexlify("0011223344556677")
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                initial_source_connection_id=binascii.unhexlify("1122334455667788"),
+                original_destination_connection_id=client.original_destination_connection_id,
+            )
+        )
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(
+            cm.exception.reason_phrase, "initial_source_connection_id does not match"
+        )
+
     def test_parse_transport_parameters_with_server_only_parameter(self):
         server_configuration = QuicConfiguration(
             is_client=False, quic_logger=QuicLogger()
