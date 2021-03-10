@@ -307,6 +307,7 @@ class QuicConnection:
         self._quic_logger: Optional[QuicLoggerTrace] = None
         self._remote_ack_delay_exponent = 3
         self._remote_active_connection_id_limit = 2
+        self._remote_initial_source_connection_id: Optional[bytes] = None
         self._remote_max_idle_timeout = 0.0  # seconds
         self._remote_max_data = 0
         self._remote_max_data_used = 0
@@ -803,6 +804,13 @@ class QuicConnection:
                 return
 
             network_path = self._find_network_path(addr)
+
+            # make a note of initial source CID
+            if (
+                self._remote_initial_source_connection_id is None
+                and header.packet_type == PACKET_TYPE_INITIAL
+            ):
+                self._remote_initial_source_connection_id = header.source_cid
 
             # server initialization
             if not self._is_client and self._state == QuicConnectionState.FIRSTFLIGHT:
@@ -2277,6 +2285,15 @@ class QuicConnection:
                     )
 
         if not from_session_ticket:
+            if (
+                quic_transport_parameters.initial_source_connection_id
+                != self._remote_initial_source_connection_id
+            ):
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="initial_source_connection_id does not match",
+                )
             if self._is_client and (
                 quic_transport_parameters.original_destination_connection_id
                 != self._original_destination_connection_id
