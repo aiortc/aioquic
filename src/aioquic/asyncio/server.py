@@ -55,6 +55,8 @@ class QuicServer(asyncio.DatagramProtocol):
         self._transport = cast(asyncio.DatagramTransport, transport)
 
     def datagram_received(self, data: Union[bytes, Text], addr: NetworkAddress) -> None:
+        # force IPv6 four-tuple to a two-tuple
+        addr = (addr[0], addr[1])
         data = cast(bytes, data)
         buf = Buffer(data=data)
 
