@@ -298,7 +298,6 @@ class QuicConnection:
         self._network_paths: List[QuicNetworkPath] = []
         self._pacing_at: Optional[float] = None
         self._packet_number = 0
-        self._parameters_received = False
         self._peer_cid = QuicConnectionId(
             cid=os.urandom(configuration.connection_id_length), sequence_number=None
         )
@@ -441,7 +440,7 @@ class QuicConnection:
         :param reason_phrase: A human-readable explanation of why the
                               connection is being closed.
         """
-        if self._state not in END_STATES:
+        if self._close_event is None and self._state not in END_STATES:
             self._close_event = events.ConnectionTerminated(
                 error_code=error_code,
                 frame_type=frame_type,
@@ -1424,26 +1423,27 @@ class QuicConnection:
                     reason_phrase=str(exc),
                 )
 
-            # parse transport parameters
-            if (
-                not self._parameters_received
-                and self.tls.received_extensions is not None
-            ):
-                for ext_type, ext_data in self.tls.received_extensions:
-                    if ext_type == get_transport_parameters_extension(self._version):
-                        self._parse_transport_parameters(ext_data)
-                        self._parameters_received = True
-                        break
-                assert (
-                    self._parameters_received
-                ), "No QUIC transport parameters received"
-
             # update current epoch
             if not self._handshake_complete and self.tls.state in [
                 tls.State.CLIENT_POST_HANDSHAKE,
                 tls.State.SERVER_POST_HANDSHAKE,
             ]:
                 self._handshake_complete = True
+
+                # parse transport parameters
+                parameters_received = False
+                for ext_type, ext_data in self.tls.received_extensions:
+                    if ext_type == get_transport_parameters_extension(self._version):
+                        self._parse_transport_parameters(ext_data)
+                        parameters_received = True
+                        break
+                if not parameters_received:
+                    raise QuicConnectionError(
+                        error_code=QuicErrorCode.CRYPTO_ERROR
+                        + tls.AlertDescription.missing_extension,
+                        frame_type=frame_type,
+                        reason_phrase="No QUIC transport parameters received",
+                    )
 
                 # for servers, the handshake is now confirmed
                 if not self._is_client:
@@ -2240,7 +2240,16 @@ class QuicConnection:
         and `False` when handling received transport parameters.
         """
 
-        quic_transport_parameters = pull_quic_transport_parameters(Buffer(data=data))
+        try:
+            quic_transport_parameters = pull_quic_transport_parameters(
+                Buffer(data=data)
+            )
+        except ValueError:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                frame_type=QuicFrameType.CRYPTO,
+                reason_phrase="Could not parse QUIC transport parameters",
+            )
 
         # log event
         if self._quic_logger is not None and not from_session_ticket:
@@ -2296,12 +2305,31 @@ class QuicConnection:
                     reason_phrase="active_connection_id_limit must be no less than 2",
                 )
             if (
-                self._is_client
-                and self._peer_cid.sequence_number == 0
-                and quic_transport_parameters.stateless_reset_token is not None
+                quic_transport_parameters.ack_delay_exponent is not None
+                and quic_transport_parameters.ack_delay_exponent > 20
             ):
-                self._peer_cid.stateless_reset_token = (
-                    quic_transport_parameters.stateless_reset_token
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="ack_delay_exponent must be <= 20",
+                )
+            if (
+                quic_transport_parameters.max_ack_delay is not None
+                and quic_transport_parameters.max_ack_delay >= 2 ** 14
+            ):
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="max_ack_delay must be < 2^14",
+                )
+            if (
+                quic_transport_parameters.max_udp_payload_size is not None
+                and quic_transport_parameters.max_udp_payload_size < 1200
+            ):
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="max_udp_payload_size must be >= 1200",
                 )
 
         # store remote parameters
@@ -2312,6 +2340,15 @@ class QuicConnection:
                 self._loss.max_ack_delay = (
                     quic_transport_parameters.max_ack_delay / 1000.0
                 )
+            if (
+                self._is_client
+                and self._peer_cid.sequence_number == 0
+                and quic_transport_parameters.stateless_reset_token is not None
+            ):
+                self._peer_cid.stateless_reset_token = (
+                    quic_transport_parameters.stateless_reset_token
+                )
+
         if quic_transport_parameters.active_connection_id_limit is not None:
             self._remote_active_connection_id_limit = (
                 quic_transport_parameters.active_connection_id_limit
