@@ -31,11 +31,11 @@ static int
 Buffer_init(BufferObject *self, PyObject *args, PyObject *kwargs)
 {
     const char *kwlist[] = {"capacity", "data", NULL};
-    int capacity = 0;
+    Py_ssize_t capacity = 0;
     const unsigned char *data = NULL;
     Py_ssize_t data_len = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|iy#", (char**)kwlist, &capacity, &data, &data_len))
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ny#", (char**)kwlist, &capacity, &data, &data_len))
         return -1;
 
     if (data != NULL) {
@@ -59,8 +59,8 @@ Buffer_dealloc(BufferObject *self)
 static PyObject *
 Buffer_data_slice(BufferObject *self, PyObject *args)
 {
-    int start, stop;
-    if (!PyArg_ParseTuple(args, "ii", &start, &stop))
+    Py_ssize_t start, stop;
+    if (!PyArg_ParseTuple(args, "nn", &start, &stop))
         return NULL;
 
     if (start < 0 || self->base + start > self->end ||
@@ -84,8 +84,8 @@ Buffer_eof(BufferObject *self, PyObject *args)
 static PyObject *
 Buffer_pull_bytes(BufferObject *self, PyObject *args)
 {
-    int len;
-    if (!PyArg_ParseTuple(args, "i", &len))
+    Py_ssize_t len;
+    if (!PyArg_ParseTuple(args, "n", &len))
         return NULL;
 
     CHECK_READ_BOUNDS(self, len);
@@ -304,8 +304,8 @@ Buffer_push_uint_var(BufferObject *self, PyObject *args)
 static PyObject *
 Buffer_seek(BufferObject *self, PyObject *args)
 {
-    int pos;
-    if (!PyArg_ParseTuple(args, "i", &pos))
+    Py_ssize_t pos;
+    if (!PyArg_ParseTuple(args, "n", &pos))
         return NULL;
 
     if (pos < 0 || self->base + pos > self->end) {
