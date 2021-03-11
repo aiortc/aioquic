@@ -303,6 +303,42 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "SETTINGS have already been received"),
         )
 
+    def test_handle_control_stream_close(self):
+        """
+        Closing the control stream is not allowed.
+        """
+        quic_client = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=True)
+        )
+        h3_client = H3Connection(quic_client)
+
+        # receive SETTINGS
+        h3_client.handle_event(
+            StreamDataReceived(
+                stream_id=3,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)),
+                end_stream=False,
+            )
+        )
+        self.assertIsNone(quic_client.closed)
+
+        # receive unexpected FIN
+        h3_client.handle_event(
+            StreamDataReceived(
+                stream_id=3,
+                data=b"",
+                end_stream=True,
+            )
+        )
+        self.assertEqual(
+            quic_client.closed,
+            (
+                ErrorCode.H3_CLOSED_CRITICAL_STREAM,
+                "Closing control stream is not allowed",
+            ),
+        )
+
     def test_handle_control_stream_duplicate(self):
         """
         We must only receive a single control stream.

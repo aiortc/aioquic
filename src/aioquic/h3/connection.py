@@ -110,6 +110,10 @@ class QpackEncoderStreamError(ProtocolError):
     error_code = ErrorCode.QPACK_ENCODER_STREAM_ERROR
 
 
+class ClosedCriticalStream(ProtocolError):
+    error_code = ErrorCode.H3_CLOSED_CRITICAL_STREAM
+
+
 class FrameUnexpected(ProtocolError):
     error_code = ErrorCode.H3_FRAME_UNEXPECTED
 
@@ -806,7 +810,9 @@ class H3Connection:
         consumed = 0
         unblocked_streams: Set[int] = set()
 
-        while stream.stream_type == StreamType.PUSH or not buf.eof():
+        while (
+            stream.stream_type in (StreamType.PUSH, StreamType.CONTROL) or not buf.eof()
+        ):
             # fetch stream type for unidirectional streams
             if stream.stream_type is None:
                 try:
@@ -834,6 +840,9 @@ class H3Connection:
                     self._peer_encoder_stream_id = stream.stream_id
 
             if stream.stream_type == StreamType.CONTROL:
+                if stream_ended:
+                    raise ClosedCriticalStream("Closing control stream is not allowed")
+
                 # fetch next frame
                 try:
                     frame_type = buf.pull_uint_var()
