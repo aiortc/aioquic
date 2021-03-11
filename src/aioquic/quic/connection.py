@@ -298,6 +298,7 @@ class QuicConnection:
         self._network_paths: List[QuicNetworkPath] = []
         self._pacing_at: Optional[float] = None
         self._packet_number = 0
+        self._parameters_received = False
         self._peer_cid = QuicConnectionId(
             cid=os.urandom(configuration.connection_id_length), sequence_number=None
         )
@@ -1431,27 +1432,30 @@ class QuicConnection:
                     reason_phrase=str(exc),
                 )
 
-            # update current epoch
-            if not self._handshake_complete and self.tls.state in [
-                tls.State.CLIENT_POST_HANDSHAKE,
-                tls.State.SERVER_POST_HANDSHAKE,
-            ]:
-                self._handshake_complete = True
-
-                # parse transport parameters
-                parameters_received = False
+            # parse transport parameters
+            if (
+                not self._parameters_received
+                and self.tls.received_extensions is not None
+            ):
                 for ext_type, ext_data in self.tls.received_extensions:
                     if ext_type == get_transport_parameters_extension(self._version):
                         self._parse_transport_parameters(ext_data)
-                        parameters_received = True
+                        self._parameters_received = True
                         break
-                if not parameters_received:
+                if not self._parameters_received:
                     raise QuicConnectionError(
                         error_code=QuicErrorCode.CRYPTO_ERROR
                         + tls.AlertDescription.missing_extension,
                         frame_type=frame_type,
                         reason_phrase="No QUIC transport parameters received",
                     )
+
+            # update current epoch
+            if not self._handshake_complete and self.tls.state in [
+                tls.State.CLIENT_POST_HANDSHAKE,
+                tls.State.SERVER_POST_HANDSHAKE,
+            ]:
+                self._handshake_complete = True
 
                 # for servers, the handshake is now confirmed
                 if not self._is_client:
