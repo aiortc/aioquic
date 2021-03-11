@@ -498,11 +498,14 @@ class QuicConnection:
             version=self._version,
         )
         if self._close_pending:
-            for epoch, packet_type in (
-                (tls.Epoch.ONE_RTT, PACKET_TYPE_ONE_RTT),
-                (tls.Epoch.HANDSHAKE, PACKET_TYPE_HANDSHAKE),
-                (tls.Epoch.INITIAL, PACKET_TYPE_INITIAL),
-            ):
+            epoch_packet_types = []
+            if not self._handshake_confirmed:
+                epoch_packet_types += [
+                    (tls.Epoch.INITIAL, PACKET_TYPE_INITIAL),
+                    (tls.Epoch.HANDSHAKE, PACKET_TYPE_HANDSHAKE),
+                ]
+            epoch_packet_types.append((tls.Epoch.ONE_RTT, PACKET_TYPE_ONE_RTT))
+            for epoch, packet_type in epoch_packet_types:
                 crypto = self._cryptos[epoch]
                 if crypto.send.is_valid():
                     builder.start_packet(packet_type, crypto)
