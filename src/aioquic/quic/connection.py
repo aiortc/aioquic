@@ -516,8 +516,12 @@ class QuicConnection:
                         frame_type=self._close_event.frame_type,
                         reason_phrase=self._close_event.reason_phrase,
                     )
-                    self._close_pending = False
-                    break
+            self._logger.info(
+                "Connection close sent (code 0x%X, reason %s)",
+                self._close_event.error_code,
+                self._close_event.reason_phrase,
+            )
+            self._close_pending = False
             self._close_begin(is_initiator=True, now=now)
         else:
             # congestion control
@@ -1392,12 +1396,17 @@ class QuicConnection:
             )
 
         self._logger.info(
-            "Connection close code 0x%X, reason %s", error_code, reason_phrase
+            "Connection close received (code 0x%X, reason %s)",
+            error_code,
+            reason_phrase,
         )
-        self._close_event = events.ConnectionTerminated(
-            error_code=error_code, frame_type=frame_type, reason_phrase=reason_phrase
-        )
-        self._close_begin(is_initiator=False, now=context.time)
+        if self._close_event is None:
+            self._close_event = events.ConnectionTerminated(
+                error_code=error_code,
+                frame_type=frame_type,
+                reason_phrase=reason_phrase,
+            )
+            self._close_begin(is_initiator=False, now=context.time)
 
     def _handle_crypto_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
