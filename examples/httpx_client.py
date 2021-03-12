@@ -5,26 +5,24 @@ import pickle
 import sys
 import time
 from collections import deque
-from typing import Deque, Dict, cast
+from typing import Deque, Dict, Optional, Tuple, cast
 from urllib.parse import urlparse
 
+import httpcore
 from httpx import AsyncClient
-from httpx.config import Timeout
-from httpx.dispatch.base import AsyncDispatcher
-from httpx.models import Request, Response
 from quic_logger import QuicDirectoryLogger
 
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h3.connection import H3_ALPN, H3Connection
-from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
+from aioquic.h3.events import DataReceived, H3Event, Headers, HeadersReceived
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
 
 logger = logging.getLogger("client")
 
 
-class H3Dispatcher(QuicConnectionProtocol, AsyncDispatcher):
+class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -32,25 +30,34 @@ class H3Dispatcher(QuicConnectionProtocol, AsyncDispatcher):
         self._request_events: Dict[int, Deque[H3Event]] = {}
         self._request_waiter: Dict[int, asyncio.Future[Deque[H3Event]]] = {}
 
-    async def send(self, request: Request, timeout: Timeout = None) -> Response:
+    async def arequest(
+        self,
+        method: bytes,
+        url: Tuple[bytes, bytes, Optional[int], bytes],
+        headers: Headers = None,
+        stream: httpcore.AsyncByteStream = None,
+        ext: dict = None,
+    ) -> Tuple[int, Headers, httpcore.AsyncByteStream, dict]:
         stream_id = self._quic.get_next_available_stream_id()
 
         # prepare request
         self._http.send_headers(
             stream_id=stream_id,
             headers=[
-                (b":method", request.method.encode()),
-                (b":scheme", request.url.scheme.encode()),
-                (b":authority", str(request.url.authority).encode()),
-                (b":path", request.url.full_path.encode()),
+                (b":method", method),
+                (b":scheme", url[0]),
+                (b":authority", url[1]),
+                (b":path", url[3]),
             ]
             + [
-                (k.encode(), v.encode())
-                for (k, v) in request.headers.items()
-                if k not in ("connection", "host")
+                (k.lower(), v)
+                for (k, v) in headers
+                if k.lower() not in (b"connection", b"host")
             ],
         )
-        self._http.send_data(stream_id=stream_id, data=request.read(), end_stream=True)
+        async for data in stream:
+            self._http.send_data(stream_id=stream_id, data=data, end_stream=False)
+        self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
 
         # transmit request
         waiter = self._loop.create_future()
@@ -62,24 +69,18 @@ class H3Dispatcher(QuicConnectionProtocol, AsyncDispatcher):
         events: Deque[H3Event] = await asyncio.shield(waiter)
         content = b""
         headers = []
-        status_code = None
+        status_code = 0
         for event in events:
             if isinstance(event, HeadersReceived):
                 for header, value in event.headers:
                     if header == b":status":
                         status_code = int(value.decode())
-                    elif header[0:1] != b":":
-                        headers.append((header.decode(), value.decode()))
+                    else:
+                        headers.append((header, value))
             elif isinstance(event, DataReceived):
                 content += event.data
 
-        return Response(
-            status_code=status_code,
-            http_version="HTTP/3",
-            headers=headers,
-            content=content,
-            request=request,
-        )
+        return (status_code, headers, httpcore.PlainByteStream(content), {})
 
     def http_event_received(self, event: H3Event):
         if isinstance(event, (HeadersReceived, DataReceived)):
@@ -122,23 +123,24 @@ async def run(configuration: QuicConfiguration, url: str, data: str) -> None:
         host,
         port,
         configuration=configuration,
-        create_protocol=H3Dispatcher,
+        create_protocol=H3Transport,
         session_ticket_handler=save_session_ticket,
-    ) as dispatch:
-        client = AsyncClient(dispatch=cast(AsyncDispatcher, dispatch))
+    ) as transport:
+        async with AsyncClient(
+            transport=cast(httpcore.AsyncHTTPTransport, transport)
+        ) as client:
+            # perform request
+            start = time.time()
+            if data is not None:
+                response = await client.post(
+                    url,
+                    content=data.encode(),
+                    headers={"content-type": "application/x-www-form-urlencoded"},
+                )
+            else:
+                response = await client.get(url)
 
-        # perform request
-        start = time.time()
-        if data is not None:
-            response = await client.post(
-                url,
-                data=data.encode(),
-                headers={"content-type": "application/x-www-form-urlencoded"},
-            )
-        else:
-            response = await client.get(url)
-
-        elapsed = time.time() - start
+            elapsed = time.time() - start
 
         # print speed
         octets = len(response.content)
