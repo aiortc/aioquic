@@ -18,7 +18,7 @@ ROOT = os.path.dirname(__file__)
 STATIC_ROOT = os.environ.get("STATIC_ROOT", os.path.join(ROOT, "htdocs"))
 STATIC_URL = "/"
 LOGS_PATH = os.path.join(STATIC_ROOT, "logs")
-QVIS_URL = "https://qvis.edm.uhasselt.be/"
+QVIS_URL = "https://qvis.quictools.info/"
 
 templates = Jinja2Templates(directory=os.path.join(ROOT, "templates"))
 app = Starlette()
