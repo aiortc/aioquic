@@ -779,18 +779,20 @@ class QuicConnection:
                     )
                 return
 
-            if self._is_client and header.packet_type == PACKET_TYPE_RETRY:
-                # calculate retry integrity tag
-                integrity_tag = get_retry_integrity_tag(
-                    buf.data_slice(start_off, buf.tell() - RETRY_INTEGRITY_TAG_SIZE),
-                    self._peer_cid.cid,
-                    version=header.version,
-                )
-
+            # handle retry packet
+            if header.packet_type == PACKET_TYPE_RETRY:
                 if (
-                    header.destination_cid == self.host_cid
-                    and header.integrity_tag == integrity_tag
+                    self._is_client
                     and not self._retry_count
+                    and header.destination_cid == self.host_cid
+                    and header.integrity_tag
+                    == get_retry_integrity_tag(
+                        buf.data_slice(
+                            start_off, buf.tell() - RETRY_INTEGRITY_TAG_SIZE
+                        ),
+                        self._peer_cid.cid,
+                        version=header.version,
+                    )
                 ):
                     if self._quic_logger is not None:
                         self._quic_logger.log_event(
@@ -814,6 +816,14 @@ class QuicConnection:
                         "Retrying with token (%d bytes)" % len(header.token)
                     )
                     self._connect(now=now)
+                else:
+                    # unexpected or invalid retry packet
+                    if self._quic_logger is not None:
+                        self._quic_logger.log_event(
+                            category="transport",
+                            event="packet_dropped",
+                            data={"trigger": "unexpected_packet"},
+                        )
                 return
 
             network_path = self._find_network_path(addr)
