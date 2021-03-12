@@ -813,13 +813,6 @@ class QuicConnection:
 
             network_path = self._find_network_path(addr)
 
-            # make a note of initial source CID
-            if (
-                self._remote_initial_source_connection_id is None
-                and header.packet_type == PACKET_TYPE_INITIAL
-            ):
-                self._remote_initial_source_connection_id = header.source_cid
-
             # server initialization
             if not self._is_client and self._state == QuicConnectionState.FIRSTFLIGHT:
                 assert (
@@ -878,10 +871,6 @@ class QuicConnection:
                 )
                 return
 
-            # raise expected packet number
-            if packet_number > space.expected_packet_number:
-                space.expected_packet_number = packet_number + 1
-
             # log packet
             quic_logger_frames: Optional[List[Dict]] = None
             if self._quic_logger is not None:
@@ -903,6 +892,10 @@ class QuicConnection:
                     },
                 )
 
+            # raise expected packet number
+            if packet_number > space.expected_packet_number:
+                space.expected_packet_number = packet_number + 1
+
             # discard initial keys and packet space
             if not self._is_client and epoch == tls.Epoch.HANDSHAKE:
                 self._discard_epoch(tls.Epoch.INITIAL)
@@ -913,6 +906,7 @@ class QuicConnection:
                 self._peer_cid.sequence_number = 0
 
             if self._state == QuicConnectionState.FIRSTFLIGHT:
+                self._remote_initial_source_connection_id = header.source_cid
                 self._set_state(QuicConnectionState.CONNECTED)
 
             # update spin bit
