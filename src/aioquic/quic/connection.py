@@ -682,12 +682,17 @@ class QuicConnection:
         if self._state in END_STATES:
             return
 
+        # log datagram
         if self._quic_logger is not None:
             self._quic_logger.log_event(
                 category="transport",
                 event="datagrams_received",
                 data={"byte_length": len(data), "count": 1},
             )
+
+        # for servers, arm the idle timeout on the first datagram
+        if self._close_at is None:
+            self._close_at = now + self._configuration.idle_timeout
 
         buf = Buffer(data=data)
         while not buf.eof():
