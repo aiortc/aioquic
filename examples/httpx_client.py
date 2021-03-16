@@ -5,7 +5,7 @@ import pickle
 import sys
 import time
 from collections import deque
-from typing import Deque, Dict, Optional, Tuple, cast
+from typing import AsyncIterator, Deque, Dict, Optional, Tuple, cast
 from urllib.parse import urlparse
 
 import httpcore
@@ -27,8 +27,8 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
         super().__init__(*args, **kwargs)
 
         self._http = H3Connection(self._quic)
-        self._request_events: Dict[int, Deque[H3Event]] = {}
-        self._request_waiter: Dict[int, asyncio.Future[Deque[H3Event]]] = {}
+        self._read_queue: Dict[int, Deque[H3Event]] = {}
+        self._read_ready: Dict[int, asyncio.Event] = {}
 
     async def arequest(
         self,
@@ -39,6 +39,8 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
         ext: dict = None,
     ) -> Tuple[int, Headers, httpcore.AsyncByteStream, dict]:
         stream_id = self._quic.get_next_available_stream_id()
+        self._read_queue[stream_id] = deque()
+        self._read_ready[stream_id] = asyncio.Event()
 
         # prepare request
         self._http.send_headers(
@@ -60,42 +62,80 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
         self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
 
         # transmit request
-        waiter = self._loop.create_future()
-        self._request_events[stream_id] = deque()
-        self._request_waiter[stream_id] = waiter
         self.transmit()
 
         # process response
-        events: Deque[H3Event] = await asyncio.shield(waiter)
-        content = b""
-        headers = []
-        status_code = 0
-        for event in events:
-            if isinstance(event, HeadersReceived):
-                for header, value in event.headers:
-                    if header == b":status":
-                        status_code = int(value.decode())
-                    else:
-                        headers.append((header, value))
-            elif isinstance(event, DataReceived):
-                content += event.data
+        status_code, headers, stream_ended = await self._receive_response(stream_id)
+        response_stream = httpcore.AsyncIteratorByteStream(
+            aiterator=self._receive_response_data(stream_id, stream_ended)
+        )
 
-        return (status_code, headers, httpcore.PlainByteStream(content), {})
+        return (
+            status_code,
+            headers,
+            response_stream,
+            {
+                "http_version": "HTTP/3",
+            },
+        )
 
     def http_event_received(self, event: H3Event):
         if isinstance(event, (HeadersReceived, DataReceived)):
             stream_id = event.stream_id
-            if stream_id in self._request_events:
-                self._request_events[event.stream_id].append(event)
-                if event.stream_ended:
-                    request_waiter = self._request_waiter.pop(stream_id)
-                    request_waiter.set_result(self._request_events.pop(stream_id))
+            if stream_id in self._read_queue:
+                self._read_queue[event.stream_id].append(event)
+                self._read_ready[event.stream_id].set()
 
     def quic_event_received(self, event: QuicEvent):
         #  pass event to the HTTP layer
         if self._http is not None:
             for http_event in self._http.handle_event(event):
                 self.http_event_received(http_event)
+
+    async def _receive_response(self, stream_id: int) -> Tuple[int, Headers, bool]:
+        """
+        Read the response status and headers.
+        """
+        stream_ended = False
+        while True:
+            event = await self._wait_for_http_event(stream_id)
+            if isinstance(event, HeadersReceived):
+                stream_ended = event.stream_ended
+                break
+
+        headers = []
+        status_code = 0
+        for header, value in event.headers:
+            if header == b":status":
+                status_code = int(value.decode())
+            else:
+                headers.append((header, value))
+        return status_code, headers, stream_ended
+
+    async def _receive_response_data(
+        self, stream_id: int, stream_ended: bool
+    ) -> AsyncIterator[bytes]:
+        """
+        Read the response data.
+        """
+        while not stream_ended:
+            event = await self._wait_for_http_event(stream_id)
+            if isinstance(event, DataReceived):
+                stream_ended = event.stream_ended
+                yield event.data
+            elif isinstance(event, HeadersReceived):
+                stream_ended = event.stream_ended
+
+    async def _wait_for_http_event(self, stream_id: int) -> H3Event:
+        """
+        Returns the next HTTP/3 event for the given stream.
+        """
+        if not self._read_queue[stream_id]:
+            await self._read_ready[stream_id].wait()
+        event = self._read_queue[stream_id].popleft()
+        if not self._read_queue[stream_id]:
+            self._read_ready[stream_id].clear()
+        return event
 
 
 def save_session_ticket(ticket):
