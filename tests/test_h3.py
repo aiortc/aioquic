@@ -23,7 +23,7 @@ from aioquic.h3.connection import (
     validate_trailers,
 )
 from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived
-from aioquic.h3.exceptions import NoAvailablePushIDError
+from aioquic.h3.exceptions import InvalidStreamTypeError, NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived
 from aioquic.quic.logger import QuicLogger
@@ -1051,6 +1051,18 @@ class H3ConnectionTest(TestCase):
                     )
                 ],
             )
+
+            # send push promise on a server-initiated stream
+            with self.assertRaises(InvalidStreamTypeError):
+                h3_server.send_push_promise(
+                    stream_id=1,
+                    headers=[
+                        (b":method", b"GET"),
+                        (b":scheme", b"https"),
+                        (b":authority", b"localhost"),
+                        (b":path", b"/bad.css"),
+                    ],
+                )
 
             # send push promises
             for i in range(0, 8):

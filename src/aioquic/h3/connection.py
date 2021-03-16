@@ -15,7 +15,7 @@ from aioquic.h3.events import (
     PushPromiseReceived,
     WebTransportStreamDataReceived,
 )
-from aioquic.h3.exceptions import NoAvailablePushIDError
+from aioquic.h3.exceptions import InvalidStreamTypeError, NoAvailablePushIDError
 from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
 from aioquic.quic.events import DatagramFrameReceived, QuicEvent, StreamDataReceived
 from aioquic.quic.logger import QuicLoggerTrace
@@ -185,6 +185,13 @@ def parse_settings(data: bytes) -> Dict[int, int]:
             raise SettingsError("Setting identifier 0x%x is included twice" % setting)
         settings[setting] = value
     return dict(settings)
+
+
+def stream_is_request_response(stream_id: int):
+    """
+    Returns True if the stream is a client-initiated bidirectional stream.
+    """
+    return stream_id % 4 == 0
 
 
 def validate_headers(
@@ -407,10 +414,25 @@ class H3Connection:
 
         Returns the stream ID on which headers and data can be sent.
 
+        If the stream ID is not a client-initiated bidirectional stream, an
+        :class:`~aioquic.h3.exceptions.InvalidStreamTypeError` exception is raised.
+
+        If there are not available push IDs, an
+        :class:`~aioquic.h3.exceptions.NoAvailablePushIDError` exception is raised.
+
         :param stream_id: The stream ID on which to send the data.
         :param headers: The HTTP request headers for this push.
         """
         assert not self._is_client, "Only servers may send a push promise."
+
+        # check stream ID is valid
+        if not stream_is_request_response(stream_id):
+            raise InvalidStreamTypeError(
+                "Push promises can only be sent for client-initiated bidirectional "
+                "streams"
+            )
+
+        # check a push ID is available
         if self._max_push_id is None or self._next_push_id >= self._max_push_id:
             raise NoAvailablePushIDError
 
