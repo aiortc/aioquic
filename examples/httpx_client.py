@@ -1,8 +1,9 @@
 import argparse
 import asyncio
 import logging
+import os
 import pickle
-import sys
+import ssl
 import time
 from collections import deque
 from typing import AsyncIterator, Deque, Dict, Optional, Tuple, cast
@@ -149,7 +150,13 @@ def save_session_ticket(ticket):
             pickle.dump(ticket, fp)
 
 
-async def run(configuration: QuicConfiguration, url: str, data: str) -> None:
+async def run(
+    configuration: QuicConfiguration,
+    url: str,
+    data: str,
+    include: bool,
+    output_dir: Optional[str],
+) -> None:
     # parse URL
     parsed = urlparse(url)
     assert parsed.scheme == "https", "Only https:// URLs are supported."
@@ -189,19 +196,47 @@ async def run(configuration: QuicConfiguration, url: str, data: str) -> None:
             % (octets, elapsed, octets * 8 / elapsed / 1000000)
         )
 
-        # print response
-        for header, value in response.headers.items():
-            sys.stderr.write(header + ": " + value + "\r\n")
-        sys.stderr.write("\r\n")
-        sys.stdout.buffer.write(response.content)
-        sys.stdout.buffer.flush()
+        # output response
+        if output_dir is not None:
+            output_path = os.path.join(
+                output_dir, os.path.basename(urlparse(url).path) or "index.html"
+            )
+            with open(output_path, "wb") as output_file:
+                if include:
+                    headers = ""
+                    for header, value in response.headers.items():
+                        headers += header + ": " + value + "\r\n"
+                    if headers:
+                        output_file.write(headers.encode() + b"\r\n")
+
+                output_file.write(response.content)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="HTTP/3 client")
     parser.add_argument("url", type=str, help="the URL to query (must be HTTPS)")
     parser.add_argument(
+        "--ca-certs", type=str, help="load CA certificates from the specified file"
+    )
+    parser.add_argument(
         "-d", "--data", type=str, help="send the specified data in a POST request"
+    )
+    parser.add_argument(
+        "-i",
+        "--include",
+        action="store_true",
+        help="include the HTTP response headers in the output",
+    )
+    parser.add_argument(
+        "-k",
+        "--insecure",
+        action="store_true",
+        help="do not validate server certificate",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="write downloaded files to this directory",
     )
     parser.add_argument(
         "-q",
@@ -232,8 +267,15 @@ if __name__ == "__main__":
         level=logging.DEBUG if args.verbose else logging.INFO,
     )
 
+    if args.output_dir is not None and not os.path.isdir(args.output_dir):
+        raise Exception("%s is not a directory" % args.output_dir)
+
     # prepare configuration
     configuration = QuicConfiguration(is_client=True, alpn_protocols=H3_ALPN)
+    if args.ca_certs:
+        configuration.load_verify_locations(args.ca_certs)
+    if args.insecure:
+        configuration.verify_mode = ssl.CERT_NONE
     if args.quic_log:
         configuration.quic_logger = QuicDirectoryLogger(args.quic_log)
     if args.secrets_log:
@@ -247,5 +289,11 @@ if __name__ == "__main__":
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
-        run(configuration=configuration, url=args.url, data=args.data)
+        run(
+            configuration=configuration,
+            url=args.url,
+            data=args.data,
+            include=args.include,
+            output_dir=args.output_dir,
+        )
     )
