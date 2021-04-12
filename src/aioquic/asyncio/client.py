@@ -72,7 +72,7 @@ async def connect(
     # prepare QUIC connection
     if configuration is None:
         configuration = QuicConfiguration(is_client=True)
-    if server_name is not None:
+    if configuration.server_name is None:
         configuration.server_name = server_name
     connection = QuicConnection(
         configuration=configuration, session_ticket_handler=session_ticket_handler
