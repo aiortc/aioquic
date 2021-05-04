@@ -177,6 +177,15 @@ class QuicConnectionState(Enum):
     DRAINING = 3
     TERMINATED = 4
 
+@dataclass
+class QuicNetworkPathChallenge:
+    '''
+    Can be received on differente path, not a problem according to the draft
+    '''
+    #is_validated: bool = False
+    local_challenge: Optional[bytes] = None
+    remote_challenge: Optional[bytes] = None
+
 
 @dataclass
 class QuicNetworkPath:
@@ -184,8 +193,6 @@ class QuicNetworkPath:
     bytes_received: int = 0
     bytes_sent: int = 0
     is_validated: bool = False
-    local_challenge: Optional[bytes] = None
-    remote_challenge: Optional[bytes] = None
 
     def can_send(self, size: int) -> bool:
         return self.is_validated or (self.bytes_sent + size) <= 3 * self.bytes_received
@@ -196,6 +203,7 @@ class QuicReceiveContext:
     epoch: tls.Epoch
     host_cid: bytes
     network_path: QuicNetworkPath
+    network_challenge: QuicNetworkPathChallenge
     quic_logger_frames: Optional[List[Any]]
     time: float
 
@@ -296,6 +304,7 @@ class QuicConnection:
         )
         self._loss_at: Optional[float] = None
         self._network_paths: List[QuicNetworkPath] = []
+        self._network_challenges: List[QuicNetworkChallenge] = []
         self._pacing_at: Optional[float] = None
         self._packet_number = 0
         self._parameters_received = False
@@ -466,7 +475,7 @@ class QuicConnection:
             self._is_client and not self._connect_called
         ), "connect() can only be called for clients and a single time"
         self._connect_called = True
-
+        self._network_challenges = [QuicNetworkPathChallenge()]
         self._network_paths = [QuicNetworkPath(addr, is_validated=True)]
         self._version = self._configuration.supported_versions[0]
         self._connect(now=now)
@@ -482,6 +491,7 @@ class QuicConnection:
         :param now: The current time.
         """
         network_path = self._network_paths[0]
+        network_challenge = self._network_challenges[0]
 
         if self._state in END_STATES:
             return []
@@ -541,7 +551,7 @@ class QuicConnection:
                 if not self._handshake_confirmed:
                     for epoch in [tls.Epoch.INITIAL, tls.Epoch.HANDSHAKE]:
                         self._write_handshake(builder, epoch, now)
-                self._write_application(builder, network_path, now)
+                self._write_application(builder, network_path, network_challenge, now)
             except QuicPacketBuilderStop:
                 pass
 
@@ -827,6 +837,7 @@ class QuicConnection:
                 return
 
             network_path = self._find_network_path(addr)
+            network_challenge = self._find_network_challenge()
 
             # server initialization
             if not self._is_client and self._state == QuicConnectionState.FIRSTFLIGHT:
@@ -834,6 +845,7 @@ class QuicConnection:
                     header.packet_type == PACKET_TYPE_INITIAL
                 ), "first packet must be INITIAL"
                 self._network_paths = [network_path]
+                self._network_challenges = [network_challenge]
                 self._version = QuicProtocolVersion(header.version)
                 self._initialize(header.destination_cid)
 
@@ -945,6 +957,7 @@ class QuicConnection:
                 epoch=epoch,
                 host_cid=header.destination_cid,
                 network_path=network_path,
+                network_challenge=network_challenge,
                 quic_logger_frames=quic_logger_frames,
                 time=now,
             )
@@ -1146,6 +1159,18 @@ class QuicConnection:
         network_path = QuicNetworkPath(addr)
         self._logger.debug("Network path %s discovered", network_path.addr)
         return network_path
+
+    #TODO for now we only consider the last challenge
+    def _find_network_challenge(self) -> QuicNetworkPathChallenge:
+        # check existing network challenge
+        for idx, network_chall in enumerate(self._network_challenges):
+            if idx == len(self._network_challenges)-1:
+                return network_chall
+
+        # new network path
+        network_chall = QuicNetworkPathChallenge()
+        self._logger.debug("Network challenge %s discovered", network_chall)
+        return network_chall
 
     def _get_or_create_stream(self, frame_type: int, stream_id: int) -> QuicStream:
         """
@@ -1814,7 +1839,7 @@ class QuicConnection:
                 self._quic_logger.encode_path_challenge_frame(data=data)
             )
 
-        context.network_path.remote_challenge = data
+        context.network_challenge.remote_challenge = data
 
     def _handle_path_response_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -1830,7 +1855,10 @@ class QuicConnection:
                 self._quic_logger.encode_path_response_frame(data=data)
             )
 
-        if data != context.network_path.local_challenge:
+        self._logger.debug("path_response: %s - %s", data, context.network_challenge.local_challenge)
+        self._logger.debug("path_response: %s", context)
+
+        if data != context.network_challenge.local_challenge:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.PROTOCOL_VIOLATION,
                 frame_type=frame_type,
@@ -1840,6 +1868,8 @@ class QuicConnection:
             "Network path %s validated by challenge", context.network_path.addr
         )
         context.network_path.is_validated = True
+	# endpoint can abandon any path validation for other addresses
+        self._network_challenges = [QuicNetworkPathChallenge()]
 
     def _handle_ping_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -2518,7 +2548,7 @@ class QuicConnection:
             )
 
     def _write_application(
-        self, builder: QuicPacketBuilder, network_path: QuicNetworkPath, now: float
+        self, builder: QuicPacketBuilder, network_path: QuicNetworkPath, network_challenge: QuicNetworkPathChallenge,  now: float
     ) -> None:
         crypto_stream: Optional[QuicStream] = None
         if self._cryptos[tls.Epoch.ONE_RTT].send.is_valid():
@@ -2553,20 +2583,22 @@ class QuicConnection:
                 # PATH CHALLENGE
                 if (
                     not network_path.is_validated
-                    and network_path.local_challenge is None
+                    and network_challenge.local_challenge is None
                 ):
                     challenge = os.urandom(8)
                     self._write_path_challenge_frame(
                         builder=builder, challenge=challenge
                     )
-                    network_path.local_challenge = challenge
+                    network_challenge.local_challenge = challenge
+                    if network_challenge not in self._network_challenges:
+                    	self._network_challenges.append(network_challenge)
 
                 # PATH RESPONSE
-                if network_path.remote_challenge is not None:
+                if network_challenge.remote_challenge is not None:
                     self._write_path_response_frame(
-                        builder=builder, challenge=network_path.remote_challenge
+                        builder=builder, challenge=network_challenge.remote_challenge
                     )
-                    network_path.remote_challenge = None
+                    network_challenge.remote_challenge = None
 
                 # NEW_CONNECTION_ID
                 for connection_id in self._host_cids:
