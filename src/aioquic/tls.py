@@ -33,6 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import (
     rsa,
     x448,
     x25519,
+    ed25519,
 )
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -1043,6 +1044,7 @@ CIPHER_SUITES = {
 }
 
 SIGNATURE_ALGORITHMS: Dict = {
+    SignatureAlgorithm.ED25519: (None, hashes.SHA512),
     SignatureAlgorithm.ECDSA_SECP256R1_SHA256: (None, hashes.SHA256),
     SignatureAlgorithm.ECDSA_SECP384R1_SHA384: (None, hashes.SHA384),
     SignatureAlgorithm.ECDSA_SECP521R1_SHA512: (None, hashes.SHA512),
@@ -1224,16 +1226,18 @@ class Context:
         self._legacy_compression_methods: List[int] = [CompressionMethod.NULL]
         self._psk_key_exchange_modes: List[int] = [PskKeyExchangeMode.PSK_DHE_KE]
         self._signature_algorithms: List[int] = [
+            SignatureAlgorithm.ED25519,
             SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
             SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
             SignatureAlgorithm.RSA_PKCS1_SHA256,
             SignatureAlgorithm.RSA_PKCS1_SHA1,
         ]
-        self._supported_groups = [Group.SECP256R1]
+        self._supported_groups = []
         if default_backend().x25519_supported():
             self._supported_groups.append(Group.X25519)
         if default_backend().x448_supported():
             self._supported_groups.append(Group.X448)
+        self._supported_groups.append(Group.SECP256R1)
         self._supported_versions = [TLS_VERSION_1_3]
 
         # state
@@ -1571,13 +1575,21 @@ class Context:
 
         # check signature
         try:
-            self._peer_certificate.public_key().verify(
-                verify.signature,
-                self.key_schedule.certificate_verify_data(
-                    b"TLS 1.3, server CertificateVerify"
-                ),
-                *signature_algorithm_params(verify.algorithm),
-            )
+            if isinstance(self._peer_certificate.public_key(), ed25519.Ed25519PublicKey):
+                self._peer_certificate.public_key().verify(
+                    verify.signature,
+                    self.key_schedule.certificate_verify_data(
+                        b"TLS 1.3, server CertificateVerify"
+                    ),
+                )
+            else:
+                self._peer_certificate.public_key().verify(
+                    verify.signature,
+                    self.key_schedule.certificate_verify_data(
+                        b"TLS 1.3, server CertificateVerify"
+                    ),
+                    *signature_algorithm_params(verify.algorithm),
+                )
         except InvalidSignature:
             raise AlertDecryptError
 
@@ -1664,7 +1676,10 @@ class Context:
             self.certificate_private_key, ec.EllipticCurvePrivateKey
         ) and isinstance(self.certificate_private_key.curve, ec.SECP256R1):
             signature_algorithms = [SignatureAlgorithm.ECDSA_SECP256R1_SHA256]
-
+        elif isinstance(
+            self.certificate_private_key, ed25519.Ed25519PrivateKey
+        ):
+            signature_algorithms = [SignatureAlgorithm.ED25519]
         # negotiate parameters
         cipher_suite = negotiate(
             self._cipher_suites,
@@ -1679,6 +1694,7 @@ class Context:
         psk_key_exchange_mode = negotiate(
             self._psk_key_exchange_modes, peer_hello.psk_key_exchange_modes
         )
+
         signature_algorithm = negotiate(
             signature_algorithms,
             peer_hello.signature_algorithms,
@@ -1838,12 +1854,20 @@ class Context:
                 )
 
             # send certificate verify
-            signature = self.certificate_private_key.sign(
-                self.key_schedule.certificate_verify_data(
-                    b"TLS 1.3, server CertificateVerify"
-                ),
-                *signature_algorithm_params(signature_algorithm),
-            )
+            if isinstance(self.certificate_private_key, ed25519.Ed25519PrivateKey):
+                signature = self.certificate_private_key.sign(
+                    self.key_schedule.certificate_verify_data(
+                        b"TLS 1.3, server CertificateVerify"
+                    )
+                )
+            else:
+                signature = self.certificate_private_key.sign(
+                    self.key_schedule.certificate_verify_data(
+                        b"TLS 1.3, server CertificateVerify"
+                    ),
+                    *signature_algorithm_params(signature_algorithm),
+                )
+
             with push_message(self.key_schedule, handshake_buf):
                 push_certificate_verify(
                     handshake_buf,
