@@ -79,7 +79,7 @@ class WebSocket:
         self.transmit = transmit
         self.websocket = wsproto.Connection(wsproto.ConnectionType.CLIENT)
 
-    async def close(self, code=1000, reason="") -> None:
+    async def close(self, code: int = 1000, reason: str = "") -> None:
         """
         Perform the closing handshake.
         """
