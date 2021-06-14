@@ -251,7 +251,7 @@ class HttpClient(QuicConnectionProtocol):
 async def perform_http_request(
     client: HttpClient,
     url: str,
-    data: str,
+    data: Optional[str],
     include: bool,
     output_dir: Optional[str],
 ) -> None:
@@ -349,7 +349,7 @@ def save_session_ticket(ticket: SessionTicket) -> None:
 async def run(
     configuration: QuicConfiguration,
     urls: List[str],
-    data: str,
+    data: Optional[str],
     include: bool,
     output_dir: Optional[str],
     local_port: int,
