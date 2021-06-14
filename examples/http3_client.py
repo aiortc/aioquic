@@ -53,8 +53,15 @@ class URL:
 
 class HttpRequest:
     def __init__(
-        self, method: str, url: URL, content: bytes = b"", headers: Dict = {}
+        self,
+        method: str,
+        url: URL,
+        content: bytes = b"",
+        headers: Optional[Dict] = None,
     ) -> None:
+        if headers is None:
+            headers = {}
+
         self.content = content
         self.headers = headers
         self.method = method
@@ -129,26 +136,39 @@ class HttpClient(QuicConnectionProtocol):
         else:
             self._http = H3Connection(self._quic)
 
-    async def get(self, url: str, headers: Dict = {}) -> Deque[H3Event]:
+    async def get(self, url: str, headers: Optional[Dict] = None) -> Deque[H3Event]:
         """
         Perform a GET request.
         """
+        if headers is None:
+            headers = {}
+
         return await self._request(
             HttpRequest(method="GET", url=URL(url), headers=headers)
         )
 
-    async def post(self, url: str, data: bytes, headers: Dict = {}) -> Deque[H3Event]:
+    async def post(
+        self, url: str, data: bytes, headers: Optional[Dict] = None
+    ) -> Deque[H3Event]:
         """
         Perform a POST request.
         """
+        if headers is None:
+            headers = {}
+
         return await self._request(
             HttpRequest(method="POST", url=URL(url), content=data, headers=headers)
         )
 
-    async def websocket(self, url: str, subprotocols: List[str] = []) -> WebSocket:
+    async def websocket(
+        self, url: str, subprotocols: Optional[List[str]] = None
+    ) -> WebSocket:
         """
         Open a WebSocket.
         """
+        if subprotocols is None:
+            subprotocols = []
+
         request = HttpRequest(method="CONNECT", url=URL(url))
         stream_id = self._quic.get_next_available_stream_id()
         websocket = WebSocket(
