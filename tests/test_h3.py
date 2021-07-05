@@ -1,5 +1,6 @@
 import binascii
 import contextlib
+import copy
 from unittest import TestCase
 
 from aioquic.buffer import Buffer, encode_uint_var
@@ -1439,6 +1440,31 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_server._stream[2].stream_type, 9)
             self.assertEqual(h3_server._stream[6].buffer, b"")
             self.assertEqual(h3_server._stream[6].stream_type, 64)
+
+    def test_validate_settings(self):
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive SETTINGS requesting WebTransport, but DATAGRAM was not offered
+        settings = copy.copy(DUMMY_SETTINGS)
+        settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] = 1
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(settings)),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (
+                ErrorCode.H3_SETTINGS_ERROR,
+                "WebTransport requires support for QUIC datagrams",
+            ),
+        )
 
 
 class H3ParserTest(TestCase):

@@ -12,6 +12,7 @@ from aioquic.h3.events import (
     Headers,
     HeadersReceived,
     PushPromiseReceived,
+    WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
@@ -58,6 +59,7 @@ class FrameType(IntEnum):
     GOAWAY = 0x7
     MAX_PUSH_ID = 0xD
     DUPLICATE_PUSH = 0xE
+    WEBTRANSPORT_STREAM = 0x41
 
 
 class HeadersState(Enum):
@@ -71,6 +73,7 @@ class Setting(IntEnum):
     SETTINGS_MAX_HEADER_LIST_SIZE = 0x6
     QPACK_BLOCKED_STREAMS = 0x7
     SETTINGS_NUM_PLACEHOLDERS = 0x9
+    SETTINGS_ENABLE_WEBTRANSPORT = 0x2B603742
 
     #  Dummy setting to check it is correctly ignored by the peer.
     # https://tools.ietf.org/html/draft-ietf-quic-http-34#section-7.2.4.1
@@ -82,6 +85,7 @@ class StreamType(IntEnum):
     PUSH = 1
     QPACK_ENCODER = 2
     QPACK_DECODER = 3
+    WEBTRANSPORT = 0x54
 
 
 class ProtocolError(Exception):
@@ -310,6 +314,7 @@ class H3Stream:
         self.headers_recv_state: HeadersState = HeadersState.INITIAL
         self.headers_send_state: HeadersState = HeadersState.INITIAL
         self.push_id: Optional[int] = None
+        self.session_id: Optional[int] = None
         self.stream_id = stream_id
         self.stream_type: Optional[int] = None
 
@@ -321,9 +326,11 @@ class H3Connection:
     :param quic: A :class:`~aioquic.connection.QuicConnection` instance.
     """
 
-    def __init__(self, quic: QuicConnection):
+    def __init__(self, quic: QuicConnection, enable_webtransport: bool = False) -> None:
+        # settings
         self._max_table_capacity = 4096
         self._blocked_streams = 16
+        self._enable_webtransport = enable_webtransport
 
         self._is_client = quic.configuration.is_client
         self._is_done = False
@@ -517,6 +524,19 @@ class H3Connection:
             self._stream[stream_id] = H3Stream(stream_id)
         return self._stream[stream_id]
 
+    def _get_local_settings(self) -> Dict[int, int]:
+        """
+        Return the local HTTP/3 settings.
+        """
+        settings = {
+            Setting.QPACK_MAX_TABLE_CAPACITY: self._max_table_capacity,
+            Setting.QPACK_BLOCKED_STREAMS: self._blocked_streams,
+            Setting.DUMMY: 1,
+        }
+        if self._enable_webtransport:
+            settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] = 1
+        return settings
+
     def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> None:
         """
         Handle a frame received on the peer's control stream.
@@ -528,6 +548,7 @@ class H3Connection:
             if self._settings_received:
                 raise FrameUnexpected("SETTINGS have already been received")
             settings = parse_settings(frame_data)
+            self._validate_settings(settings)
             encoder = self._encoder.apply_settings(
                 max_table_capacity=settings.get(Setting.QPACK_MAX_TABLE_CAPACITY, 0),
                 blocked_streams=settings.get(Setting.QPACK_BLOCKED_STREAMS, 0),
@@ -670,14 +691,7 @@ class H3Connection:
         self._quic.send_stream_data(
             self._local_control_stream_id,
             encode_frame(
-                FrameType.SETTINGS,
-                encode_settings(
-                    {
-                        Setting.QPACK_MAX_TABLE_CAPACITY: self._max_table_capacity,
-                        Setting.QPACK_BLOCKED_STREAMS: self._blocked_streams,
-                        Setting.DUMMY: 1,
-                    }
-                ),
+                FrameType.SETTINGS, encode_settings(self._get_local_settings())
             ),
         )
         if self._is_client and self._max_push_id is not None:
@@ -811,7 +825,9 @@ class H3Connection:
         unblocked_streams: Set[int] = set()
 
         while (
-            stream.stream_type in (StreamType.PUSH, StreamType.CONTROL) or not buf.eof()
+            stream.stream_type
+            in (StreamType.PUSH, StreamType.CONTROL, StreamType.WEBTRANSPORT)
+            or not buf.eof()
         ):
             # fetch stream type for unidirectional streams
             if stream.stream_type is None:
@@ -866,6 +882,28 @@ class H3Connection:
                 stream.buffer = stream.buffer[consumed:]
 
                 return self._receive_request_or_push_data(stream, b"", stream_ended)
+            elif stream.stream_type == StreamType.WEBTRANSPORT:
+                # fetch session id
+                if stream.session_id is None:
+                    try:
+                        stream.session_id = buf.pull_uint_var()
+                    except BufferReadError:
+                        break
+                    consumed = buf.tell()
+
+                webtransport_data = stream.buffer[consumed:]
+                stream.buffer = b""
+
+                if webtransport_data or stream_ended:
+                    http_events.append(
+                        WebTransportStreamDataReceived(
+                            data=webtransport_data,
+                            session_id=stream.session_id,
+                            stream_ended=stream.ended,
+                            stream_id=stream.stream_id,
+                        )
+                    )
+                return http_events
             elif stream.stream_type == StreamType.QPACK_DECODER:
                 # feed unframed data to decoder
                 data = buf.pull_bytes(buf.capacity - buf.tell())
@@ -915,3 +953,10 @@ class H3Connection:
                 )
 
         return http_events
+
+    def _validate_settings(self, settings: Dict[int, int]) -> None:
+        if (
+            settings.get(Setting.SETTINGS_ENABLE_WEBTRANSPORT) == 1
+            and self._quic._remote_max_datagram_frame_size is None
+        ):
+            raise SettingsError("WebTransport requires support for QUIC datagrams")

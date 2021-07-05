@@ -64,3 +64,37 @@ class PushPromiseReceived(H3Event):
 
     stream_id: int
     "The Stream ID of the stream that the push is related to."
+
+
+@dataclass
+class WebTransportDatagramReceived(H3Event):
+    """
+    The WebTransportDatagramReceived is fired whenever a datagram is received
+    for a WebTransport session.
+    """
+
+    data: bytes
+    "The data which was received."
+
+    session_id: int
+    "The ID of the session the data was received for."
+
+
+@dataclass
+class WebTransportStreamDataReceived(H3Event):
+    """
+    The WebTransportStreamDataReceived is fired whenever data is received
+    for a WebTransport stream.
+    """
+
+    data: bytes
+    "The data which was received."
+
+    stream_id: int
+    "The ID of the stream the data was received for."
+
+    stream_ended: bool
+    "Whether the STREAM frame had the FIN bit set."
+
+    session_id: int
+    "The ID of the session the data was received for."
