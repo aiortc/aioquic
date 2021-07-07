@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives import hashes, hmac, serialization
 from cryptography.hazmat.primitives.asymmetric import (
     dsa,
     ec,
+    ed25519,
     padding,
     rsa,
     x448,
@@ -1112,7 +1113,12 @@ def negotiate(
 
 def signature_algorithm_params(
     signature_algorithm: int,
-) -> Union[Tuple[ec.ECDSA], Tuple[padding.AsymmetricPadding, hashes.HashAlgorithm]]:
+) -> Union[
+    Tuple[()], Tuple[ec.ECDSA], Tuple[padding.AsymmetricPadding, hashes.HashAlgorithm]
+]:
+    if signature_algorithm == SignatureAlgorithm.ED25519:
+        return tuple()
+
     padding_cls, algorithm_cls = SIGNATURE_ALGORITHMS[signature_algorithm]
     algorithm = algorithm_cls()
     if padding_cls is None:
@@ -1228,6 +1234,7 @@ class Context:
             SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
             SignatureAlgorithm.RSA_PKCS1_SHA256,
             SignatureAlgorithm.RSA_PKCS1_SHA1,
+            SignatureAlgorithm.ED25519,
         ]
         self._supported_groups = [Group.SECP256R1]
         if default_backend().x25519_supported():
@@ -1664,6 +1671,8 @@ class Context:
             self.certificate_private_key, ec.EllipticCurvePrivateKey
         ) and isinstance(self.certificate_private_key.curve, ec.SECP256R1):
             signature_algorithms = [SignatureAlgorithm.ECDSA_SECP256R1_SHA256]
+        elif isinstance(self.certificate_private_key, ed25519.Ed25519PrivateKey):
+            signature_algorithms = [SignatureAlgorithm.ED25519]
 
         # negotiate parameters
         cipher_suite = negotiate(

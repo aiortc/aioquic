@@ -45,6 +45,7 @@ from .utils import (
     SERVER_CERTFILE,
     SERVER_KEYFILE,
     generate_ec_certificate,
+    generate_ed25519_certificate,
     load,
 )
 
@@ -325,7 +326,7 @@ class ContextTest(TestCase):
         server.handle_message(server_input, server_buf)
         self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
         client_input = merge_buffers(server_buf)
-        self.assertGreaterEqual(len(client_input), 600)
+        self.assertGreaterEqual(len(client_input), 588)
         self.assertLessEqual(len(client_input), 2316)
 
         reset_buffers(server_buf)
@@ -371,6 +372,24 @@ class ContextTest(TestCase):
         server.certificate, server.certificate_private_key = generate_ec_certificate(
             common_name="example.com", curve=ec.SECP256R1
         )
+
+        client = self.create_client(
+            cadata=server.certificate.public_bytes(serialization.Encoding.PEM),
+            cafile=None,
+        )
+
+        self._handshake(client, server)
+
+        # check ALPN matches
+        self.assertEqual(client.alpn_negotiated, None)
+        self.assertEqual(server.alpn_negotiated, None)
+
+    def test_handshake_ed25519(self):
+        server = self.create_server()
+        (
+            server.certificate,
+            server.certificate_private_key,
+        ) = generate_ed25519_certificate(common_name="example.com")
 
         client = self.create_client(
             cadata=server.certificate.public_bytes(serialization.Encoding.PEM),
