@@ -45,6 +45,7 @@ from .utils import (
     SERVER_CERTFILE,
     SERVER_KEYFILE,
     generate_ec_certificate,
+    generate_ed448_certificate,
     generate_ed25519_certificate,
     load,
 )
@@ -367,11 +368,10 @@ class ContextTest(TestCase):
         self.assertEqual(client.alpn_negotiated, None)
         self.assertEqual(server.alpn_negotiated, None)
 
-    def test_handshake_ecdsa_secp256r1(self):
+    def _test_handshake_with_certificate(self, certificate, private_key):
         server = self.create_server()
-        server.certificate, server.certificate_private_key = generate_ec_certificate(
-            common_name="example.com", curve=ec.SECP256R1
-        )
+        server.certificate = certificate
+        server.certificate_private_key = private_key
 
         client = self.create_client(
             cadata=server.certificate.public_bytes(serialization.Encoding.PEM),
@@ -384,23 +384,20 @@ class ContextTest(TestCase):
         self.assertEqual(client.alpn_negotiated, None)
         self.assertEqual(server.alpn_negotiated, None)
 
-    def test_handshake_ed25519(self):
-        server = self.create_server()
-        (
-            server.certificate,
-            server.certificate_private_key,
-        ) = generate_ed25519_certificate(common_name="example.com")
-
-        client = self.create_client(
-            cadata=server.certificate.public_bytes(serialization.Encoding.PEM),
-            cafile=None,
+    def test_handshake_with_ec_certificate(self):
+        self._test_handshake_with_certificate(
+            *generate_ec_certificate(common_name="example.com")
         )
 
-        self._handshake(client, server)
+    def test_handshake_with_ed25519_certificate(self):
+        self._test_handshake_with_certificate(
+            *generate_ed25519_certificate(common_name="example.com")
+        )
 
-        # check ALPN matches
-        self.assertEqual(client.alpn_negotiated, None)
-        self.assertEqual(server.alpn_negotiated, None)
+    def test_handshake_with_ed448_certificate(self):
+        self._test_handshake_with_certificate(
+            *generate_ed448_certificate(common_name="example.com")
+        )
 
     def test_handshake_with_alpn(self):
         client = self.create_client(alpn_protocols=["hq-20"])
