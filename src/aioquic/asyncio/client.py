@@ -79,16 +79,17 @@ async def connect(
     )
 
     # connect
-    _, protocol = await loop.create_datagram_endpoint(
+    transport, protocol = await loop.create_datagram_endpoint(
         lambda: create_protocol(connection, stream_handler=stream_handler),
         local_addr=(local_host, local_port),
     )
     protocol = cast(QuicConnectionProtocol, protocol)
-    protocol.connect(addr)
-    if wait_connected:
-        await protocol.wait_connected()
     try:
+        protocol.connect(addr)
+        if wait_connected:
+            await protocol.wait_connected()
         yield protocol
     finally:
         protocol.close()
-    await protocol.wait_closed()
+        await protocol.wait_closed()
+        transport.close()
