@@ -31,13 +31,13 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
         self._read_queue: Dict[int, Deque[H3Event]] = {}
         self._read_ready: Dict[int, asyncio.Event] = {}
 
-    async def arequest(
+    async def handle_async_request(
         self,
         method: bytes,
         url: Tuple[bytes, bytes, Optional[int], bytes],
         headers: Headers = None,
         stream: httpcore.AsyncByteStream = None,
-        ext: dict = None,
+        extensions: dict = None,
     ) -> Tuple[int, Headers, httpcore.AsyncByteStream, dict]:
         stream_id = self._quic.get_next_available_stream_id()
         self._read_queue[stream_id] = deque()
@@ -76,7 +76,7 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
             headers,
             response_stream,
             {
-                "http_version": "HTTP/3",
+                "http_version": b"HTTP/3",
             },
         )
 
