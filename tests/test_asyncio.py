@@ -20,6 +20,7 @@ from .utils import (
     SERVER_KEYFILE,
     SKIP_TESTS,
     generate_ec_certificate,
+    generate_ed448_certificate,
     generate_ed25519_certificate,
     run,
 )
@@ -131,9 +132,7 @@ class HighLevelTest(TestCase):
         response = run(self.run_client(host="::1"))
         self.assertEqual(response, b"gnip")
 
-    def test_connect_and_serve_ec_certificate(self):
-        certificate, private_key = generate_ec_certificate(common_name="localhost")
-
+    def _test_connect_and_serve_with_certificate(self, certificate, private_key):
         run(
             self.run_server(
                 configuration=QuicConfiguration(
@@ -153,27 +152,20 @@ class HighLevelTest(TestCase):
 
         self.assertEqual(response, b"gnip")
 
-    def test_connect_and_serve_ed25519_certificate(self):
-        certificate, private_key = generate_ed25519_certificate(common_name="localhost")
-
-        run(
-            self.run_server(
-                configuration=QuicConfiguration(
-                    certificate=certificate,
-                    private_key=private_key,
-                    is_client=False,
-                )
-            )
+    def test_connect_and_serve_with_ec_certificate(self):
+        self._test_connect_and_serve_with_certificate(
+            *generate_ec_certificate(common_name="localhost")
         )
 
-        response = run(
-            self.run_client(
-                cadata=certificate.public_bytes(serialization.Encoding.PEM),
-                cafile=None,
-            )
+    def test_connect_and_serve_with_ed25519_certificate(self):
+        self._test_connect_and_serve_with_certificate(
+            *generate_ed25519_certificate(common_name="localhost")
         )
 
-        self.assertEqual(response, b"gnip")
+    def test_connect_and_serve_with_ed448_certificate(self):
+        self._test_connect_and_serve_with_certificate(
+            *generate_ed448_certificate(common_name="localhost")
+        )
 
     def test_connect_and_serve_large(self):
         """
