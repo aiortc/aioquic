@@ -7,12 +7,10 @@ import sys
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 
 
-def generate_ec_certificate(common_name, curve=ec.SECP256R1, alternative_names=[]):
-    key = ec.generate_private_key(backend=default_backend(), curve=curve)
-
+def generate_certificate(*, alternative_names, common_name, hash_algorithm, key):
     subject = issuer = x509.Name(
         [x509.NameAttribute(x509.NameOID.COMMON_NAME, common_name)]
     )
@@ -33,8 +31,28 @@ def generate_ec_certificate(common_name, curve=ec.SECP256R1, alternative_names=[
             ),
             critical=False,
         )
-    cert = builder.sign(key, hashes.SHA256(), default_backend())
+    cert = builder.sign(key, hash_algorithm, default_backend())
     return cert, key
+
+
+def generate_ec_certificate(common_name, curve=ec.SECP256R1, alternative_names=[]):
+    key = ec.generate_private_key(backend=default_backend(), curve=curve)
+    return generate_certificate(
+        alternative_names=alternative_names,
+        common_name=common_name,
+        hash_algorithm=hashes.SHA256(),
+        key=key,
+    )
+
+
+def generate_ed25519_certificate(common_name, alternative_names=[]):
+    key = ed25519.Ed25519PrivateKey.generate()
+    return generate_certificate(
+        alternative_names=alternative_names,
+        common_name=common_name,
+        hash_algorithm=None,
+        key=key,
+    )
 
 
 def load(name):

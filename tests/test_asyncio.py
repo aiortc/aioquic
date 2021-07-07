@@ -20,6 +20,7 @@ from .utils import (
     SERVER_KEYFILE,
     SKIP_TESTS,
     generate_ec_certificate,
+    generate_ed25519_certificate,
     run,
 )
 
@@ -132,6 +133,28 @@ class HighLevelTest(TestCase):
 
     def test_connect_and_serve_ec_certificate(self):
         certificate, private_key = generate_ec_certificate(common_name="localhost")
+
+        run(
+            self.run_server(
+                configuration=QuicConfiguration(
+                    certificate=certificate,
+                    private_key=private_key,
+                    is_client=False,
+                )
+            )
+        )
+
+        response = run(
+            self.run_client(
+                cadata=certificate.public_bytes(serialization.Encoding.PEM),
+                cafile=None,
+            )
+        )
+
+        self.assertEqual(response, b"gnip")
+
+    def test_connect_and_serve_ed25519_certificate(self):
+        certificate, private_key = generate_ed25519_certificate(common_name="localhost")
 
         run(
             self.run_server(
