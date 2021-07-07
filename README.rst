@@ -51,8 +51,8 @@ different concurrency models.
 Features
 --------
 
-- QUIC stack conforming with draft-28
-- HTTP/3 stack conforming with draft-28
+- QUIC stack conforming with RFC 9000
+- HTTP/3 stack conforming with draft-ietf-quic-http-34
 - minimal TLS 1.3 implementation
 - IPv4 and IPv6 support
 - connection migration and NAT rebinding
