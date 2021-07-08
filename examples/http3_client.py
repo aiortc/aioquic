@@ -140,9 +140,6 @@ class HttpClient(QuicConnectionProtocol):
         """
         Perform a GET request.
         """
-        if headers is None:
-            headers = {}
-
         return await self._request(
             HttpRequest(method="GET", url=URL(url), headers=headers)
         )
@@ -153,9 +150,6 @@ class HttpClient(QuicConnectionProtocol):
         """
         Perform a POST request.
         """
-        if headers is None:
-            headers = {}
-
         return await self._request(
             HttpRequest(method="POST", url=URL(url), content=data, headers=headers)
         )
@@ -166,9 +160,6 @@ class HttpClient(QuicConnectionProtocol):
         """
         Open a WebSocket.
         """
-        if subprotocols is None:
-            subprotocols = []
-
         request = HttpRequest(method="CONNECT", url=URL(url))
         stream_id = self._quic.get_next_available_stream_id()
         websocket = WebSocket(
