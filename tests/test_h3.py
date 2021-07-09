@@ -1,4 +1,5 @@
 import binascii
+import contextlib
 from unittest import TestCase
 
 from aioquic.buffer import Buffer, encode_uint_var
@@ -33,13 +34,34 @@ DUMMY_SETTINGS = {
     Setting.QPACK_BLOCKED_STREAMS: 16,
     Setting.DUMMY: 1,
 }
+QUIC_CONFIGURATION_OPTIONS = {"alpn_protocols": H3_ALPN}
 
 
-def h3_client_and_server():
+def h3_client_and_server(options=QUIC_CONFIGURATION_OPTIONS):
     return client_and_server(
-        client_options={"alpn_protocols": H3_ALPN},
-        server_options={"alpn_protocols": H3_ALPN},
+        client_options=options,
+        server_options=options,
     )
+
+
+@contextlib.contextmanager
+def h3_fake_client_and_server(options=QUIC_CONFIGURATION_OPTIONS):
+    quic_client = FakeQuicConnection(
+        configuration=QuicConfiguration(is_client=True, **options)
+    )
+    quic_server = FakeQuicConnection(
+        configuration=QuicConfiguration(is_client=False, **options)
+    )
+
+    # exchange transport parameters
+    quic_client._remote_max_datagram_frame_size = (
+        quic_server.configuration.max_datagram_frame_size
+    )
+    quic_server._remote_max_datagram_frame_size = (
+        quic_client.configuration.max_datagram_frame_size
+    )
+
+    yield quic_client, quic_server
 
 
 def h3_transfer(quic_sender, h3_receiver):
@@ -70,6 +92,7 @@ class FakeQuicConnection:
         self._quic_logger = QuicLogger().start_trace(
             is_client=configuration.is_client, odcid=b""
         )
+        self._remote_max_datagram_frame_size = None
 
     def close(self, error_code, reason_phrase):
         self.closed = (error_code, reason_phrase)
@@ -538,43 +561,41 @@ class H3ConnectionTest(TestCase):
         """
         We should not receive HEADERS after receiving trailers.
         """
-        quic_client = FakeQuicConnection(
-            configuration=QuicConfiguration(is_client=True)
-        )
-        quic_server = FakeQuicConnection(
-            configuration=QuicConfiguration(is_client=False)
-        )
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
 
-        h3_client = H3Connection(quic_client)
-        h3_server = H3Connection(quic_server)
-
-        stream_id = quic_client.get_next_available_stream_id()
-        h3_client.send_headers(
-            stream_id=stream_id,
-            headers=[
-                (b":method", b"GET"),
-                (b":scheme", b"https"),
-                (b":authority", b"localhost"),
-                (b":path", b"/"),
-            ],
-        )
-        h3_client.send_headers(
-            stream_id=stream_id, headers=[(b"x-some-trailer", b"foo")], end_stream=True
-        )
-        h3_transfer(quic_client, h3_server)
-
-        h3_server.handle_event(
-            StreamDataReceived(
-                stream_id=0, data=encode_frame(FrameType.HEADERS, b""), end_stream=False
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
             )
-        )
-        self.assertEqual(
-            quic_server.closed,
-            (
-                ErrorCode.H3_FRAME_UNEXPECTED,
-                "HEADERS frame is not allowed in this state",
-            ),
-        )
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[(b"x-some-trailer", b"foo")],
+                end_stream=True,
+            )
+            h3_transfer(quic_client, h3_server)
+
+            h3_server.handle_event(
+                StreamDataReceived(
+                    stream_id=0,
+                    data=encode_frame(FrameType.HEADERS, b""),
+                    end_stream=False,
+                )
+            )
+            self.assertEqual(
+                quic_server.closed,
+                (
+                    ErrorCode.H3_FRAME_UNEXPECTED,
+                    "HEADERS frame is not allowed in this state",
+                ),
+            )
 
     def test_handle_request_frame_push_promise_from_client(self):
         """
@@ -696,127 +717,132 @@ class H3ConnectionTest(TestCase):
             )
 
     def test_request_fragmented_frame(self):
-        quic_client = FakeQuicConnection(
-            configuration=QuicConfiguration(is_client=True)
-        )
-        quic_server = FakeQuicConnection(
-            configuration=QuicConfiguration(is_client=False)
-        )
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
 
-        h3_client = H3Connection(quic_client)
-        h3_server = H3Connection(quic_server)
+            # send request
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                    (b"x-foo", b"client"),
+                ],
+            )
+            h3_client.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
 
-        # send request
-        stream_id = quic_client.get_next_available_stream_id()
-        h3_client.send_headers(
-            stream_id=stream_id,
-            headers=[
-                (b":method", b"GET"),
-                (b":scheme", b"https"),
-                (b":authority", b"localhost"),
-                (b":path", b"/"),
-                (b"x-foo", b"client"),
-            ],
-        )
-        h3_client.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
+            # receive request
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual(
+                events,
+                [
+                    HeadersReceived(
+                        headers=[
+                            (b":method", b"GET"),
+                            (b":scheme", b"https"),
+                            (b":authority", b"localhost"),
+                            (b":path", b"/"),
+                            (b"x-foo", b"client"),
+                        ],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    DataReceived(data=b"h", stream_id=0, stream_ended=False),
+                    DataReceived(data=b"e", stream_id=0, stream_ended=False),
+                    DataReceived(data=b"l", stream_id=0, stream_ended=False),
+                    DataReceived(data=b"l", stream_id=0, stream_ended=False),
+                    DataReceived(data=b"o", stream_id=0, stream_ended=False),
+                    DataReceived(data=b"", stream_id=0, stream_ended=True),
+                ],
+            )
 
-        # receive request
-        events = h3_transfer(quic_client, h3_server)
-        self.assertEqual(
-            events,
-            [
-                HeadersReceived(
-                    headers=[
-                        (b":method", b"GET"),
-                        (b":scheme", b"https"),
-                        (b":authority", b"localhost"),
-                        (b":path", b"/"),
-                        (b"x-foo", b"client"),
-                    ],
-                    stream_id=stream_id,
-                    stream_ended=False,
-                ),
-                DataReceived(data=b"h", stream_id=0, stream_ended=False),
-                DataReceived(data=b"e", stream_id=0, stream_ended=False),
-                DataReceived(data=b"l", stream_id=0, stream_ended=False),
-                DataReceived(data=b"l", stream_id=0, stream_ended=False),
-                DataReceived(data=b"o", stream_id=0, stream_ended=False),
-                DataReceived(data=b"", stream_id=0, stream_ended=True),
-            ],
-        )
+            # send push promise
+            push_stream_id = h3_server.send_push_promise(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/app.txt"),
+                ],
+            )
+            self.assertEqual(push_stream_id, 15)
 
-        # send push promise
-        push_stream_id = h3_server.send_push_promise(
-            stream_id=stream_id,
-            headers=[
-                (b":method", b"GET"),
-                (b":scheme", b"https"),
-                (b":authority", b"localhost"),
-                (b":path", b"/app.txt"),
-            ],
-        )
-        self.assertEqual(push_stream_id, 15)
+            # send response
+            h3_server.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":status", b"200"),
+                    (b"content-type", b"text/html; charset=utf-8"),
+                ],
+                end_stream=False,
+            )
+            h3_server.send_data(stream_id=stream_id, data=b"html", end_stream=True)
 
-        # send response
-        h3_server.send_headers(
-            stream_id=stream_id,
-            headers=[
-                (b":status", b"200"),
-                (b"content-type", b"text/html; charset=utf-8"),
-            ],
-            end_stream=False,
-        )
-        h3_server.send_data(stream_id=stream_id, data=b"html", end_stream=True)
+            #  fulfill push promise
+            h3_server.send_headers(
+                stream_id=push_stream_id,
+                headers=[(b":status", b"200"), (b"content-type", b"text/plain")],
+                end_stream=False,
+            )
+            h3_server.send_data(stream_id=push_stream_id, data=b"text", end_stream=True)
 
-        #  fulfill push promise
-        h3_server.send_headers(
-            stream_id=push_stream_id,
-            headers=[(b":status", b"200"), (b"content-type", b"text/plain")],
-            end_stream=False,
-        )
-        h3_server.send_data(stream_id=push_stream_id, data=b"text", end_stream=True)
-
-        # receive push promise / reponse
-        events = h3_transfer(quic_server, h3_client)
-        self.assertEqual(
-            events,
-            [
-                PushPromiseReceived(
-                    headers=[
-                        (b":method", b"GET"),
-                        (b":scheme", b"https"),
-                        (b":authority", b"localhost"),
-                        (b":path", b"/app.txt"),
-                    ],
-                    push_id=0,
-                    stream_id=stream_id,
-                ),
-                HeadersReceived(
-                    headers=[
-                        (b":status", b"200"),
-                        (b"content-type", b"text/html; charset=utf-8"),
-                    ],
-                    stream_id=0,
-                    stream_ended=False,
-                ),
-                DataReceived(data=b"h", stream_id=0, stream_ended=False),
-                DataReceived(data=b"t", stream_id=0, stream_ended=False),
-                DataReceived(data=b"m", stream_id=0, stream_ended=False),
-                DataReceived(data=b"l", stream_id=0, stream_ended=False),
-                DataReceived(data=b"", stream_id=0, stream_ended=True),
-                HeadersReceived(
-                    headers=[(b":status", b"200"), (b"content-type", b"text/plain")],
-                    stream_id=15,
-                    stream_ended=False,
-                    push_id=0,
-                ),
-                DataReceived(data=b"t", stream_id=15, stream_ended=False, push_id=0),
-                DataReceived(data=b"e", stream_id=15, stream_ended=False, push_id=0),
-                DataReceived(data=b"x", stream_id=15, stream_ended=False, push_id=0),
-                DataReceived(data=b"t", stream_id=15, stream_ended=False, push_id=0),
-                DataReceived(data=b"", stream_id=15, stream_ended=True, push_id=0),
-            ],
-        )
+            # receive push promise / reponse
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual(
+                events,
+                [
+                    PushPromiseReceived(
+                        headers=[
+                            (b":method", b"GET"),
+                            (b":scheme", b"https"),
+                            (b":authority", b"localhost"),
+                            (b":path", b"/app.txt"),
+                        ],
+                        push_id=0,
+                        stream_id=stream_id,
+                    ),
+                    HeadersReceived(
+                        headers=[
+                            (b":status", b"200"),
+                            (b"content-type", b"text/html; charset=utf-8"),
+                        ],
+                        stream_id=0,
+                        stream_ended=False,
+                    ),
+                    DataReceived(data=b"h", stream_id=0, stream_ended=False),
+                    DataReceived(data=b"t", stream_id=0, stream_ended=False),
+                    DataReceived(data=b"m", stream_id=0, stream_ended=False),
+                    DataReceived(data=b"l", stream_id=0, stream_ended=False),
+                    DataReceived(data=b"", stream_id=0, stream_ended=True),
+                    HeadersReceived(
+                        headers=[
+                            (b":status", b"200"),
+                            (b"content-type", b"text/plain"),
+                        ],
+                        stream_id=15,
+                        stream_ended=False,
+                        push_id=0,
+                    ),
+                    DataReceived(
+                        data=b"t", stream_id=15, stream_ended=False, push_id=0
+                    ),
+                    DataReceived(
+                        data=b"e", stream_id=15, stream_ended=False, push_id=0
+                    ),
+                    DataReceived(
+                        data=b"x", stream_id=15, stream_ended=False, push_id=0
+                    ),
+                    DataReceived(
+                        data=b"t", stream_id=15, stream_ended=False, push_id=0
+                    ),
+                    DataReceived(data=b"", stream_id=15, stream_ended=True, push_id=0),
+                ],
+            )
 
     def test_request_with_server_push(self):
         with h3_client_and_server() as (quic_client, quic_server):
