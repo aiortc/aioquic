@@ -637,7 +637,7 @@ class H3Connection:
                     stream_ended=stream_ended,
                 )
             )
-        elif stream.frame_type == FrameType.PUSH_PROMISE and stream.push_id is None:
+        elif frame_type == FrameType.PUSH_PROMISE and stream.push_id is None:
             if not self._is_client:
                 raise FrameUnexpected("Clients must not send PUSH_PROMISE")
             frame_buf = Buffer(data=frame_data)
@@ -722,6 +722,22 @@ class H3Connection:
         if stream.blocked:
             return http_events
 
+        # shortcut for WEBTRANSPORT_STREAM frame fragments
+        if (
+            stream.frame_type == FrameType.WEBTRANSPORT_STREAM
+            and stream.session_id is not None
+        ):
+            http_events.append(
+                WebTransportStreamDataReceived(
+                    data=stream.buffer,
+                    session_id=stream.session_id,
+                    stream_id=stream.stream_id,
+                    stream_ended=stream_ended,
+                )
+            )
+            stream.buffer = b""
+            return http_events
+
         # shortcut for DATA frame fragments
         if (
             stream.frame_type == FrameType.DATA
@@ -765,6 +781,25 @@ class H3Connection:
                     break
                 consumed = buf.tell()
 
+                # WEBTRANSPORT_STREAM frames last until the end of the stream
+                if stream.frame_type == FrameType.WEBTRANSPORT_STREAM:
+                    stream.session_id = stream.frame_size
+                    stream.frame_size = None
+
+                    frame_data = stream.buffer[consumed:]
+                    stream.buffer = b""
+
+                    if frame_data or stream_ended:
+                        http_events.append(
+                            WebTransportStreamDataReceived(
+                                data=frame_data,
+                                session_id=stream.session_id,
+                                stream_id=stream.stream_id,
+                                stream_ended=stream_ended,
+                            )
+                        )
+                    return http_events
+
                 # log frame
                 if (
                     self._quic_logger is not None
@@ -785,17 +820,19 @@ class H3Connection:
 
             # read available data
             frame_data = buf.pull_bytes(chunk_size)
+            frame_type = stream.frame_type
             consumed = buf.tell()
 
             # detect end of frame
             stream.frame_size -= chunk_size
             if not stream.frame_size:
                 stream.frame_size = None
+                stream.frame_type = None
 
             try:
                 http_events.extend(
                     self._handle_request_or_push_frame(
-                        frame_type=stream.frame_type,
+                        frame_type=frame_type,
                         frame_data=frame_data,
                         stream=stream,
                         stream_ended=stream.ended and buf.eof(),
@@ -891,13 +928,13 @@ class H3Connection:
                         break
                     consumed = buf.tell()
 
-                webtransport_data = stream.buffer[consumed:]
+                frame_data = stream.buffer[consumed:]
                 stream.buffer = b""
 
-                if webtransport_data or stream_ended:
+                if frame_data or stream_ended:
                     http_events.append(
                         WebTransportStreamDataReceived(
-                            data=webtransport_data,
+                            data=frame_data,
                             session_id=stream.session_id,
                             stream_ended=stream.ended,
                             stream_id=stream.stream_id,

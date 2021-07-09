@@ -1,7 +1,7 @@
 from unittest import TestCase
 
 from aioquic.buffer import encode_uint_var
-from aioquic.h3.connection import H3_ALPN, H3Connection, StreamType
+from aioquic.h3.connection import H3_ALPN, FrameType, H3Connection, StreamType
 from aioquic.h3.events import HeadersReceived, WebTransportStreamDataReceived
 
 from .test_h3 import h3_client_and_server, h3_fake_client_and_server, h3_transfer
@@ -74,6 +74,94 @@ class WebTransportTest(TestCase):
         )
 
         return stream_id
+
+    def test_bidirectional_stream(self):
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # create session
+            session_id = self._make_session(h3_client, h3_server)
+
+            # send data on bidirectional stream
+            stream_id = quic_client.get_next_available_stream_id()
+            quic_client.send_stream_data(
+                stream_id,
+                encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
+                + encode_uint_var(session_id)
+                + b"foo",
+                end_stream=True,
+            )
+
+            # receive data
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual(
+                events,
+                [
+                    WebTransportStreamDataReceived(
+                        data=b"foo",
+                        session_id=session_id,
+                        stream_ended=True,
+                        stream_id=stream_id,
+                    )
+                ],
+            )
+
+    def test_bidirectional_stream_fragmented_frame(self):
+        with h3_fake_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # create session
+            session_id = self._make_session(h3_client, h3_server)
+
+            # send data on bidirectional stream
+            stream_id = quic_client.get_next_available_stream_id()
+            quic_client.send_stream_data(
+                stream_id,
+                encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
+                + encode_uint_var(session_id)
+                + b"foo",
+                end_stream=True,
+            )
+
+            # receive data
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual(
+                events,
+                [
+                    WebTransportStreamDataReceived(
+                        data=b"f",
+                        session_id=session_id,
+                        stream_ended=False,
+                        stream_id=stream_id,
+                    ),
+                    WebTransportStreamDataReceived(
+                        data=b"o",
+                        session_id=session_id,
+                        stream_ended=False,
+                        stream_id=stream_id,
+                    ),
+                    WebTransportStreamDataReceived(
+                        data=b"o",
+                        session_id=session_id,
+                        stream_ended=False,
+                        stream_id=stream_id,
+                    ),
+                    WebTransportStreamDataReceived(
+                        data=b"",
+                        session_id=session_id,
+                        stream_ended=True,
+                        stream_id=stream_id,
+                    ),
+                ],
+            )
 
     def test_unidirectional_stream(self):
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
