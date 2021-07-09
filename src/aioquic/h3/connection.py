@@ -5,7 +5,7 @@ from typing import Dict, FrozenSet, List, Optional, Set
 
 import pylsqpack
 
-from aioquic.buffer import Buffer, BufferReadError, encode_uint_var
+from aioquic.buffer import UINT_VAR_MAX_SIZE, Buffer, BufferReadError, encode_uint_var
 from aioquic.h3.events import (
     DataReceived,
     H3Event,
@@ -136,7 +136,7 @@ class StreamCreationError(ProtocolError):
 
 def encode_frame(frame_type: int, frame_data: bytes) -> bytes:
     frame_length = len(frame_data)
-    buf = Buffer(capacity=frame_length + 16)
+    buf = Buffer(capacity=frame_length + 2 * UINT_VAR_MAX_SIZE)
     buf.push_uint_var(frame_type)
     buf.push_uint_var(frame_length)
     buf.push_bytes(frame_data)

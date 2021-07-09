@@ -1,13 +1,14 @@
 from ._buffer import Buffer, BufferReadError, BufferWriteError  # noqa
 
 UINT_VAR_MAX = 0x3FFFFFFFFFFFFFFF
+UINT_VAR_MAX_SIZE = 8
 
 
 def encode_uint_var(value: int) -> bytes:
     """
     Encode a variable-length unsigned integer.
     """
-    buf = Buffer(capacity=8)
+    buf = Buffer(capacity=UINT_VAR_MAX_SIZE)
     buf.push_uint_var(value)
     return buf.data
 

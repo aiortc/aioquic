@@ -8,7 +8,13 @@ from functools import partial
 from typing import Any, Deque, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from .. import tls
-from ..buffer import UINT_VAR_MAX, Buffer, BufferReadError, size_uint_var
+from ..buffer import (
+    UINT_VAR_MAX,
+    UINT_VAR_MAX_SIZE,
+    Buffer,
+    BufferReadError,
+    size_uint_var,
+)
 from . import events
 from .configuration import QuicConfiguration
 from .crypto import CryptoError, CryptoPair, KeyUnavailableError
@@ -79,20 +85,20 @@ NetworkAddress = Any
 
 # frame sizes
 ACK_FRAME_CAPACITY = 64  # FIXME: this is arbitrary!
-APPLICATION_CLOSE_FRAME_CAPACITY = 1 + 8 + 8  # + reason length
-CONNECTION_LIMIT_FRAME_CAPACITY = 1 + 8
+APPLICATION_CLOSE_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE  # + reason length
+CONNECTION_LIMIT_FRAME_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 HANDSHAKE_DONE_FRAME_CAPACITY = 1
-MAX_STREAM_DATA_FRAME_CAPACITY = 1 + 8 + 8
+MAX_STREAM_DATA_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE
 NEW_CONNECTION_ID_FRAME_CAPACITY = (
-    1 + 8 + 8 + 1 + CONNECTION_ID_MAX_SIZE + STATELESS_RESET_TOKEN_SIZE
+    1 + 2 * UINT_VAR_MAX_SIZE + 1 + CONNECTION_ID_MAX_SIZE + STATELESS_RESET_TOKEN_SIZE
 )
 PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
 PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
 PING_FRAME_CAPACITY = 1
-RESET_STREAM_CAPACITY = 1 + 8 + 8 + 8
-RETIRE_CONNECTION_ID_CAPACITY = 1 + 8
-STREAMS_BLOCKED_CAPACITY = 1 + 8
-TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 8 + 8 + 8  # + reason length
+RESET_STREAM_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE
+RETIRE_CONNECTION_ID_CAPACITY = 1 + UINT_VAR_MAX_SIZE
+STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
+TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE  # + reason length
 
 
 def EPOCHS(shortcut: str) -> FrozenSet[tls.Epoch]:
