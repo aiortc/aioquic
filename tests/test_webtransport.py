@@ -1,10 +1,27 @@
 from unittest import TestCase
 
 from aioquic.buffer import encode_uint_var
-from aioquic.h3.connection import H3_ALPN, FrameType, H3Connection, StreamType
-from aioquic.h3.events import HeadersReceived, WebTransportStreamDataReceived
+from aioquic.h3.connection import (
+    H3_ALPN,
+    ErrorCode,
+    FrameType,
+    H3Connection,
+    StreamType,
+)
+from aioquic.h3.events import (
+    HeadersReceived,
+    WebTransportDatagramReceived,
+    WebTransportStreamDataReceived,
+)
+from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.events import DatagramFrameReceived
 
-from .test_h3 import h3_client_and_server, h3_fake_client_and_server, h3_transfer
+from .test_h3 import (
+    FakeQuicConnection,
+    h3_client_and_server,
+    h3_fake_client_and_server,
+    h3_transfer,
+)
 
 QUIC_CONFIGURATION_OPTIONS = {
     "alpn_protocols": H3_ALPN,
@@ -242,3 +259,40 @@ class WebTransportTest(TestCase):
                     ),
                 ],
             )
+
+    def test_datagram(self):
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # create session
+            session_id = self._make_session(h3_client, h3_server)
+
+            # send datagram
+            quic_client.send_datagram_frame(encode_uint_var(session_id) + b"foo")
+
+            # receive datagram
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual(
+                events,
+                [WebTransportDatagramReceived(data=b"foo", session_id=session_id)],
+            )
+
+    def test_handle_datagram_truncated(self):
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive a datagram with a truncated session ID
+        h3_server.handle_event(DatagramFrameReceived(data=b"\xff"))
+        self.assertEqual(
+            quic_server.closed,
+            (
+                ErrorCode.H3_GENERAL_PROTOCOL_ERROR,
+                "Could not parse WebTransport session ID",
+            ),
+        )

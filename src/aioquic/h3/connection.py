@@ -12,11 +12,12 @@ from aioquic.h3.events import (
     Headers,
     HeadersReceived,
     PushPromiseReceived,
+    WebTransportDatagramReceived,
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
-from aioquic.quic.events import QuicEvent, StreamDataReceived
+from aioquic.quic.events import DatagramFrameReceived, QuicEvent, StreamDataReceived
 from aioquic.quic.logger import QuicLoggerTrace
 
 logger = logging.getLogger("http3")
@@ -366,23 +367,28 @@ class H3Connection:
 
         :param event: The QUIC event to handle.
         """
-        if isinstance(event, StreamDataReceived) and not self._is_done:
-            stream_id = event.stream_id
-            stream = self._get_or_create_stream(stream_id)
+
+        if not self._is_done:
             try:
-                if stream_id % 4 == 0:
-                    return self._receive_request_or_push_data(
-                        stream, event.data, event.end_stream
-                    )
-                elif stream_is_unidirectional(stream_id):
-                    return self._receive_stream_data_uni(
-                        stream, event.data, event.end_stream
-                    )
+                if isinstance(event, StreamDataReceived):
+                    stream_id = event.stream_id
+                    stream = self._get_or_create_stream(stream_id)
+                    if stream_id % 4 == 0:
+                        return self._receive_request_or_push_data(
+                            stream, event.data, event.end_stream
+                        )
+                    elif stream_is_unidirectional(stream_id):
+                        return self._receive_stream_data_uni(
+                            stream, event.data, event.end_stream
+                        )
+                elif isinstance(event, DatagramFrameReceived):
+                    return self._receive_datagram(event.data)
             except ProtocolError as exc:
                 self._is_done = True
                 self._quic.close(
                     error_code=exc.error_code, reason_phrase=exc.reason_phrase
                 )
+
         return []
 
     def send_push_promise(self, stream_id: int, headers: Headers) -> int:
@@ -707,6 +713,19 @@ class H3Connection:
         self._local_decoder_stream_id = self._create_uni_stream(
             StreamType.QPACK_DECODER
         )
+
+    def _receive_datagram(self, data: bytes) -> List[H3Event]:
+        """
+        Handle a datagram.
+        """
+        buf = Buffer(data=data)
+        try:
+            session_id = buf.pull_uint_var()
+        except BufferReadError:
+            raise ProtocolError("Could not parse WebTransport session ID")
+        return [
+            WebTransportDatagramReceived(data=data[buf.tell() :], session_id=session_id)
+        ]
 
     def _receive_request_or_push_data(
         self, stream: H3Stream, data: bytes, stream_ended: bool
