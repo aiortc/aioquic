@@ -22,6 +22,9 @@ Events
     .. autoclass:: H3Event
         :members:
 
+    .. autoclass:: DatagramReceived
+        :members:
+
     .. autoclass:: DataReceived
         :members:
 
@@ -29,6 +32,9 @@ Events
         :members:
 
     .. autoclass:: PushPromiseReceived
+        :members:
+
+    .. autoclass:: WebTransportStreamDataReceived
         :members:
 
 
