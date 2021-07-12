@@ -74,6 +74,7 @@ class Setting(IntEnum):
     SETTINGS_MAX_HEADER_LIST_SIZE = 0x6
     QPACK_BLOCKED_STREAMS = 0x7
     SETTINGS_NUM_PLACEHOLDERS = 0x9
+    H3_DATAGRAM = 0x276
     SETTINGS_ENABLE_WEBTRANSPORT = 0x2B603742
 
     #  Dummy setting to check it is correctly ignored by the peer.
@@ -540,6 +541,7 @@ class H3Connection:
             Setting.DUMMY: 1,
         }
         if self._enable_webtransport:
+            settings[Setting.H3_DATAGRAM] = 1
             settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] = 1
         return settings
 
@@ -1011,8 +1013,26 @@ class H3Connection:
         return http_events
 
     def _validate_settings(self, settings: Dict[int, int]) -> None:
-        if (
-            settings.get(Setting.SETTINGS_ENABLE_WEBTRANSPORT) == 1
-            and self._quic._remote_max_datagram_frame_size is None
-        ):
-            raise SettingsError("WebTransport requires support for QUIC datagrams")
+        if Setting.H3_DATAGRAM in settings:
+            if settings[Setting.H3_DATAGRAM] not in (0, 1):
+                raise SettingsError("H3_DATAGRAM setting must be 0 or 1")
+
+            if (
+                settings[Setting.H3_DATAGRAM] == 1
+                and self._quic._remote_max_datagram_frame_size is None
+            ):
+                raise SettingsError(
+                    "H3_DATAGRAM requires max_datagram_frame_size transport parameter"
+                )
+
+        if Setting.SETTINGS_ENABLE_WEBTRANSPORT in settings:
+            if settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] not in (0, 1):
+                raise SettingsError(
+                    "SETTINGS_ENABLE_WEBTRANSPORT setting must be 0 or 1"
+                )
+
+            if (
+                settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] == 1
+                and settings.get(Setting.H3_DATAGRAM) != 1
+            ):
+                raise SettingsError("SETTINGS_ENABLE_WEBTRANSPORT requires H3_DATAGRAM")
