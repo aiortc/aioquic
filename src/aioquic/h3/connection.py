@@ -362,6 +362,27 @@ class H3Connection:
 
         self._init_connection()
 
+    def create_webtransport_stream(
+        self, session_id: int, is_unidirectional: bool = False
+    ) -> int:
+        """
+        Create a WebTransport stream and return the stream ID.
+
+        :param session_id: The WebTransport session identifier.
+        :param is_unidirectional: Whether to create a unidirectional stream.
+        """
+        if is_unidirectional:
+            stream_id = self._create_uni_stream(StreamType.WEBTRANSPORT)
+            self._quic.send_stream_data(stream_id, encode_uint_var(session_id))
+        else:
+            stream_id = self._quic.get_next_available_stream_id()
+            self._quic.send_stream_data(
+                stream_id,
+                encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
+                + encode_uint_var(session_id),
+            )
+        return stream_id
+
     def handle_event(self, event: QuicEvent) -> List[H3Event]:
         """
         Handle a QUIC event and return a list of HTTP events.

@@ -1,13 +1,6 @@
 from unittest import TestCase
 
-from aioquic.buffer import encode_uint_var
-from aioquic.h3.connection import (
-    H3_ALPN,
-    ErrorCode,
-    FrameType,
-    H3Connection,
-    StreamType,
-)
+from aioquic.h3.connection import H3_ALPN, ErrorCode, H3Connection
 from aioquic.h3.events import (
     DatagramReceived,
     HeadersReceived,
@@ -104,14 +97,8 @@ class WebTransportTest(TestCase):
             session_id = self._make_session(h3_client, h3_server)
 
             # send data on bidirectional stream
-            stream_id = quic_client.get_next_available_stream_id()
-            quic_client.send_stream_data(
-                stream_id,
-                encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
-                + encode_uint_var(session_id)
-                + b"foo",
-                end_stream=True,
-            )
+            stream_id = h3_client.create_webtransport_stream(session_id)
+            quic_client.send_stream_data(stream_id, b"foo", end_stream=True)
 
             # receive data
             events = h3_transfer(quic_client, h3_server)
@@ -139,14 +126,8 @@ class WebTransportTest(TestCase):
             session_id = self._make_session(h3_client, h3_server)
 
             # send data on bidirectional stream
-            stream_id = quic_client.get_next_available_stream_id()
-            quic_client.send_stream_data(
-                stream_id,
-                encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
-                + encode_uint_var(session_id)
-                + b"foo",
-                end_stream=True,
-            )
+            stream_id = h3_client.create_webtransport_stream(session_id)
+            quic_client.send_stream_data(stream_id, b"foo", end_stream=True)
 
             # receive data
             events = h3_transfer(quic_client, h3_server)
@@ -192,10 +173,10 @@ class WebTransportTest(TestCase):
             session_id = self._make_session(h3_client, h3_server)
 
             # send data on unidirectional stream
-            stream_id = h3_client._create_uni_stream(StreamType.WEBTRANSPORT)
-            quic_client.send_stream_data(
-                stream_id, encode_uint_var(session_id) + b"foo", end_stream=True
+            stream_id = h3_client.create_webtransport_stream(
+                session_id, is_unidirectional=True
             )
+            quic_client.send_stream_data(stream_id, b"foo", end_stream=True)
 
             # receive data
             events = h3_transfer(quic_client, h3_server)
@@ -223,10 +204,10 @@ class WebTransportTest(TestCase):
             session_id = self._make_session(h3_client, h3_server)
 
             # send data on unidirectional stream
-            stream_id = h3_client._create_uni_stream(StreamType.WEBTRANSPORT)
-            quic_client.send_stream_data(
-                stream_id, encode_uint_var(session_id) + b"foo", end_stream=True
+            stream_id = h3_client.create_webtransport_stream(
+                session_id, is_unidirectional=True
             )
+            quic_client.send_stream_data(stream_id, b"foo", end_stream=True)
 
             # receive data
             events = h3_transfer(quic_client, h3_server)
