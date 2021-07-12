@@ -9,8 +9,8 @@ from aioquic.h3.connection import (
     StreamType,
 )
 from aioquic.h3.events import (
+    DatagramReceived,
     HeadersReceived,
-    WebTransportDatagramReceived,
     WebTransportStreamDataReceived,
 )
 from aioquic.quic.configuration import QuicConfiguration
@@ -272,13 +272,13 @@ class WebTransportTest(TestCase):
             session_id = self._make_session(h3_client, h3_server)
 
             # send datagram
-            quic_client.send_datagram_frame(encode_uint_var(session_id) + b"foo")
+            h3_client.send_datagram(data=b"foo", flow_id=session_id)
 
             # receive datagram
             events = h3_transfer(quic_client, h3_server)
             self.assertEqual(
                 events,
-                [WebTransportDatagramReceived(data=b"foo", session_id=session_id)],
+                [DatagramReceived(data=b"foo", flow_id=session_id)],
             )
 
     def test_handle_datagram_truncated(self):
@@ -293,6 +293,6 @@ class WebTransportTest(TestCase):
             quic_server.closed,
             (
                 ErrorCode.H3_GENERAL_PROTOCOL_ERROR,
-                "Could not parse WebTransport session ID",
+                "Could not parse flow ID",
             ),
         )

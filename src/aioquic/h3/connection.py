@@ -7,12 +7,12 @@ import pylsqpack
 
 from aioquic.buffer import UINT_VAR_MAX_SIZE, Buffer, BufferReadError, encode_uint_var
 from aioquic.h3.events import (
+    DatagramReceived,
     DataReceived,
     H3Event,
     Headers,
     HeadersReceived,
     PushPromiseReceived,
-    WebTransportDatagramReceived,
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import NoAvailablePushIDError
@@ -392,6 +392,15 @@ class H3Connection:
 
         return []
 
+    def send_datagram(self, flow_id: int, data: bytes) -> None:
+        """
+        Send a datagram for the specified flow.
+
+        :param flow_id: The flow ID.
+        :param data: The HTTP/3 datagram payload.
+        """
+        self._quic.send_datagram_frame(encode_uint_var(flow_id) + data)
+
     def send_push_promise(self, stream_id: int, headers: Headers) -> int:
         """
         Send a push promise related to the specified stream.
@@ -722,12 +731,10 @@ class H3Connection:
         """
         buf = Buffer(data=data)
         try:
-            session_id = buf.pull_uint_var()
+            flow_id = buf.pull_uint_var()
         except BufferReadError:
-            raise ProtocolError("Could not parse WebTransport session ID")
-        return [
-            WebTransportDatagramReceived(data=data[buf.tell() :], session_id=session_id)
-        ]
+            raise ProtocolError("Could not parse flow ID")
+        return [DatagramReceived(data=data[buf.tell() :], flow_id=flow_id)]
 
     def _receive_request_or_push_data(
         self, stream: H3Stream, data: bytes, stream_ended: bool
