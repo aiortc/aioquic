@@ -10,6 +10,7 @@ import httpbin
 from asgiref.wsgi import WsgiToAsgi
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse, Response
+from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.websockets import WebSocketDisconnect
@@ -21,10 +22,8 @@ LOGS_PATH = os.path.join(STATIC_ROOT, "logs")
 QVIS_URL = "https://qvis.quictools.info/"
 
 templates = Jinja2Templates(directory=os.path.join(ROOT, "templates"))
-app = Starlette()
 
 
-@app.route("/")
 async def homepage(request):
     """
     Simple homepage.
@@ -33,7 +32,6 @@ async def homepage(request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-@app.route("/echo", methods=["POST"])
 async def echo(request):
     """
     HTTP echo endpoint.
@@ -43,7 +41,6 @@ async def echo(request):
     return Response(content, media_type=media_type)
 
 
-@app.route("/logs")
 async def logs(request):
     """
     Browsable list of QLOG files.
@@ -76,7 +73,6 @@ async def logs(request):
     )
 
 
-@app.route("/{size:int}")
 def padding(request):
     """
     Dynamically generated data, maximum 50MB.
@@ -85,7 +81,6 @@ def padding(request):
     return PlainTextResponse("Z" * size)
 
 
-@app.websocket_route("/ws")
 async def ws(websocket):
     """
     WebSocket echo endpoint.
@@ -104,6 +99,14 @@ async def ws(websocket):
         pass
 
 
-app.mount("/httpbin", WsgiToAsgi(httpbin.app))
-
-app.mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True))
+app = Starlette(
+    routes=[
+        Route("/", homepage),
+        Route("/{size:int}", padding),
+        Route("/echo", echo, methods=["POST"]),
+        Mount("/httpbin", WsgiToAsgi(httpbin.app)),
+        Route("/logs", logs),
+        WebSocketRoute("/ws", ws),
+        Mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True)),
+    ]
+)
