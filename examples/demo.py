@@ -13,6 +13,7 @@ from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
+from starlette.types import Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
 
 ROOT = os.path.dirname(__file__)
@@ -99,7 +100,36 @@ async def ws(websocket):
         pass
 
 
-app = Starlette(
+async def wt(scope: Scope, receive: Receive, send: Send) -> None:
+    """
+    WebTransport echo endpoint.
+    """
+    # accept connection
+    message = await receive()
+    assert message["type"] == "webtransport.connect"
+    await send({"type": "webtransport.accept"})
+
+    # echo back received data
+    while True:
+        message = await receive()
+        if message["type"] == "webtransport.datagram.receive":
+            await send(
+                {
+                    "data": message["data"],
+                    "type": "webtransport.datagram.send",
+                }
+            )
+        elif message["type"] == "webtransport.stream.receive":
+            await send(
+                {
+                    "data": message["data"],
+                    "stream": message["stream"],
+                    "type": "webtransport.stream.send",
+                }
+            )
+
+
+starlette = Starlette(
     routes=[
         Route("/", homepage),
         Route("/{size:int}", padding),
@@ -110,3 +140,10 @@ app = Starlette(
         Mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True)),
     ]
 )
+
+
+async def app(scope: Scope, receive: Receive, send: Send) -> None:
+    if scope["type"] == "webtransport" and scope["path"] == "/wt":
+        await wt(scope, receive, send)
+    else:
+        await starlette(scope, receive, send)
