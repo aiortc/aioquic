@@ -31,6 +31,20 @@ class DataReceived(H3Event):
 
 
 @dataclass
+class DatagramReceived(H3Event):
+    """
+    The DatagramReceived is fired whenever a datagram is received from the
+    the remote peer.
+    """
+
+    data: bytes
+    "The data which was received."
+
+    flow_id: int
+    "The ID of the flow the data was received for."
+
+
+@dataclass
 class HeadersReceived(H3Event):
     """
     The HeadersReceived event is fired whenever headers are received.
@@ -64,3 +78,23 @@ class PushPromiseReceived(H3Event):
 
     stream_id: int
     "The Stream ID of the stream that the push is related to."
+
+
+@dataclass
+class WebTransportStreamDataReceived(H3Event):
+    """
+    The WebTransportStreamDataReceived is fired whenever data is received
+    for a WebTransport stream.
+    """
+
+    data: bytes
+    "The data which was received."
+
+    stream_id: int
+    "The ID of the stream the data was received for."
+
+    stream_ended: bool
+    "Whether the STREAM frame had the FIN bit set."
+
+    session_id: int
+    "The ID of the session the data was received for."

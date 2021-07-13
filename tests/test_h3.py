@@ -1,5 +1,6 @@
 import binascii
 import contextlib
+import copy
 from unittest import TestCase
 
 from aioquic.buffer import Buffer, encode_uint_var
@@ -1439,6 +1440,106 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_server._stream[2].stream_type, 9)
             self.assertEqual(h3_server._stream[6].buffer, b"")
             self.assertEqual(h3_server._stream[6].stream_type, 64)
+
+    def test_validate_settings_h3_datagram_invalid_value(self):
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive SETTINGS with an invalid H3_DATAGRAM value
+        settings = copy.copy(DUMMY_SETTINGS)
+        settings[Setting.H3_DATAGRAM] = 2
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(settings)),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (
+                ErrorCode.H3_SETTINGS_ERROR,
+                "H3_DATAGRAM setting must be 0 or 1",
+            ),
+        )
+
+    def test_validate_settings_h3_datagram_without_transport_parameter(self):
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive SETTINGS with H3_DATAGRAM=1 but no max_datagram_frame_size TP
+        settings = copy.copy(DUMMY_SETTINGS)
+        settings[Setting.H3_DATAGRAM] = 1
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(settings)),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (
+                ErrorCode.H3_SETTINGS_ERROR,
+                "H3_DATAGRAM requires max_datagram_frame_size transport parameter",
+            ),
+        )
+
+    def test_validate_settings_enable_webtransport_invalid_value(self):
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive SETTINGS with an invalid SETTINGS_ENABLE_WEBTRANSPORT value
+        settings = copy.copy(DUMMY_SETTINGS)
+        settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] = 2
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(settings)),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (
+                ErrorCode.H3_SETTINGS_ERROR,
+                "SETTINGS_ENABLE_WEBTRANSPORT setting must be 0 or 1",
+            ),
+        )
+
+    def test_validate_settings_enable_webtransport_without_h3_datagram(self):
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive SETTINGS requesting WebTransport, but DATAGRAM was not offered
+        settings = copy.copy(DUMMY_SETTINGS)
+        settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] = 1
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(settings)),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (
+                ErrorCode.H3_SETTINGS_ERROR,
+                "SETTINGS_ENABLE_WEBTRANSPORT requires H3_DATAGRAM",
+            ),
+        )
 
 
 class H3ParserTest(TestCase):
