@@ -43,7 +43,7 @@ async def echo(request):
     return Response(content, media_type=media_type)
 
 
-@app.route("/logs/?")
+@app.route("/logs")
 async def logs(request):
     """
     Browsable list of QLOG files.
