@@ -71,11 +71,11 @@ class HeadersState(Enum):
 
 class Setting(IntEnum):
     QPACK_MAX_TABLE_CAPACITY = 0x1
-    SETTINGS_MAX_HEADER_LIST_SIZE = 0x6
+    MAX_HEADER_LIST_SIZE = 0x6
     QPACK_BLOCKED_STREAMS = 0x7
-    SETTINGS_NUM_PLACEHOLDERS = 0x9
+    NUM_PLACEHOLDERS = 0x9
     H3_DATAGRAM = 0x276
-    SETTINGS_ENABLE_WEBTRANSPORT = 0x2B603742
+    ENABLE_WEBTRANSPORT = 0x2B603742
 
     #  Dummy setting to check it is correctly ignored by the peer.
     # https://tools.ietf.org/html/draft-ietf-quic-http-34#section-7.2.4.1
@@ -572,7 +572,7 @@ class H3Connection:
         }
         if self._enable_webtransport:
             settings[Setting.H3_DATAGRAM] = 1
-            settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] = 1
+            settings[Setting.ENABLE_WEBTRANSPORT] = 1
         return settings
 
     def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> None:
@@ -1053,14 +1053,12 @@ class H3Connection:
                     "H3_DATAGRAM requires max_datagram_frame_size transport parameter"
                 )
 
-        if Setting.SETTINGS_ENABLE_WEBTRANSPORT in settings:
-            if settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] not in (0, 1):
-                raise SettingsError(
-                    "SETTINGS_ENABLE_WEBTRANSPORT setting must be 0 or 1"
-                )
+        if Setting.ENABLE_WEBTRANSPORT in settings:
+            if settings[Setting.ENABLE_WEBTRANSPORT] not in (0, 1):
+                raise SettingsError("ENABLE_WEBTRANSPORT setting must be 0 or 1")
 
             if (
-                settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] == 1
+                settings[Setting.ENABLE_WEBTRANSPORT] == 1
                 and settings.get(Setting.H3_DATAGRAM) != 1
             ):
-                raise SettingsError("SETTINGS_ENABLE_WEBTRANSPORT requires H3_DATAGRAM")
+                raise SettingsError("ENABLE_WEBTRANSPORT requires H3_DATAGRAM")

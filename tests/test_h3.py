@@ -1497,9 +1497,9 @@ class H3ConnectionTest(TestCase):
         )
         h3_server = H3Connection(quic_server)
 
-        # receive SETTINGS with an invalid SETTINGS_ENABLE_WEBTRANSPORT value
+        # receive SETTINGS with an invalid ENABLE_WEBTRANSPORT value
         settings = copy.copy(DUMMY_SETTINGS)
-        settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] = 2
+        settings[Setting.ENABLE_WEBTRANSPORT] = 2
         h3_server.handle_event(
             StreamDataReceived(
                 stream_id=2,
@@ -1512,7 +1512,7 @@ class H3ConnectionTest(TestCase):
             quic_server.closed,
             (
                 ErrorCode.H3_SETTINGS_ERROR,
-                "SETTINGS_ENABLE_WEBTRANSPORT setting must be 0 or 1",
+                "ENABLE_WEBTRANSPORT setting must be 0 or 1",
             ),
         )
 
@@ -1524,7 +1524,7 @@ class H3ConnectionTest(TestCase):
 
         # receive SETTINGS requesting WebTransport, but DATAGRAM was not offered
         settings = copy.copy(DUMMY_SETTINGS)
-        settings[Setting.SETTINGS_ENABLE_WEBTRANSPORT] = 1
+        settings[Setting.ENABLE_WEBTRANSPORT] = 1
         h3_server.handle_event(
             StreamDataReceived(
                 stream_id=2,
@@ -1537,7 +1537,7 @@ class H3ConnectionTest(TestCase):
             quic_server.closed,
             (
                 ErrorCode.H3_SETTINGS_ERROR,
-                "SETTINGS_ENABLE_WEBTRANSPORT requires H3_DATAGRAM",
+                "ENABLE_WEBTRANSPORT requires H3_DATAGRAM",
             ),
         )
 
