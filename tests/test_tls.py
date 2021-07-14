@@ -327,7 +327,7 @@ class ContextTest(TestCase):
         server.handle_message(server_input, server_buf)
         self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
         client_input = merge_buffers(server_buf)
-        self.assertGreaterEqual(len(client_input), 588)
+        self.assertGreaterEqual(len(client_input), 587)
         self.assertLessEqual(len(client_input), 2316)
 
         reset_buffers(server_buf)
