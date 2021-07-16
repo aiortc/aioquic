@@ -1024,7 +1024,7 @@ class QuicConnection:
         :param error_code: An error code indicating why the stream is being reset.
         """
         stream = self._get_or_create_stream_for_send(stream_id)
-        stream.reset(error_code)
+        stream.sender.reset(error_code)
 
     def send_ping(self, uid: int) -> None:
         """
@@ -1053,7 +1053,7 @@ class QuicConnection:
         :param end_stream: If set to `True`, the FIN bit will be set.
         """
         stream = self._get_or_create_stream_for_send(stream_id)
-        stream.write(data, end_stream=end_stream)
+        stream.sender.write(data, end_stream=end_stream)
 
     # Private
 
@@ -1448,7 +1448,7 @@ class QuicConnection:
             )
 
         stream = self._crypto_streams[context.epoch]
-        event = stream.add_frame(frame)
+        event = stream.receiver.handle_frame(frame)
         if event is not None:
             # pass data to TLS layer
             try:
@@ -1888,7 +1888,7 @@ class QuicConnection:
                 frame_type=frame_type,
                 reason_phrase="Over stream data limit",
             )
-        newly_received = max(0, final_size - stream._recv_highest)
+        newly_received = max(0, final_size - stream.receiver.highest_offset)
         if self._local_max_data.used + newly_received > self._local_max_data.value:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.FLOW_CONTROL_ERROR,
@@ -1904,7 +1904,9 @@ class QuicConnection:
             final_size,
         )
         try:
-            event = stream.handle_reset(error_code=error_code, final_size=final_size)
+            event = stream.receiver.handle_reset(
+                error_code=error_code, final_size=final_size
+            )
         except FinalSizeError as exc:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.FINAL_SIZE_ERROR,
@@ -2023,7 +2025,7 @@ class QuicConnection:
                 frame_type=frame_type,
                 reason_phrase="Over stream data limit",
             )
-        newly_received = max(0, offset + length - stream._recv_highest)
+        newly_received = max(0, offset + length - stream.receiver.highest_offset)
         if self._local_max_data.used + newly_received > self._local_max_data.value:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.FLOW_CONTROL_ERROR,
@@ -2033,7 +2035,7 @@ class QuicConnection:
 
         # process data
         try:
-            event = stream.add_frame(frame)
+            event = stream.receiver.handle_frame(frame)
         except FinalSizeError as exc:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.FINAL_SIZE_ERROR,
@@ -2265,7 +2267,7 @@ class QuicConnection:
 
     def _push_crypto_data(self) -> None:
         for epoch, buf in self._crypto_buffers.items():
-            self._crypto_streams[epoch].write(buf.data)
+            self._crypto_streams[epoch].sender.write(buf.data)
             buf.seek(0)
 
     def _send_probe(self) -> None:
@@ -2624,7 +2626,7 @@ class QuicConnection:
                 self._probe_pending = False
 
             # CRYPTO
-            if crypto_stream is not None and not crypto_stream.send_buffer_is_empty:
+            if crypto_stream is not None and not crypto_stream.sender.buffer_is_empty:
                 self._write_crypto_frame(
                     builder=builder, space=space, stream=crypto_stream
                 )
@@ -2643,19 +2645,19 @@ class QuicConnection:
 
             # STREAM and RESET_STREAM
             for stream in self._streams.values():
-                if stream.reset_pending:
+                if stream.sender.reset_pending:
                     self._write_reset_stream_frame(
                         builder=builder,
                         frame_type=QuicFrameType.RESET_STREAM,
                         stream=stream,
                     )
-                elif not stream.is_blocked and not stream.send_buffer_is_empty:
+                elif not stream.is_blocked and not stream.sender.buffer_is_empty:
                     self._remote_max_data_used += self._write_stream_frame(
                         builder=builder,
                         space=space,
                         stream=stream,
                         max_offset=min(
-                            stream._send_highest
+                            stream.sender.highest_offset
                             + self._remote_max_data
                             - self._remote_max_data_used,
                             stream.max_stream_data_remote,
@@ -2689,7 +2691,7 @@ class QuicConnection:
                 self._write_ack_frame(builder=builder, space=space, now=now)
 
             # CRYPTO
-            if not crypto_stream.send_buffer_is_empty:
+            if not crypto_stream.sender.buffer_is_empty:
                 if self._write_crypto_frame(
                     builder=builder, space=space, stream=crypto_stream
                 ):
@@ -2819,13 +2821,13 @@ class QuicConnection:
     def _write_crypto_frame(
         self, builder: QuicPacketBuilder, space: QuicPacketSpace, stream: QuicStream
     ) -> bool:
-        frame_overhead = 3 + size_uint_var(stream.next_send_offset)
-        frame = stream.get_frame(builder.remaining_flight_space - frame_overhead)
+        frame_overhead = 3 + size_uint_var(stream.sender.next_offset)
+        frame = stream.sender.get_frame(builder.remaining_flight_space - frame_overhead)
         if frame is not None:
             buf = builder.start_frame(
                 QuicFrameType.CRYPTO,
                 capacity=frame_overhead,
-                handler=stream.on_data_delivery,
+                handler=stream.sender.on_data_delivery,
                 handler_args=(frame.offset, frame.offset + len(frame.data)),
             )
             buf.push_uint_var(frame.offset)
@@ -2965,9 +2967,9 @@ class QuicConnection:
         buf = builder.start_frame(
             frame_type=frame_type,
             capacity=RESET_STREAM_CAPACITY,
-            handler=stream.on_reset_delivery,
+            handler=stream.sender.on_reset_delivery,
         )
-        reset = stream.get_reset_frame()
+        reset = stream.sender.get_reset_frame()
         buf.push_uint_var(stream.stream_id)
         buf.push_uint_var(reset.error_code)
         buf.push_uint_var(reset.final_size)
@@ -3011,10 +3013,14 @@ class QuicConnection:
         frame_overhead = (
             3
             + size_uint_var(stream.stream_id)
-            + (size_uint_var(stream.next_send_offset) if stream.next_send_offset else 0)
+            + (
+                size_uint_var(stream.sender.next_offset)
+                if stream.sender.next_offset
+                else 0
+            )
         )
-        previous_send_highest = stream._send_highest
-        frame = stream.get_frame(
+        previous_send_highest = stream.sender.highest_offset
+        frame = stream.sender.get_frame(
             builder.remaining_flight_space - frame_overhead, max_offset
         )
 
@@ -3027,7 +3033,7 @@ class QuicConnection:
             buf = builder.start_frame(
                 frame_type,
                 capacity=frame_overhead,
-                handler=stream.on_data_delivery,
+                handler=stream.sender.on_data_delivery,
                 handler_args=(frame.offset, frame.offset + len(frame.data)),
             )
             buf.push_uint_var(stream.stream_id)
@@ -3044,7 +3050,7 @@ class QuicConnection:
                     )
                 )
 
-            return stream._send_highest - previous_send_highest
+            return stream.sender.highest_offset - previous_send_highest
         else:
             return 0
 
@@ -3060,7 +3066,7 @@ class QuicConnection:
         """
         if (
             stream.max_stream_data_local
-            and stream._recv_highest * 2 > stream.max_stream_data_local
+            and stream.receiver.highest_offset * 2 > stream.max_stream_data_local
         ):
             stream.max_stream_data_local *= 2
             self._logger.debug(
