@@ -16,6 +16,8 @@ class QuicStream:
         stream_id: Optional[int] = None,
         max_stream_data_local: int = 0,
         max_stream_data_remote: int = 0,
+        readable: bool = True,
+        writable: bool = True,
     ) -> None:
         self.is_blocked = False
         self.max_stream_data_local = max_stream_data_local
@@ -26,6 +28,7 @@ class QuicStream:
         self._recv_buffer = bytearray()
         self._recv_buffer_start = 0  # the offset for the start of the buffer
         self._recv_final_size: Optional[int] = None
+        self._recv_finished = not readable
         self._recv_highest = 0  # the highest offset ever seen
         self._recv_ranges = RangeSet()
 
@@ -34,6 +37,7 @@ class QuicStream:
         self._send_buffer_fin: Optional[int] = None
         self._send_buffer_start = 0  # the offset for the start of the buffer
         self._send_buffer_stop = 0  # the offset for the stop of the buffer
+        self._send_finished = not writable
         self._send_highest = 0
         self._send_pending = RangeSet()
         self._send_pending_eof = False
@@ -41,6 +45,10 @@ class QuicStream:
         self._send_reset_pending = False
 
         self.__stream_id = stream_id
+
+    @property
+    def is_disposable(self) -> bool:
+        return self._recv_finished and self._send_finished
 
     @property
     def reset_pending(self) -> bool:
@@ -74,6 +82,9 @@ class QuicStream:
         # fast path: new in-order chunk
         if pos == 0 and count and not self._recv_buffer:
             self._recv_buffer_start += count
+            if frame.fin:
+                # all data up to the FIN has been received, we're done receiving
+                self._recv_finished = True
             return events.StreamDataReceived(
                 data=frame.data, end_stream=frame.fin, stream_id=self.__stream_id
             )
@@ -98,6 +109,9 @@ class QuicStream:
         # return data from the front of the buffer
         data = self._pull_data()
         end_stream = self._recv_buffer_start == self._recv_final_size
+        if end_stream:
+            # all data up to the FIN has been received, we're done receiving
+            self._recv_finished = True
         if data or end_stream:
             return events.StreamDataReceived(
                 data=data, end_stream=end_stream, stream_id=self.__stream_id
@@ -145,7 +159,10 @@ class QuicStream:
         """
         if self._recv_final_size is not None and final_size != self._recv_final_size:
             raise FinalSizeError("Cannot change final size")
+
+        # we are done receiving
         self._recv_final_size = final_size
+        self._recv_finished = True
         return events.StreamReset(error_code=error_code, stream_id=self.__stream_id)
 
     def get_frame(
@@ -218,6 +235,10 @@ class QuicStream:
                     self._send_acked.shift()
                     self._send_buffer_start += size
                     del self._send_buffer[:size]
+
+            if stop == self._send_buffer_fin:
+                # the FIN has been ACK'd, we're done sending
+                self._send_finished = True
         else:
             if stop > start:
                 self._send_pending.add(start, stop)
@@ -229,7 +250,10 @@ class QuicStream:
         """
         Callback when a reset is ACK'd.
         """
-        if delivery != QuicDeliveryState.ACKED:
+        if delivery == QuicDeliveryState.ACKED:
+            # the reset has been ACK'd, we're done sending
+            self._send_finished = True
+        else:
             self._send_reset_pending = True
 
     def reset(self, error_code: int) -> None:

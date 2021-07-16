@@ -30,6 +30,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(bytes(stream._recv_buffer), b"")
         self.assertEqual(list(stream._recv_ranges), [])
         self.assertEqual(stream._recv_buffer_start, 8)
+        self.assertFalse(stream._recv_finished)
 
         # add more data
         self.assertEqual(
@@ -39,6 +40,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(bytes(stream._recv_buffer), b"")
         self.assertEqual(list(stream._recv_ranges), [])
         self.assertEqual(stream._recv_buffer_start, 16)
+        self.assertFalse(stream._recv_finished)
 
         # add data and fin
         self.assertEqual(
@@ -48,6 +50,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(bytes(stream._recv_buffer), b"")
         self.assertEqual(list(stream._recv_ranges), [])
         self.assertEqual(stream._recv_buffer_start, 24)
+        self.assertTrue(stream._recv_finished)
 
     def test_recv_unordered(self):
         stream = QuicStream(stream_id=0)
@@ -171,12 +174,14 @@ class QuicStreamTest(TestCase):
             stream.add_frame(QuicStreamFrame(offset=8, data=b"89012345", fin=True)),
             None,
         )
+        self.assertFalse(stream._recv_finished)
 
         # add data at offset 0
         self.assertEqual(
             stream.add_frame(QuicStreamFrame(offset=0, data=b"01234567")),
             StreamDataReceived(data=b"0123456789012345", end_stream=True, stream_id=0),
         )
+        self.assertTrue(stream._recv_finished)
 
     def test_recv_fin_then_data(self):
         stream = QuicStream(stream_id=0)
@@ -221,6 +226,7 @@ class QuicStreamTest(TestCase):
             stream.handle_reset(final_size=4),
             StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
         )
+        self.assertTrue(stream._recv_finished)
 
     def test_recv_reset_after_fin(self):
         stream = QuicStream(stream_id=0)
@@ -289,9 +295,11 @@ class QuicStreamTest(TestCase):
 
         # first chunk gets acknowledged
         stream.on_data_delivery(QuicDeliveryState.ACKED, 0, 8)
+        self.assertFalse(stream._send_finished)
 
         # second chunk gets acknowledged
         stream.on_data_delivery(QuicDeliveryState.ACKED, 8, 16)
+        self.assertFalse(stream._send_finished)
 
     def test_send_data_and_fin(self):
         stream = QuicStream()
@@ -323,6 +331,14 @@ class QuicStreamTest(TestCase):
         frame = stream.get_frame(8)
         self.assertIsNone(frame)
         self.assertEqual(stream.next_send_offset, 16)
+
+        # first chunk gets acknowledged
+        stream.on_data_delivery(QuicDeliveryState.ACKED, 0, 8)
+        self.assertFalse(stream._send_finished)
+
+        # second chunk gets acknowledged
+        stream.on_data_delivery(QuicDeliveryState.ACKED, 8, 16)
+        self.assertTrue(stream._send_finished)
 
     def test_send_data_lost(self):
         stream = QuicStream()
@@ -409,6 +425,10 @@ class QuicStreamTest(TestCase):
         )
         self.assertEqual(list(stream._send_pending), [])
         self.assertEqual(stream.next_send_offset, 16)
+
+        # both chunks gets acknowledged
+        stream.on_data_delivery(QuicDeliveryState.ACKED, 0, 16)
+        self.assertTrue(stream._send_finished)
 
     def test_send_blocked(self):
         stream = QuicStream()
@@ -528,7 +548,38 @@ class QuicStreamTest(TestCase):
         self.assertEqual(reset.error_code, QuicErrorCode.NO_ERROR)
         self.assertEqual(reset.final_size, 0)
         self.assertFalse(stream.reset_pending)
+        self.assertFalse(stream._send_finished)
+
+        # reset is acklowledged
+        stream.on_reset_delivery(QuicDeliveryState.ACKED)
+        self.assertFalse(stream.reset_pending)
+        self.assertTrue(stream._send_finished)
+
+    def test_send_reset_lost(self):
+        stream = QuicStream()
+
+        # reset is requested
+        stream.reset(QuicErrorCode.NO_ERROR)
+        self.assertTrue(stream.reset_pending)
+
+        # reset is sent
+        reset = stream.get_reset_frame()
+        self.assertEqual(reset.error_code, QuicErrorCode.NO_ERROR)
+        self.assertEqual(reset.final_size, 0)
+        self.assertFalse(stream.reset_pending)
 
         # reset is lost
         stream.on_reset_delivery(QuicDeliveryState.LOST)
         self.assertTrue(stream.reset_pending)
+        self.assertFalse(stream._send_finished)
+
+        # reset is sent again
+        reset = stream.get_reset_frame()
+        self.assertEqual(reset.error_code, QuicErrorCode.NO_ERROR)
+        self.assertEqual(reset.final_size, 0)
+        self.assertFalse(stream.reset_pending)
+
+        # reset is acklowledged
+        stream.on_reset_delivery(QuicDeliveryState.ACKED)
+        self.assertFalse(stream.reset_pending)
+        self.assertTrue(stream._send_finished)
