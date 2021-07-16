@@ -1194,6 +1194,7 @@ class QuicConnection:
                 stream_id=stream_id,
                 max_stream_data_local=max_stream_data_local,
                 max_stream_data_remote=max_stream_data_remote,
+                writable=not stream_is_unidirectional(stream_id),
             )
         return stream
 
@@ -1230,6 +1231,7 @@ class QuicConnection:
                 stream_id=stream_id,
                 max_stream_data_local=max_stream_data_local,
                 max_stream_data_remote=max_stream_data_remote,
+                readable=not stream_is_unidirectional(stream_id),
             )
 
             # mark stream as blocked if needed
