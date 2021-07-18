@@ -95,8 +95,9 @@ NEW_CONNECTION_ID_FRAME_CAPACITY = (
 PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
 PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
 PING_FRAME_CAPACITY = 1
-RESET_STREAM_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE
+RESET_STREAM_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE
 RETIRE_CONNECTION_ID_CAPACITY = 1 + UINT_VAR_MAX_SIZE
+STOP_SENDING_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE
 STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE  # + reason length
 
@@ -1055,6 +1056,24 @@ class QuicConnection:
         stream = self._get_or_create_stream_for_send(stream_id)
         stream.sender.write(data, end_stream=end_stream)
 
+    def stop_stream(self, stream_id: int, error_code: int) -> None:
+        """
+        Request termination of the receiving part of a stream.
+
+        :param stream_id: The stream's ID.
+        :param error_code: An error code indicating why the stream is being stopped.
+        """
+        if not self._stream_can_receive(stream_id):
+            raise ValueError(
+                "Cannot stop receiving on a local-initiated unidirectional stream"
+            )
+
+        stream = self._streams.get(stream_id, None)
+        if stream is None:
+            raise ValueError("Cannot stop receiving on an unknown stream")
+
+        stream.receiver.stop(error_code)
+
     # Private
 
     def _alpn_handler(self, alpn_protocol: str) -> None:
@@ -1204,16 +1223,15 @@ class QuicConnection:
 
         This always occurs as a result of an API call.
         """
-        if stream_is_client_initiated(stream_id) != self._is_client:
-            if stream_id not in self._streams:
-                raise ValueError("Cannot send data on unknown peer-initiated stream")
-            if stream_is_unidirectional(stream_id):
-                raise ValueError(
-                    "Cannot send data on peer-initiated unidirectional stream"
-                )
+        if not self._stream_can_send(stream_id):
+            raise ValueError("Cannot send data on peer-initiated unidirectional stream")
 
         stream = self._streams.get(stream_id, None)
         if stream is None:
+            # check initiator
+            if stream_is_client_initiated(stream_id) != self._is_client:
+                raise ValueError("Cannot send data on unknown peer-initiated stream")
+
             # determine limits
             if stream_is_unidirectional(stream_id):
                 max_stream_data_local = 0
@@ -1981,7 +1999,9 @@ class QuicConnection:
         # check stream direction
         self._assert_stream_can_send(frame_type, stream_id)
 
-        self._get_or_create_stream(frame_type, stream_id)
+        # reset the stream
+        stream = self._get_or_create_stream(frame_type, stream_id)
+        stream.sender.reset(error_code=QuicErrorCode.NO_ERROR)
 
     def _handle_stream_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -2643,15 +2663,16 @@ class QuicConnection:
                 except QuicPacketBuilderStop:
                     break
 
-            # STREAM and RESET_STREAM
             for stream in self._streams.values():
+                if stream.receiver.stop_pending:
+                    # STOP_SENDING
+                    self._write_stop_sending_frame(builder=builder, stream=stream)
+
                 if stream.sender.reset_pending:
-                    self._write_reset_stream_frame(
-                        builder=builder,
-                        frame_type=QuicFrameType.RESET_STREAM,
-                        stream=stream,
-                    )
+                    # RESET_STREAM
+                    self._write_reset_stream_frame(builder=builder, stream=stream)
                 elif not stream.is_blocked and not stream.sender.buffer_is_empty:
+                    # STREAM
                     self._remote_max_data_used += self._write_stream_frame(
                         builder=builder,
                         space=space,
@@ -2961,26 +2982,25 @@ class QuicConnection:
     def _write_reset_stream_frame(
         self,
         builder: QuicPacketBuilder,
-        frame_type: QuicFrameType,
         stream: QuicStream,
     ) -> None:
         buf = builder.start_frame(
-            frame_type=frame_type,
-            capacity=RESET_STREAM_CAPACITY,
+            frame_type=QuicFrameType.RESET_STREAM,
+            capacity=RESET_STREAM_FRAME_CAPACITY,
             handler=stream.sender.on_reset_delivery,
         )
-        reset = stream.sender.get_reset_frame()
-        buf.push_uint_var(stream.stream_id)
-        buf.push_uint_var(reset.error_code)
-        buf.push_uint_var(reset.final_size)
+        frame = stream.sender.get_reset_frame()
+        buf.push_uint_var(frame.stream_id)
+        buf.push_uint_var(frame.error_code)
+        buf.push_uint_var(frame.final_size)
 
         # log frame
         if self._quic_logger is not None:
             builder.quic_logger_frames.append(
                 self._quic_logger.encode_reset_stream_frame(
-                    error_code=reset.error_code,
-                    final_size=reset.final_size,
-                    stream_id=stream.stream_id,
+                    error_code=frame.error_code,
+                    final_size=frame.final_size,
+                    stream_id=frame.stream_id,
                 )
             )
 
@@ -2999,6 +3019,28 @@ class QuicConnection:
         if self._quic_logger is not None:
             builder.quic_logger_frames.append(
                 self._quic_logger.encode_retire_connection_id_frame(sequence_number)
+            )
+
+    def _write_stop_sending_frame(
+        self,
+        builder: QuicPacketBuilder,
+        stream: QuicStream,
+    ) -> None:
+        buf = builder.start_frame(
+            frame_type=QuicFrameType.STOP_SENDING,
+            capacity=STOP_SENDING_FRAME_CAPACITY,
+            handler=stream.receiver.on_stop_sending_delivery,
+        )
+        frame = stream.receiver.get_stop_frame()
+        buf.push_uint_var(frame.stream_id)
+        buf.push_uint_var(frame.error_code)
+
+        # log frame
+        if self._quic_logger is not None:
+            builder.quic_logger_frames.append(
+                self._quic_logger.encode_stop_sending_frame(
+                    error_code=frame.error_code, stream_id=frame.stream_id
+                )
             )
 
     def _write_stream_frame(
