@@ -1,7 +1,12 @@
 from typing import Optional
 
 from . import events
-from .packet import QuicErrorCode, QuicResetStreamFrame, QuicStreamFrame
+from .packet import (
+    QuicErrorCode,
+    QuicResetStreamFrame,
+    QuicStopSendingFrame,
+    QuicStreamFrame,
+)
 from .packet_builder import QuicDeliveryState
 from .rangeset import RangeSet
 
@@ -11,15 +16,33 @@ class FinalSizeError(Exception):
 
 
 class QuicStreamReceiver:
+    """
+    The receive part of a QUIC stream.
+
+    It finishes:
+    - immediately for a send-only stream
+    - upon reception of a STREAM_RESET frame
+    - upon reception of a data frame with the FIN bit set
+    """
+
     def __init__(self, stream_id: Optional[int], readable: bool) -> None:
         self.highest_offset = 0  # the highest offset ever seen
         self.is_finished = False
+        self.stop_pending = False
 
         self._buffer = bytearray()
         self._buffer_start = 0  # the offset for the start of the buffer
         self._final_size: Optional[int] = None
         self._ranges = RangeSet()
         self._stream_id = stream_id
+        self._stop_error_code: Optional[int] = None
+
+    def get_stop_frame(self) -> QuicStopSendingFrame:
+        self.stop_pending = False
+        return QuicStopSendingFrame(
+            error_code=self._stop_error_code,
+            stream_id=self._stream_id,
+        )
 
     def handle_frame(
         self, frame: QuicStreamFrame
@@ -96,6 +119,20 @@ class QuicStreamReceiver:
         self.is_finished = True
         return events.StreamReset(error_code=error_code, stream_id=self._stream_id)
 
+    def on_stop_sending_delivery(self, delivery: QuicDeliveryState) -> None:
+        """
+        Callback when a STOP_SENDING is ACK'd.
+        """
+        if delivery != QuicDeliveryState.ACKED:
+            self.stop_pending = True
+
+    def stop(self, error_code: int = QuicErrorCode.NO_ERROR) -> None:
+        """
+        Request the peer stop sending data on the QUIC stream.
+        """
+        self._stop_error_code = error_code
+        self.stop_pending = True
+
     def _pull_data(self) -> bytes:
         """
         Remove data from the front of the buffer.
@@ -116,6 +153,15 @@ class QuicStreamReceiver:
 
 
 class QuicStreamSender:
+    """
+    The send part of a QUIC stream.
+
+    It finishes:
+    - immediately for a receive-only stream
+    - upon acknowledgement of a STREAM_RESET frame
+    - upon acknowledgement of a data frame with the FIN bit set
+    """
+
     def __init__(self, stream_id: Optional[int], writable: bool) -> None:
         self.buffer_is_empty = True
         self.highest_offset = 0
@@ -193,7 +239,9 @@ class QuicStreamSender:
     def get_reset_frame(self) -> QuicResetStreamFrame:
         self.reset_pending = False
         return QuicResetStreamFrame(
-            error_code=self._reset_error_code, final_size=self.highest_offset
+            error_code=self._reset_error_code,
+            final_size=self.highest_offset,
+            stream_id=self._stream_id,
         )
 
     def on_data_delivery(

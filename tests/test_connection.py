@@ -1354,7 +1354,7 @@ class QuicConnectionTest(TestCase):
 
     def test_handle_new_connection_id_with_retire_prior_to(self):
         with client_and_server() as (client, server):
-            buf = Buffer(capacity=100)
+            buf = Buffer(capacity=42)
             buf.push_uint_var(8)  # sequence_number
             buf.push_uint_var(2)  # retire_prior_to
             buf.push_uint_var(8)
@@ -2265,6 +2265,50 @@ class QuicConnectionTest(TestCase):
             # client resets stream
             client.reset_stream(0, QuicErrorCode.NO_ERROR)
             self.assertEqual(roundtrip(client, server), (1, 1))
+
+    def test_send_stop_sending(self):
+        with client_and_server() as (client, server):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+
+            # client creates bidirectional stream
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(roundtrip(client, server), (1, 1))
+
+            # client sends STOP_SENDING frame
+            client.stop_stream(0, QuicErrorCode.NO_ERROR)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+
+            # client receives STREAM_RESET frame
+            event = client.next_event()
+            self.assertEqual(type(event), events.StreamReset)
+            self.assertEqual(event.error_code, QuicErrorCode.NO_ERROR)
+            self.assertEqual(event.stream_id, 0)
+
+    def test_send_stop_sending_uni_stream(self):
+        with client_and_server() as (client, server):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+
+            # client sends STOP_SENDING frame
+            with self.assertRaises(ValueError) as cm:
+                client.stop_stream(2, QuicErrorCode.NO_ERROR)
+            self.assertEqual(
+                str(cm.exception),
+                "Cannot stop receiving on a local-initiated unidirectional stream",
+            )
+
+    def test_send_stop_sending_unknown_stream(self):
+        with client_and_server() as (client, server):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+
+            # client sends STOP_SENDING frame
+            with self.assertRaises(ValueError) as cm:
+                client.stop_stream(0, QuicErrorCode.NO_ERROR)
+            self.assertEqual(
+                str(cm.exception), "Cannot stop receiving on an unknown stream"
+            )
 
     def test_send_stream_data_over_max_streams_bidi(self):
         with client_and_server() as (client, server):

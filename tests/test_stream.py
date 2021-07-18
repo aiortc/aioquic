@@ -293,6 +293,47 @@ class QuicStreamTest(TestCase):
             stream.receiver.handle_reset(final_size=5)
         self.assertEqual(str(cm.exception), "Cannot change final size")
 
+    def test_receiver_stop(self):
+        stream = QuicStream()
+
+        # stop is requested
+        stream.receiver.stop(QuicErrorCode.NO_ERROR)
+        self.assertTrue(stream.receiver.stop_pending)
+
+        # stop is sent
+        frame = stream.receiver.get_stop_frame()
+        self.assertEqual(frame.error_code, QuicErrorCode.NO_ERROR)
+        self.assertFalse(stream.receiver.stop_pending)
+
+        # stop is acklowledged
+        stream.receiver.on_stop_sending_delivery(QuicDeliveryState.ACKED)
+        self.assertFalse(stream.receiver.stop_pending)
+
+    def test_receiver_stop_lost(self):
+        stream = QuicStream()
+
+        # stop is requested
+        stream.receiver.stop(QuicErrorCode.NO_ERROR)
+        self.assertTrue(stream.receiver.stop_pending)
+
+        # stop is sent
+        frame = stream.receiver.get_stop_frame()
+        self.assertEqual(frame.error_code, QuicErrorCode.NO_ERROR)
+        self.assertFalse(stream.receiver.stop_pending)
+
+        # stop is lost
+        stream.receiver.on_stop_sending_delivery(QuicDeliveryState.LOST)
+        self.assertTrue(stream.receiver.stop_pending)
+
+        # stop is sent again
+        frame = stream.receiver.get_stop_frame()
+        self.assertEqual(frame.error_code, QuicErrorCode.NO_ERROR)
+        self.assertFalse(stream.receiver.stop_pending)
+
+        # stop is acklowledged
+        stream.receiver.on_stop_sending_delivery(QuicDeliveryState.ACKED)
+        self.assertFalse(stream.receiver.stop_pending)
+
     def test_sender_data(self):
         stream = QuicStream()
         self.assertEqual(stream.sender.next_offset, 0)
