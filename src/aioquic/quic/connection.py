@@ -334,6 +334,7 @@ class QuicConnection:
         self._streams: Dict[int, QuicStream] = {}
         self._streams_blocked_bidi: List[QuicStream] = []
         self._streams_blocked_uni: List[QuicStream] = []
+        self._streams_finished: Set[int] = set()
         self._version: Optional[int] = None
         self._version_negotiation_count = 0
 
@@ -612,7 +613,7 @@ class QuicConnection:
         Return the stream ID for the next stream created by this endpoint.
         """
         stream_id = (int(is_unidirectional) << 1) | int(not self._is_client)
-        while stream_id in self._streams:
+        while stream_id in self._streams or stream_id in self._streams_finished:
             stream_id += 4
         return stream_id
 
@@ -2663,7 +2664,14 @@ class QuicConnection:
                 except QuicPacketBuilderStop:
                     break
 
-            for stream in self._streams.values():
+            for stream in list(self._streams.values()):
+                # if the stream is finished, discard it
+                if stream.is_finished:
+                    self._logger.debug("Stream %d discarded", stream.stream_id)
+                    self._streams.pop(stream.stream_id)
+                    self._streams_finished.add(stream.stream_id)
+                    continue
+
                 if stream.receiver.stop_pending:
                     # STOP_SENDING
                     self._write_stop_sending_frame(builder=builder, stream=stream)
