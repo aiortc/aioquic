@@ -416,6 +416,45 @@ class QuicStreamTest(TestCase):
         stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 8, 16)
         self.assertTrue(stream.sender.is_finished)
 
+    def test_sender_data_and_fin_ack_out_of_order(self):
+        stream = QuicStream()
+
+        # nothing to send yet
+        frame = stream.sender.get_frame(8)
+        self.assertIsNone(frame)
+
+        # write data and EOF
+        stream.sender.write(b"0123456789012345", end_stream=True)
+        self.assertEqual(list(stream.sender._pending), [range(0, 16)])
+        self.assertEqual(stream.sender.next_offset, 0)
+
+        # send a chunk
+        frame = stream.sender.get_frame(8)
+        self.assertEqual(frame.data, b"01234567")
+        self.assertFalse(frame.fin)
+        self.assertEqual(frame.offset, 0)
+        self.assertEqual(stream.sender.next_offset, 8)
+
+        # send another chunk
+        frame = stream.sender.get_frame(8)
+        self.assertEqual(frame.data, b"89012345")
+        self.assertTrue(frame.fin)
+        self.assertEqual(frame.offset, 8)
+        self.assertEqual(stream.sender.next_offset, 16)
+
+        # nothing more to send
+        frame = stream.sender.get_frame(8)
+        self.assertIsNone(frame)
+        self.assertEqual(stream.sender.next_offset, 16)
+
+        # second chunk gets acknowledged
+        stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 8, 16)
+        self.assertFalse(stream.sender.is_finished)
+
+        # first chunk gets acknowledged
+        stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 0, 8)
+        self.assertTrue(stream.sender.is_finished)
+
     def test_sender_data_lost(self):
         stream = QuicStream()
 

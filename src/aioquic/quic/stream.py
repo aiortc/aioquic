@@ -261,8 +261,8 @@ class QuicStreamSender:
                     self._buffer_start += size
                     del self._buffer[:size]
 
-            if stop == self._buffer_fin:
-                # the FIN has been ACK'd, we're done sending
+            if self._buffer_start == self._buffer_fin:
+                # all date up to the FIN has been ACK'd, we're done sending
                 self.is_finished = True
         else:
             if stop > start:
