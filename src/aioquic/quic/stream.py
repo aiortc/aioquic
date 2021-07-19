@@ -324,3 +324,7 @@ class QuicStream:
         self.receiver = QuicStreamReceiver(stream_id=stream_id, readable=readable)
         self.sender = QuicStreamSender(stream_id=stream_id, writable=writable)
         self.stream_id = stream_id
+
+    @property
+    def is_finished(self) -> bool:
+        return self.receiver.is_finished and self.sender.is_finished
