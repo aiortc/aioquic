@@ -15,6 +15,10 @@ class FinalSizeError(Exception):
     pass
 
 
+class StreamFinishedError(Exception):
+    pass
+
+
 class QuicStreamReceiver:
     """
     The receive part of a QUIC stream.

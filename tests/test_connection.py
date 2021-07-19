@@ -1638,6 +1638,37 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(cm.exception.frame_type, QuicFrameType.RESET_STREAM)
             self.assertEqual(cm.exception.reason_phrase, "Stream is send-only")
 
+    def test_handle_reset_stream_frame_twice(self):
+        stream_id = 3
+        reset_stream_data = (
+            encode_uint_var(QuicFrameType.RESET_STREAM)
+            + encode_uint_var(stream_id)
+            + encode_uint_var(QuicErrorCode.INTERNAL_ERROR)
+            + encode_uint_var(0)
+        )
+        with client_and_server() as (client, server):
+            # server creates unidirectional stream
+            server.send_stream_data(stream_id=stream_id, data=b"hello")
+            roundtrip(server, client)
+            consume_events(client)
+
+            # client receives RESET_STREAM
+            client._payload_received(client_receive_context(client), reset_stream_data)
+
+            event = client.next_event()
+            self.assertEqual(type(event), events.StreamReset)
+            self.assertEqual(event.error_code, QuicErrorCode.INTERNAL_ERROR)
+            self.assertEqual(event.stream_id, stream_id)
+
+            # stream gets discarded
+            self.assertEqual(drop(client), 0)
+
+            # client receives RESET_STREAM again
+            client._payload_received(client_receive_context(client), reset_stream_data)
+
+            event = client.next_event()
+            self.assertIsNone(event)
+
     def test_handle_retire_connection_id_frame(self):
         with client_and_server() as (client, server):
             self.assertEqual(

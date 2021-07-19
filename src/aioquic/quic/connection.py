@@ -52,7 +52,7 @@ from .packet_builder import (
     QuicPacketBuilderStop,
 )
 from .recovery import K_GRANULARITY, QuicPacketRecovery, QuicPacketSpace
-from .stream import FinalSizeError, QuicStream
+from .stream import FinalSizeError, QuicStream, StreamFinishedError
 
 logger = logging.getLogger("quic")
 
@@ -1177,6 +1177,10 @@ class QuicConnection:
         """
         Get or create a stream in response to a received frame.
         """
+        if stream_id in self._streams_finished:
+            # the stream was created, but its state was since discarded
+            raise StreamFinishedError
+
         stream = self._streams.get(stream_id, None)
         if stream is None:
             # check initiator
@@ -2240,6 +2244,9 @@ class QuicConnection:
                     frame_type=frame_type,
                     reason_phrase="Failed to parse frame",
                 )
+            except StreamFinishedError:
+                # we lack the state for the stream, ignore the frame
+                pass
 
             # update ACK only / probing flags
             frame_found = True
