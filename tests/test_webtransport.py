@@ -161,6 +161,35 @@ class WebTransportTest(TestCase):
                 ],
             )
 
+    def test_bidirectional_stream_server_initiated(self):
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # create session
+            session_id = self._make_session(h3_client, h3_server)
+
+            # send data on bidirectional stream
+            stream_id = h3_server.create_webtransport_stream(session_id)
+            quic_server.send_stream_data(stream_id, b"foo", end_stream=True)
+
+            # receive data
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual(
+                events,
+                [
+                    WebTransportStreamDataReceived(
+                        data=b"foo",
+                        session_id=session_id,
+                        stream_ended=True,
+                        stream_id=stream_id,
+                    )
+                ],
+            )
+
     def test_unidirectional_stream(self):
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,

@@ -395,12 +395,12 @@ class H3Connection:
                 if isinstance(event, StreamDataReceived):
                     stream_id = event.stream_id
                     stream = self._get_or_create_stream(stream_id)
-                    if stream_id % 4 == 0:
-                        return self._receive_request_or_push_data(
+                    if stream_is_unidirectional(stream_id):
+                        return self._receive_stream_data_uni(
                             stream, event.data, event.end_stream
                         )
-                    elif stream_is_unidirectional(stream_id):
-                        return self._receive_stream_data_uni(
+                    else:
+                        return self._receive_request_or_push_data(
                             stream, event.data, event.end_stream
                         )
                 elif isinstance(event, DatagramFrameReceived):
