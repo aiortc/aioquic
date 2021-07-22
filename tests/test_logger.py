@@ -6,20 +6,13 @@ from unittest import TestCase
 from aioquic.quic.logger import QuicFileLogger, QuicLogger
 
 SINGLE_TRACE = {
-    "qlog_version": "draft-01",
+    "qlog_format": "JSON",
+    "qlog_version": "0.3",
     "traces": [
         {
             "common_fields": {
                 "ODCID": "0000000000000000",
-                "reference_time": "0",
             },
-            "configuration": {"time_units": "us"},
-            "event_fields": [
-                "relative_time",
-                "category",
-                "event_type",
-                "data",
-            ],
             "events": [],
             "vantage_point": {"name": "aioquic", "type": "client"},
         }
@@ -30,7 +23,10 @@ SINGLE_TRACE = {
 class QuicLoggerTest(TestCase):
     def test_empty(self):
         logger = QuicLogger()
-        self.assertEqual(logger.to_dict(), {"qlog_version": "draft-01", "traces": []})
+        self.assertEqual(
+            logger.to_dict(),
+            {"qlog_format": "JSON", "qlog_version": "0.3", "traces": []},
+        )
 
     def test_single_trace(self):
         logger = QuicLogger()

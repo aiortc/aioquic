@@ -426,7 +426,7 @@ class QuicPacketRecovery:
                     event="packet_lost",
                     data={
                         "type": self._quic_logger.packet_type(packet.packet_type),
-                        "packet_number": str(packet.packet_number),
+                        "packet_number": packet.packet_number,
                     },
                 )
                 self._log_metrics_updated()
