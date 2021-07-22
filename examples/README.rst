@@ -6,7 +6,7 @@ After checking out the code using git you can run:
 .. code-block:: console
 
    $ pip install -e .
-   $ pip install aiofiles asgiref dnslib httpbin starlette wsproto
+   $ pip install asgiref dnslib httpbin starlette wsproto
 
 
 HTTP/3
