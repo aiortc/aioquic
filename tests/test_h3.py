@@ -1703,7 +1703,7 @@ class H3ParserTest(TestCase):
             validate_request_headers([(b":method", b"GET")])
         self.assertEqual(
             cm.exception.reason_phrase,
-            "Pseudo-headers [b':path', b':scheme'] are missing",
+            "Pseudo-headers [b':authority'] are missing",
         )
 
         # empty :authority pseudo-header for http/https
