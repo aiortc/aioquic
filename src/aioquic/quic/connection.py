@@ -80,6 +80,7 @@ SECRETS_LABELS = [
 ]
 STREAM_FLAGS = 0x07
 STREAM_COUNT_MAX = 0x1000000000000000
+UDP_HEADER_SIZE = 8
 
 NetworkAddress = Any
 
@@ -574,18 +575,18 @@ class QuicConnection:
                         category="transport",
                         event="packet_sent",
                         data={
-                            "packet_type": self._quic_logger.packet_type(
-                                packet.packet_type
-                            ),
+                            "frames": packet.quic_logger_frames,
                             "header": {
-                                "packet_number": str(packet.packet_number),
-                                "packet_size": packet.sent_bytes,
+                                "packet_number": packet.packet_number,
+                                "packet_type": self._quic_logger.packet_type(
+                                    packet.packet_type
+                                ),
                                 "scid": dump_cid(self.host_cid)
                                 if is_long_header(packet.packet_type)
                                 else "",
                                 "dcid": dump_cid(self._peer_cid.cid),
                             },
-                            "frames": packet.quic_logger_frames,
+                            "raw": {"length": packet.sent_bytes},
                         },
                     )
 
@@ -596,15 +597,23 @@ class QuicConnection:
         # return datagrams to send and the destination network address
         ret = []
         for datagram in datagrams:
-            byte_length = len(datagram)
-            network_path.bytes_sent += byte_length
+            payload_length = len(datagram)
+            network_path.bytes_sent += payload_length
             ret.append((datagram, network_path.addr))
 
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
                     category="transport",
                     event="datagrams_sent",
-                    data={"byte_length": byte_length, "count": 1},
+                    data={
+                        "count": 1,
+                        "raw": [
+                            {
+                                "length": UDP_HEADER_SIZE + payload_length,
+                                "payload_length": payload_length,
+                            }
+                        ],
+                    },
                 )
         return ret
 
@@ -692,10 +701,19 @@ class QuicConnection:
 
         # log datagram
         if self._quic_logger is not None:
+            payload_length = len(data)
             self._quic_logger.log_event(
                 category="transport",
                 event="datagrams_received",
-                data={"byte_length": len(data), "count": 1},
+                data={
+                    "count": 1,
+                    "raw": [
+                        {
+                            "length": UDP_HEADER_SIZE + payload_length,
+                            "payload_length": payload_length,
+                        }
+                    ],
+                },
             )
 
         # for servers, arm the idle timeout on the first datagram
@@ -743,12 +761,13 @@ class QuicConnection:
                         category="transport",
                         event="packet_received",
                         data={
-                            "packet_type": "version_negotiation",
+                            "frames": [],
                             "header": {
+                                "packet_type": "version_negotiation",
                                 "scid": dump_cid(header.source_cid),
                                 "dcid": dump_cid(header.destination_cid),
                             },
-                            "frames": [],
+                            "raw": {"length": buf.tell() - start_off},
                         },
                     )
                 if self._version in versions:
@@ -807,12 +826,13 @@ class QuicConnection:
                             category="transport",
                             event="packet_received",
                             data={
-                                "packet_type": "retry",
+                                "frames": [],
                                 "header": {
+                                    "packet_type": "retry",
                                     "scid": dump_cid(header.source_cid),
                                     "dcid": dump_cid(header.destination_cid),
                                 },
-                                "frames": [],
+                                "raw": {"length": buf.tell() - start_off},
                             },
                         )
 
@@ -902,16 +922,16 @@ class QuicConnection:
                     category="transport",
                     event="packet_received",
                     data={
-                        "packet_type": self._quic_logger.packet_type(
-                            header.packet_type
-                        ),
+                        "frames": quic_logger_frames,
                         "header": {
-                            "packet_number": str(packet_number),
-                            "packet_size": end_off - start_off,
+                            "packet_number": packet_number,
+                            "packet_type": self._quic_logger.packet_type(
+                                header.packet_type
+                            ),
                             "dcid": dump_cid(header.destination_cid),
                             "scid": dump_cid(header.source_cid),
                         },
-                        "frames": quic_logger_frames,
+                        "raw": {"length": end_off - start_off},
                     },
                 )
 

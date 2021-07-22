@@ -5,6 +5,7 @@ import time
 from collections import deque
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
+from ..h3.events import Headers
 from .packet import (
     PACKET_TYPE_HANDSHAKE,
     PACKET_TYPE_INITIAL,
@@ -25,6 +26,7 @@ PACKET_TYPE_NAMES = {
     PACKET_TYPE_ONE_RTT: "1RTT",
     PACKET_TYPE_RETRY: "retry",
 }
+QLOG_VERSION = "0.3"
 
 
 def hexdump(data: bytes) -> str:
@@ -35,9 +37,12 @@ class QuicLoggerTrace:
     """
     A QUIC event trace.
 
-    Events are logged in the format defined by qlog draft-01.
+    Events are logged in the format defined by qlog draft-03.
 
-    See: https://quiclog.github.io/internet-drafts/draft-marx-qlog-event-definitions-quic-h3.html
+    See:
+    - https://datatracker.ietf.org/doc/html/draft-ietf-quic-qlog-main-schema
+    - https://datatracker.ietf.org/doc/html/draft-marx-quic-qlog-quic-events
+    - https://datatracker.ietf.org/doc/html/draft-marx-quic-qlog-h3-events
     """
 
     def __init__(self, *, is_client: bool, odcid: bytes) -> None:
@@ -48,10 +53,12 @@ class QuicLoggerTrace:
             "type": "client" if is_client else "server",
         }
 
+    # QUIC
+
     def encode_ack_frame(self, ranges: RangeSet, delay: float) -> Dict:
         return {
-            "ack_delay": str(self.encode_time(delay)),
-            "acked_ranges": [[str(x.start), str(x.stop - 1)] for x in ranges],
+            "ack_delay": self.encode_time(delay),
+            "acked_ranges": [[x.start, x.stop - 1] for x in ranges],
             "frame_type": "ack",
         }
 
@@ -72,11 +79,11 @@ class QuicLoggerTrace:
 
     def encode_connection_limit_frame(self, frame_type: int, maximum: int) -> Dict:
         if frame_type == QuicFrameType.MAX_DATA:
-            return {"frame_type": "max_data", "maximum": str(maximum)}
+            return {"frame_type": "max_data", "maximum": maximum}
         else:
             return {
                 "frame_type": "max_streams",
-                "maximum": str(maximum),
+                "maximum": maximum,
                 "stream_type": "unidirectional"
                 if frame_type == QuicFrameType.MAX_STREAMS_UNI
                 else "bidirectional",
@@ -86,11 +93,11 @@ class QuicLoggerTrace:
         return {
             "frame_type": "crypto",
             "length": len(frame.data),
-            "offset": str(frame.offset),
+            "offset": frame.offset,
         }
 
     def encode_data_blocked_frame(self, limit: int) -> Dict:
-        return {"frame_type": "data_blocked", "limit": str(limit)}
+        return {"frame_type": "data_blocked", "limit": limit}
 
     def encode_datagram_frame(self, length: int) -> Dict:
         return {"frame_type": "datagram", "length": length}
@@ -101,8 +108,8 @@ class QuicLoggerTrace:
     def encode_max_stream_data_frame(self, maximum: int, stream_id: int) -> Dict:
         return {
             "frame_type": "max_stream_data",
-            "maximum": str(maximum),
-            "stream_id": str(stream_id),
+            "maximum": maximum,
+            "stream_id": stream_id,
         }
 
     def encode_new_connection_id_frame(
@@ -117,8 +124,8 @@ class QuicLoggerTrace:
             "frame_type": "new_connection_id",
             "length": len(connection_id),
             "reset_token": hexdump(stateless_reset_token),
-            "retire_prior_to": str(retire_prior_to),
-            "sequence_number": str(sequence_number),
+            "retire_prior_to": retire_prior_to,
+            "sequence_number": sequence_number,
         }
 
     def encode_new_token_frame(self, token: bytes) -> Dict:
@@ -145,29 +152,29 @@ class QuicLoggerTrace:
     ) -> Dict:
         return {
             "error_code": error_code,
-            "final_size": str(final_size),
+            "final_size": final_size,
             "frame_type": "reset_stream",
-            "stream_id": str(stream_id),
+            "stream_id": stream_id,
         }
 
     def encode_retire_connection_id_frame(self, sequence_number: int) -> Dict:
         return {
             "frame_type": "retire_connection_id",
-            "sequence_number": str(sequence_number),
+            "sequence_number": sequence_number,
         }
 
     def encode_stream_data_blocked_frame(self, limit: int, stream_id: int) -> Dict:
         return {
             "frame_type": "stream_data_blocked",
-            "limit": str(limit),
-            "stream_id": str(stream_id),
+            "limit": limit,
+            "stream_id": stream_id,
         }
 
     def encode_stop_sending_frame(self, error_code: int, stream_id: int) -> Dict:
         return {
             "frame_type": "stop_sending",
             "error_code": error_code,
-            "stream_id": str(stream_id),
+            "stream_id": stream_id,
         }
 
     def encode_stream_frame(self, frame: QuicStreamFrame, stream_id: int) -> Dict:
@@ -175,22 +182,22 @@ class QuicLoggerTrace:
             "fin": frame.fin,
             "frame_type": "stream",
             "length": len(frame.data),
-            "offset": str(frame.offset),
-            "stream_id": str(stream_id),
+            "offset": frame.offset,
+            "stream_id": stream_id,
         }
 
     def encode_streams_blocked_frame(self, is_unidirectional: bool, limit: int) -> Dict:
         return {
             "frame_type": "streams_blocked",
-            "limit": str(limit),
+            "limit": limit,
             "stream_type": "unidirectional" if is_unidirectional else "bidirectional",
         }
 
-    def encode_time(self, seconds: float) -> int:
+    def encode_time(self, seconds: float) -> float:
         """
-        Convert a time to integer microseconds.
+        Convert a time to milliseconds.
         """
-        return int(seconds * 1000000)
+        return seconds * 1000
 
     def encode_transport_parameters(
         self, owner: str, parameters: QuicTransportParameters
@@ -205,38 +212,68 @@ class QuicLoggerTrace:
                 data[param_name] = param_value
         return data
 
-    def log_event(self, *, category: str, event: str, data: Dict) -> None:
-        self._events.append((time.time(), category, event, data))
-
     def packet_type(self, packet_type: int) -> str:
         return PACKET_TYPE_NAMES.get(packet_type & PACKET_TYPE_MASK, "1RTT")
+
+    # HTTP/3
+
+    def encode_http3_data_frame(self, length: int, stream_id: int) -> Dict:
+        return {
+            "frame": {"frame_type": "data"},
+            "length": length,
+            "stream_id": stream_id,
+        }
+
+    def encode_http3_headers_frame(
+        self, length: int, headers: Headers, stream_id: int
+    ) -> Dict:
+        return {
+            "frame": {
+                "frame_type": "headers",
+                "headers": self._encode_http3_headers(headers),
+            },
+            "length": length,
+            "stream_id": stream_id,
+        }
+
+    def encode_http3_push_promise_frame(
+        self, length: int, headers: Headers, push_id: int, stream_id: int
+    ) -> Dict:
+        return {
+            "frame": {
+                "frame_type": "push_promise",
+                "headers": self._encode_http3_headers(headers),
+                "push_id": push_id,
+            },
+            "length": length,
+            "stream_id": stream_id,
+        }
+
+    def _encode_http3_headers(self, headers: Headers) -> List[Dict]:
+        return [
+            {"name": h[0].decode("utf8"), "value": h[1].decode("utf8")} for h in headers
+        ]
+
+    # CORE
+
+    def log_event(self, *, category: str, event: str, data: Dict) -> None:
+        self._events.append(
+            {
+                "data": data,
+                "name": category + ":" + event,
+                "time": self.encode_time(time.time()),
+            }
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """
         Return the trace as a dictionary which can be written as JSON.
         """
-        if self._events:
-            reference_time = self._events[0][0]
-        else:
-            reference_time = 0.0
         return {
-            "configuration": {"time_units": "us"},
             "common_fields": {
                 "ODCID": hexdump(self._odcid),
-                "reference_time": str(self.encode_time(reference_time)),
             },
-            "event_fields": ["relative_time", "category", "event_type", "data"],
-            "events": list(
-                map(
-                    lambda event: (
-                        str(self.encode_time(event[0] - reference_time)),
-                        event[1],
-                        event[2],
-                        event[3],
-                    ),
-                    self._events,
-                )
-            ),
+            "events": list(self._events),
             "vantage_point": self._vantage_point,
         }
 
@@ -245,9 +282,11 @@ class QuicLogger:
     """
     A QUIC event logger.
 
-    Serves as a container for traces in the format defined by qlog draft-01.
+    Serves as a container for traces in the format defined by qlog draft-03.
 
-    See: https://quiclog.github.io/internet-drafts/draft-marx-qlog-main-schema.html
+    See:
+    - https://datatracker.ietf.org/doc/html/draft-marx-qlog-main-schema-03
+    - https://datatracker.ietf.org/doc/html/draft-marx-qlog-event-definitions-quic-h3-02
     """
 
     def __init__(self) -> None:
@@ -266,7 +305,8 @@ class QuicLogger:
         Return the traces as a dictionary which can be written as JSON.
         """
         return {
-            "qlog_version": "draft-01",
+            "qlog_format": "JSON",
+            "qlog_version": QLOG_VERSION,
             "traces": [trace.to_dict() for trace in self._traces],
         }
 
@@ -288,5 +328,12 @@ class QuicFileLogger(QuicLogger):
             self.path, trace_dict["common_fields"]["ODCID"] + ".qlog"
         )
         with open(trace_path, "w") as logger_fp:
-            json.dump({"qlog_version": "draft-01", "traces": [trace_dict]}, logger_fp)
+            json.dump(
+                {
+                    "qlog_format": "JSON",
+                    "qlog_version": QLOG_VERSION,
+                    "traces": [trace_dict],
+                },
+                logger_fp,
+            )
         self._traces.remove(trace)

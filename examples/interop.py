@@ -136,13 +136,10 @@ async def test_version_negotiation(server: Server, configuration: QuicConfigurat
         await protocol.ping()
 
         # check log
-        for stamp, category, event, data in configuration.quic_logger.to_dict()[
-            "traces"
-        ][0]["events"]:
+        for event in configuration.quic_logger.to_dict()["traces"][0]["events"]:
             if (
-                category == "transport"
-                and event == "packet_received"
-                and data["packet_type"] == "version_negotiation"
+                event["name"] == "transport:packet_received"
+                and event["data"]["packet_type"] == "version_negotiation"
             ):
                 server.result |= Result.V
 
@@ -167,13 +164,10 @@ async def test_retry(server: Server, configuration: QuicConfiguration):
         await protocol.ping()
 
         # check log
-        for stamp, category, event, data in configuration.quic_logger.to_dict()[
-            "traces"
-        ][0]["events"]:
+        for event in configuration.quic_logger.to_dict()["traces"][0]["events"]:
             if (
-                category == "transport"
-                and event == "packet_received"
-                and data["packet_type"] == "retry"
+                event["name"] == "transport:packet_received"
+                and event["data"]["packet_type"] == "retry"
             ):
                 server.result |= Result.S
 
@@ -362,15 +356,12 @@ async def test_nat_rebinding(server: Server, configuration: QuicConfiguration):
 
         # check log
         path_challenges = 0
-        for stamp, category, event, data in configuration.quic_logger.to_dict()[
-            "traces"
-        ][0]["events"]:
+        for event in configuration.quic_logger.to_dict()["traces"][0]["events"]:
             if (
-                category == "transport"
-                and event == "packet_received"
-                and data["packet_type"] == "1RTT"
+                event["name"] == "transport:packet_received"
+                and event["data"]["packet_type"] == "1RTT"
             ):
-                for frame in data["frames"]:
+                for frame in event["data"]["frames"]:
                     if frame["frame_type"] == "path_challenge":
                         path_challenges += 1
         if not path_challenges:
@@ -398,18 +389,14 @@ async def test_address_mobility(server: Server, configuration: QuicConfiguration
 
         # check log
         path_challenges = 0
-        for stamp, category, event, data in configuration.quic_logger.to_dict()[
-            "traces"
-        ][0]["events"]:
+        for event in configuration.quic_logger.to_dict()["traces"][0]["events"]:
             if (
-                category == "transport"
-                and event == "packet_received"
-                and data["packet_type"] == "1RTT"
+                event["name"] == "transport:packet_received"
+                and event["data"]["packet_type"] == "1RTT"
             ):
-                for frame in data["frames"]:
+                for frame in event["data"]["frames"]:
                     if frame["frame_type"] == "path_challenge":
                         path_challenges += 1
-
         if not path_challenges:
             protocol._quic._logger.warning("No PATH_CHALLENGE received")
         else:
@@ -425,11 +412,9 @@ async def test_spin_bit(server: Server, configuration: QuicConfiguration):
 
         # check log
         spin_bits = set()
-        for stamp, category, event, data in configuration.quic_logger.to_dict()[
-            "traces"
-        ][0]["events"]:
-            if category == "connectivity" and event == "spin_bit_updated":
-                spin_bits.add(data["state"])
+        for event in configuration.quic_logger.to_dict()["traces"][0]["events"]:
+            if event["name"] == "connectivity:spin_bit_updated":
+                spin_bits.add(event["data"]["state"])
         if len(spin_bits) == 2:
             server.result |= Result.P
 
