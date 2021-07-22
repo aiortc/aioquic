@@ -285,7 +285,7 @@ def validate_request_headers(headers: Headers) -> None:
             # we use it for the WebSocket demo.
             (b":method", b":scheme", b":authority", b":path", b":protocol")
         ),
-        required_pseudo_headers=frozenset((b":method", b":scheme", b":path")),
+        required_pseudo_headers=frozenset((b":method", b":authority")),
     )
 
 
