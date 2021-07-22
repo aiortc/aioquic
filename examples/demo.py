@@ -74,7 +74,7 @@ async def logs(request):
     )
 
 
-def padding(request):
+async def padding(request):
     """
     Dynamically generated data, maximum 50MB.
     """
