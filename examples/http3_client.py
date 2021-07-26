@@ -16,7 +16,7 @@ import aioquic
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h0.connection import H0_ALPN, H0Connection
-from aioquic.h3.connection import H3_ALPN, H3Connection
+from aioquic.h3.connection import H3_ALPN, ErrorCode, H3Connection
 from aioquic.h3.events import (
     DataReceived,
     H3Event,
@@ -402,6 +402,7 @@ async def run(
 
             # process http pushes
             process_http_pushes(client=client, include=include, output_dir=output_dir)
+        client._quic.close(error_code=ErrorCode.H3_NO_ERROR)
 
 
 if __name__ == "__main__":
