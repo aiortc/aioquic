@@ -1669,6 +1669,29 @@ class QuicConnectionTest(TestCase):
             event = client.next_event()
             self.assertIsNone(event)
 
+    def test_handle_stop_sending_frame(self):
+        stream_id = 0
+        with client_and_server() as (client, server):
+            # client creates bidirectional stream
+            client.send_stream_data(stream_id=stream_id, data=b"hello")
+            consume_events(client)
+
+            # client receives STOP_STREAM
+            client._handle_stop_sending_frame(
+                client_receive_context(client),
+                QuicFrameType.STOP_SENDING,
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(QuicErrorCode.INTERNAL_ERROR)
+                    + encode_uint_var(0)
+                ),
+            )
+
+            event = client.next_event()
+            self.assertEqual(type(event), events.StreamStop)
+            self.assertEqual(event.error_code, QuicErrorCode.INTERNAL_ERROR)
+            self.assertEqual(event.stream_id, stream_id)
+
     def test_handle_retire_connection_id_frame(self):
         with client_and_server() as (client, server):
             self.assertEqual(
