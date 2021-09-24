@@ -1,7 +1,7 @@
 import logging
 import re
 from enum import Enum, IntEnum
-from typing import Dict, FrozenSet, Iterable, List, Optional, Set
+from typing import Dict, FrozenSet, List, Optional, Set
 
 import pylsqpack
 
