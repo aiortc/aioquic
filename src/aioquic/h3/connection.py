@@ -1,7 +1,7 @@
 import logging
 import re
 from enum import Enum, IntEnum
-from typing import Dict, FrozenSet, List, Optional, Set
+from typing import Dict, FrozenSet, Iterable, List, Optional, Set
 
 import pylsqpack
 
@@ -80,6 +80,18 @@ class Setting(IntEnum):
     #  Dummy setting to check it is correctly ignored by the peer.
     # https://tools.ietf.org/html/draft-ietf-quic-http-34#section-7.2.4.1
     DUMMY = 0x21
+
+
+class CapsuleType(IntEnum):
+    # Defined in
+    # https://www.ietf.org/archive/id/draft-ietf-masque-h3-datagram-03.html.
+    DATAGRAM = 0xff37a0
+    REGISTER_DATAGRAM_CONTEXT = 0xff37a1
+    REGISTER_DATAGRAM_NO_CONTEXT = 0xff37a2
+    CLOSE_DATAGRAM_CONTEXT = 0xff37a3
+    # Defined in
+    # https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-01.html.
+    CLOSE_WEBTRANSPORT_SESSION = 0x2843
 
 
 class StreamType(IntEnum):
@@ -304,6 +316,35 @@ def validate_trailers(headers: Headers) -> None:
         required_pseudo_headers=frozenset(),
     )
 
+class H3Capsule:
+    """
+    Represents the Capsule concept defined in
+    https://ietf-wg-masque.github.io/draft-ietf-masque-h3-datagram/draft-ietf-masque-h3-datagram.html#name-capsules.
+    """
+    def __init__(self, type: int, data: bytes) -> None:
+        self.type = type
+        self.data = data
+
+    @staticmethod
+    def decode(data: bytes) -> any:
+        """
+        Returns an H3Capsule representing the given bytes.
+        """
+        buffer = Buffer(data=data)
+        type = buffer.pull_uint_var()
+        length = buffer.pull_uint_var()
+        return H3Capsule(type, buffer.pull_bytes(length))
+
+    def encode(self) -> bytes:
+        """
+        Encodes this H3Connection and return the bytes.
+        """
+        buffer = Buffer(capacity=len(self.data) + 2 * UINT_VAR_MAX_SIZE)
+        buffer.push_uint_var(self.type)
+        buffer.push_uint_var(len(self.data))
+        buffer.push_bytes(self.data)
+        return buffer.data
+
 
 class H3Stream:
     def __init__(self, stream_id: int) -> None:
@@ -359,6 +400,8 @@ class H3Connection:
         self._peer_control_stream_id: Optional[int] = None
         self._peer_decoder_stream_id: Optional[int] = None
         self._peer_encoder_stream_id: Optional[int] = None
+        self._received_settings: Dict[int, int] = None
+        self._sent_settings: Dict[int, int] = None
 
         self._init_connection()
 
@@ -521,6 +564,18 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
+    def received_settings(self) -> Optional[Dict[int, int]]:
+        """
+        Return the received SETTINGS frame, or None.
+        """
+        return self._received_settings
+
+    def sent_settings(self) -> Optional[Dict[int, int]]:
+        """
+        Return the sent SETTINGS frame, or None.
+        """
+        return self._sent_settings
+
     def _create_uni_stream(self, stream_type: int) -> int:
         """
         Create an unidirectional stream of the given type.
@@ -571,7 +626,7 @@ class H3Connection:
             Setting.DUMMY: 1,
         }
         if self._enable_webtransport:
-            settings[Setting.H3_DATAGRAM] = 1
+            settings[Setting.H3_DATAGRAM] = 2
             settings[Setting.ENABLE_WEBTRANSPORT] = 1
         return settings
 
@@ -587,6 +642,7 @@ class H3Connection:
                 raise FrameUnexpected("SETTINGS have already been received")
             settings = parse_settings(frame_data)
             self._validate_settings(settings)
+            self._received_settings = settings
             encoder = self._encoder.apply_settings(
                 max_table_capacity=settings.get(Setting.QPACK_MAX_TABLE_CAPACITY, 0),
                 blocked_streams=settings.get(Setting.QPACK_BLOCKED_STREAMS, 0),
@@ -726,10 +782,11 @@ class H3Connection:
     def _init_connection(self) -> None:
         # send our settings
         self._local_control_stream_id = self._create_uni_stream(StreamType.CONTROL)
+        self._sent_settings = self._get_local_settings()
         self._quic.send_stream_data(
             self._local_control_stream_id,
             encode_frame(
-                FrameType.SETTINGS, encode_settings(self._get_local_settings())
+                FrameType.SETTINGS, encode_settings(self._sent_setting)
             ),
         )
         if self._is_client and self._max_push_id is not None:
@@ -1042,11 +1099,11 @@ class H3Connection:
 
     def _validate_settings(self, settings: Dict[int, int]) -> None:
         if Setting.H3_DATAGRAM in settings:
-            if settings[Setting.H3_DATAGRAM] not in (0, 1):
-                raise SettingsError("H3_DATAGRAM setting must be 0 or 1")
+            if settings[Setting.H3_DATAGRAM] not in {0, 1, 2}:
+                raise SettingsError("H3_DATAGRAM setting must be 0, 1 or 2")
 
             if (
-                settings[Setting.H3_DATAGRAM] == 1
+                settings[Setting.H3_DATAGRAM] in {1, 2}
                 and self._quic._remote_max_datagram_frame_size is None
             ):
                 raise SettingsError(
@@ -1054,11 +1111,11 @@ class H3Connection:
                 )
 
         if Setting.ENABLE_WEBTRANSPORT in settings:
-            if settings[Setting.ENABLE_WEBTRANSPORT] not in (0, 1):
+            if settings[Setting.ENABLE_WEBTRANSPORT] not in {0, 1}:
                 raise SettingsError("ENABLE_WEBTRANSPORT setting must be 0 or 1")
 
             if (
                 settings[Setting.ENABLE_WEBTRANSPORT] == 1
-                and settings.get(Setting.H3_DATAGRAM) != 1
+                and settings.get(Setting.H3_DATAGRAM) not in {1, 2}
             ):
                 raise SettingsError("ENABLE_WEBTRANSPORT requires H3_DATAGRAM")

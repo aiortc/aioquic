@@ -9,6 +9,7 @@ from aioquic.h3.connection import (
     ErrorCode,
     FrameType,
     FrameUnexpected,
+    H3Capsule,
     H3Connection,
     MessageError,
     Setting,
@@ -1449,7 +1450,7 @@ class H3ConnectionTest(TestCase):
 
         # receive SETTINGS with an invalid H3_DATAGRAM value
         settings = copy.copy(DUMMY_SETTINGS)
-        settings[Setting.H3_DATAGRAM] = 2
+        settings[Setting.H3_DATAGRAM] = 3
         h3_server.handle_event(
             StreamDataReceived(
                 stream_id=2,
@@ -1462,7 +1463,7 @@ class H3ConnectionTest(TestCase):
             quic_server.closed,
             (
                 ErrorCode.H3_SETTINGS_ERROR,
-                "H3_DATAGRAM setting must be 0 or 1",
+                "H3_DATAGRAM setting must be 0, 1 or 2",
             ),
         )
 
@@ -1789,3 +1790,21 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase,
             "Pseudo-header b':authority' is not allowed after regular headers",
         )
+
+    def test_h3_capsule(self):
+        capsule1 = H3Capsule(0x12345, b"abcde")
+        bs = capsule1.encode()
+        capsule2 = H3Capsule.decode(bs)
+
+        self.assertEqual(bs, b"\x80\x01\x23\x45\x05abcde", "bytes")
+        self.assertEqual(capsule1.type, capsule2.type, "type")
+        self.assertEqual(capsule1.data, capsule2.data, "data")
+
+    def test_h3_small_capsule(self):
+        capsule1 = H3Capsule(0, b"")
+        bs = capsule1.encode()
+        capsule2 = H3Capsule.decode(bs)
+
+        self.assertEqual(bs, b"\x00\x00", "bytes")
+        self.assertEqual(capsule1.type, capsule2.type, "type")
+        self.assertEqual(capsule1.data, capsule2.data, "data")
