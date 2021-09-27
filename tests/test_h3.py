@@ -213,6 +213,8 @@ class H3ConnectionTest(TestCase):
             configuration=QuicConfiguration(is_client=False)
         )
         h3_server = H3Connection(quic_server)
+        self.assertIsNotNone(h3_server.sent_settings)
+        self.assertIsNone(h3_server.received_settings)
 
         # receive SETTINGS
         h3_server.handle_event(
@@ -224,6 +226,8 @@ class H3ConnectionTest(TestCase):
             )
         )
         self.assertIsNone(quic_server.closed)
+        self.assertIsNotNone(h3_server.sent_settings)
+        self.assertEqual(h3_server.received_settings, DUMMY_SETTINGS)
 
         # receive unexpected HEADERS
         h3_server.handle_event(

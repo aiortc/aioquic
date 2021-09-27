@@ -321,6 +321,8 @@ class H3Connection:
         self._peer_control_stream_id: Optional[int] = None
         self._peer_decoder_stream_id: Optional[int] = None
         self._peer_encoder_stream_id: Optional[int] = None
+        self._received_settings: Optional[Dict[int, int]] = None
+        self._sent_settings: Optional[Dict[int, int]] = None
 
         self._init_connection()
 
@@ -488,6 +490,20 @@ class H3Connection:
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
 
+    @property
+    def received_settings(self) -> Optional[Dict[int, int]]:
+        """
+        Return the received SETTINGS frame, or None.
+        """
+        return self._received_settings
+
+    @property
+    def sent_settings(self) -> Optional[Dict[int, int]]:
+        """
+        Return the sent SETTINGS frame, or None.
+        """
+        return self._sent_settings
+
     def _create_uni_stream(
         self, stream_type: int, push_id: Optional[int] = None
     ) -> int:
@@ -559,6 +575,7 @@ class H3Connection:
                 raise FrameUnexpected("SETTINGS have already been received")
             settings = parse_settings(frame_data)
             self._validate_settings(settings)
+            self._received_settings = settings
             encoder = self._encoder.apply_settings(
                 max_table_capacity=settings.get(Setting.QPACK_MAX_TABLE_CAPACITY, 0),
                 blocked_streams=settings.get(Setting.QPACK_BLOCKED_STREAMS, 0),
@@ -698,11 +715,10 @@ class H3Connection:
     def _init_connection(self) -> None:
         # send our settings
         self._local_control_stream_id = self._create_uni_stream(StreamType.CONTROL)
+        self._sent_settings = self._get_local_settings()
         self._quic.send_stream_data(
             self._local_control_stream_id,
-            encode_frame(
-                FrameType.SETTINGS, encode_settings(self._get_local_settings())
-            ),
+            encode_frame(FrameType.SETTINGS, encode_settings(self._sent_settings)),
         )
         if self._is_client and self._max_push_id is not None:
             self._quic.send_stream_data(
