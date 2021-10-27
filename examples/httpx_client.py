@@ -11,7 +11,6 @@ from urllib.parse import urlparse
 
 import httpcore
 from httpx import AsyncClient
-from quic_logger import QuicDirectoryLogger
 
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
@@ -19,6 +18,7 @@ from aioquic.h3.connection import H3_ALPN, H3Connection
 from aioquic.h3.events import DataReceived, H3Event, Headers, HeadersReceived
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
+from aioquic.quic.logger import QuicFileLogger
 
 logger = logging.getLogger("client")
 
@@ -277,7 +277,7 @@ if __name__ == "__main__":
     if args.insecure:
         configuration.verify_mode = ssl.CERT_NONE
     if args.quic_log:
-        configuration.quic_logger = QuicDirectoryLogger(args.quic_log)
+        configuration.quic_logger = QuicFileLogger(args.quic_log)
     if args.secrets_log:
         configuration.secrets_log_file = open(args.secrets_log, "a")
     if args.session_ticket:

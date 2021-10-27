@@ -9,7 +9,6 @@ from typing import Callable, Deque, Dict, List, Optional, Union, cast
 
 import wsproto
 import wsproto.events
-from quic_logger import QuicDirectoryLogger
 
 import aioquic
 from aioquic.asyncio import QuicConnectionProtocol, serve
@@ -25,6 +24,7 @@ from aioquic.h3.events import (
 from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import DatagramFrameReceived, ProtocolNegotiated, QuicEvent
+from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import SessionTicket
 
 try:
@@ -543,7 +543,7 @@ if __name__ == "__main__":
 
     # create QUIC logger
     if args.quic_log:
-        quic_logger = QuicDirectoryLogger(args.quic_log)
+        quic_logger = QuicFileLogger(args.quic_log)
     else:
         quic_logger = None
 

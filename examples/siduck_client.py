@@ -4,12 +4,11 @@ import logging
 import ssl
 from typing import Optional, cast
 
-from quic_logger import QuicDirectoryLogger
-
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import DatagramFrameReceived, QuicEvent
+from aioquic.quic.logger import QuicFileLogger
 
 logger = logging.getLogger("client")
 
@@ -88,7 +87,7 @@ if __name__ == "__main__":
     if args.insecure:
         configuration.verify_mode = ssl.CERT_NONE
     if args.quic_log:
-        configuration.quic_logger = QuicDirectoryLogger(args.quic_log)
+        configuration.quic_logger = QuicFileLogger(args.quic_log)
     if args.secrets_log:
         configuration.secrets_log_file = open(args.secrets_log, "a")
 
