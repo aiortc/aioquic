@@ -2,12 +2,12 @@ import asyncio
 import ipaddress
 import socket
 import sys
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Callable, Optional, cast
 
 from ..quic.configuration import QuicConfiguration
 from ..quic.connection import QuicConnection
 from ..tls import SessionTicketHandler
-from .compat import asynccontextmanager
 from .protocol import QuicConnectionProtocol, QuicStreamHandler
 
 __all__ = ["connect"]
