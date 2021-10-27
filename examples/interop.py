@@ -15,14 +15,13 @@ from typing import Optional, cast
 
 import httpx
 from http3_client import HttpClient
-from quic_logger import QuicDirectoryLogger
 
 from aioquic.asyncio import connect
 from aioquic.h0.connection import H0_ALPN
 from aioquic.h3.connection import H3_ALPN, H3Connection
 from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.logger import QuicLogger
+from aioquic.quic.logger import QuicFileLogger, QuicLogger
 
 
 class Result(Flag):
@@ -505,7 +504,7 @@ async def run(servers, tests, quic_log=False, secrets_log_file=None) -> None:
             configuration = QuicConfiguration(
                 alpn_protocols=H3_ALPN + H0_ALPN,
                 is_client=True,
-                quic_logger=QuicDirectoryLogger(quic_log) if quic_log else QuicLogger(),
+                quic_logger=QuicFileLogger(quic_log) if quic_log else QuicLogger(),
                 secrets_log_file=secrets_log_file,
                 verify_mode=server.verify_mode,
             )

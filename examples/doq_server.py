@@ -4,12 +4,12 @@ import logging
 from typing import Dict, Optional
 
 from dnslib.dns import DNSRecord
-from quic_logger import QuicDirectoryLogger
 
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import ProtocolNegotiated, QuicEvent, StreamDataReceived
+from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import SessionTicket
 
 try:
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     )
 
     if args.quic_log:
-        quic_logger = QuicDirectoryLogger(args.quic_log)
+        quic_logger = QuicFileLogger(args.quic_log)
     else:
         quic_logger = None
 
