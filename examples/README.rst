@@ -109,7 +109,7 @@ You can then run the client with a specific query:
 
 .. code-block:: console
 
-    $ python examples/doq_client.py --ca-certs tests/pycacert.pem --dns_type "A" --query "quic.aiortc.org" --port 4784
+    $ python examples/doq_client.py --ca-certs tests/pycacert.pem --query-type "A" --query-name "quic.aiortc.org" --port 4784
 
 .. _Google Public DNS: https://developers.google.com/speed/public-dns
 .. _--enable-experimental-web-platform-features: https://peter.sh/experiments/chromium-command-line-switches/#enable-experimental-web-platform-features

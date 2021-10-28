@@ -1,58 +1,31 @@
 import argparse
 import asyncio
 import logging
+import struct
 from typing import Dict, Optional
 
 from dnslib.dns import DNSRecord
 
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.connection import QuicConnection
-from aioquic.quic.events import ProtocolNegotiated, QuicEvent, StreamDataReceived
+from aioquic.quic.events import QuicEvent, StreamDataReceived
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import SessionTicket
 
-try:
-    import uvloop
-except ImportError:
-    uvloop = None
-
-
-class DnsConnection:
-    def __init__(self, quic: QuicConnection):
-        self._quic = quic
-
-    def do_query(self, payload) -> bytes:
-        q = DNSRecord.parse(payload)
-        return q.send(self.resolver(), 53)
-
-    def resolver(self) -> str:
-        return args.resolver
-
-    def handle_event(self, event: QuicEvent) -> None:
-        if isinstance(event, StreamDataReceived):
-            data = self.do_query(event.data)
-            end_stream = False
-            self._quic.send_stream_data(event.stream_id, data, end_stream)
-
 
 class DnsServerProtocol(QuicConnectionProtocol):
-
-    # -00 specifies 'dq', 'doq', and 'doq-h00' (the latter obviously tying to
-    # the version of the draft it matches). This is confusing, so we'll just
-    # support them all, until future drafts define conflicting behaviour.
-    SUPPORTED_ALPNS = ["dq", "doq", "doq-h00"]
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._dns: Optional[DnsConnection] = None
-
     def quic_event_received(self, event: QuicEvent):
-        if isinstance(event, ProtocolNegotiated):
-            if event.alpn_protocol in DnsServerProtocol.SUPPORTED_ALPNS:
-                self._dns = DnsConnection(self._quic)
-        if self._dns is not None:
-            self._dns.handle_event(event)
+        if isinstance(event, StreamDataReceived):
+            # parse query
+            length = struct.unpack("!H", bytes(event.data[:2]))[0]
+            query = DNSRecord.parse(event.data[2 : 2 + length])
+
+            # perform lookup and serialize answer
+            data = query.send(args.resolver, 53)
+            data = struct.pack("!H", len(data)) + data
+
+            # send answer
+            self._quic.send_stream_data(event.stream_id, data, end_stream=True)
 
 
 class SessionTicketStore:
@@ -132,9 +105,8 @@ if __name__ == "__main__":
         quic_logger = None
 
     configuration = QuicConfiguration(
-        alpn_protocols=["dq"],
+        alpn_protocols=["doq-i03"],
         is_client=False,
-        max_datagram_frame_size=65536,
         quic_logger=quic_logger,
     )
 
@@ -142,8 +114,6 @@ if __name__ == "__main__":
 
     ticket_store = SessionTicketStore()
 
-    if uvloop is not None:
-        uvloop.install()
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
         serve(
