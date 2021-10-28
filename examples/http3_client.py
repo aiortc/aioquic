@@ -228,8 +228,12 @@ class HttpClient(QuicConnectionProtocol):
                 (b"user-agent", USER_AGENT.encode()),
             ]
             + [(k.encode(), v.encode()) for (k, v) in request.headers.items()],
+            end_stream=not request.content,
         )
-        self._http.send_data(stream_id=stream_id, data=request.content, end_stream=True)
+        if request.content:
+            self._http.send_data(
+                stream_id=stream_id, data=request.content, end_stream=True
+            )
 
         waiter = self._loop.create_future()
         self._request_events[stream_id] = deque()
