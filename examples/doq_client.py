@@ -3,9 +3,10 @@ import asyncio
 import logging
 import pickle
 import ssl
+import struct
 from typing import Optional, cast
 
-from dnslib.dns import QTYPE, DNSQuestion, DNSRecord
+from dnslib.dns import QTYPE, DNSHeader, DNSQuestion, DNSRecord
 
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
@@ -16,17 +17,23 @@ from aioquic.quic.logger import QuicFileLogger
 logger = logging.getLogger("client")
 
 
-class DoQClient(QuicConnectionProtocol):
+class DnsClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._ack_waiter: Optional[asyncio.Future[None]] = None
+        self._ack_waiter: Optional[asyncio.Future[DNSRecord]] = None
 
-    async def query(self, query_type: str, dns_query: str) -> None:
-        query = DNSRecord(q=DNSQuestion(dns_query, getattr(QTYPE, query_type)))
+    async def query(self, query_name: str, query_type: str) -> None:
+        # serialize query
+        query = DNSRecord(
+            header=DNSHeader(id=0),
+            q=DNSQuestion(query_name, getattr(QTYPE, query_type)),
+        )
+        data = bytes(query.pack())
+        data = struct.pack("!H", len(data)) + data
+
+        # send query and wait for answer
         stream_id = self._quic.get_next_available_stream_id()
-        logger.debug(f"Stream ID: {stream_id}")
-        end_stream = False
-        self._quic.send_stream_data(stream_id, bytes(query.pack()), end_stream)
+        self._quic.send_stream_data(stream_id, data, end_stream=True)
         waiter = self._loop.create_future()
         self._ack_waiter = waiter
         self.transmit()
@@ -36,11 +43,14 @@ class DoQClient(QuicConnectionProtocol):
     def quic_event_received(self, event: QuicEvent) -> None:
         if self._ack_waiter is not None:
             if isinstance(event, StreamDataReceived):
-                answer = DNSRecord.parse(event.data)
-                logger.info(answer)
+                # parse answer
+                length = struct.unpack("!H", bytes(event.data[:2]))[0]
+                answer = DNSRecord.parse(event.data[2 : 2 + length])
+
+                # return answer
                 waiter = self._ack_waiter
                 self._ack_waiter = None
-                waiter.set_result(None)
+                waiter.set_result(answer)
 
 
 def save_session_ticket(ticket):
@@ -58,8 +68,8 @@ async def run(
     configuration: QuicConfiguration,
     host: str,
     port: int,
+    query_name: str,
     query_type: str,
-    dns_query: str,
 ) -> None:
     logger.debug(f"Connecting to {host}:{port}")
     async with connect(
@@ -67,16 +77,16 @@ async def run(
         port,
         configuration=configuration,
         session_ticket_handler=save_session_ticket,
-        create_protocol=DoQClient,
+        create_protocol=DnsClientProtocol,
     ) as client:
-        client = cast(DoQClient, client)
+        client = cast(DnsClientProtocol, client)
         logger.debug("Sending DNS query")
-        await client.query(query_type, dns_query)
+        answer = await client.query(query_name, query_type)
+        logger.info("Received DNS answer\n%s" % answer)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DNS over QUIC client")
-    parser.add_argument("-t", "--type", type=str, help="Type of record to ")
     parser.add_argument(
         "--host",
         type=str,
@@ -95,8 +105,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ca-certs", type=str, help="load CA certificates from the specified file"
     )
-    parser.add_argument("--dns_type", help="The DNS query type to send")
-    parser.add_argument("--query", help="Domain to query")
+    parser.add_argument("--query-name", required=True, help="Domain to query")
+    parser.add_argument("--query-type", default="A", help="The DNS query type to send")
     parser.add_argument(
         "-q",
         "--quic-log",
@@ -126,9 +136,7 @@ if __name__ == "__main__":
         level=logging.DEBUG if args.verbose else logging.INFO,
     )
 
-    configuration = QuicConfiguration(
-        alpn_protocols=["dq"], is_client=True, max_datagram_frame_size=65536
-    )
+    configuration = QuicConfiguration(alpn_protocols=["doq-i03"], is_client=True)
     if args.ca_certs:
         configuration.load_verify_locations(args.ca_certs)
     if args.insecure:
@@ -153,7 +161,7 @@ if __name__ == "__main__":
             configuration=configuration,
             host=args.host,
             port=args.port,
-            query_type=args.dns_type,
-            dns_query=args.query,
+            query_name=args.query_name,
+            query_type=args.query_type,
         )
     )
