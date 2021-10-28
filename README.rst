@@ -30,9 +30,9 @@ What is ``aioquic``?
 ``aioquic`` is a library for the QUIC network protocol in Python. It features
 a minimal TLS 1.3 implementation, a QUIC stack and an HTTP/3 stack.
 
-QUIC standardisation is not finalised yet, but ``aioquic`` closely tracks the
-specification drafts and is regularly tested for interoperability against other
-`QUIC implementations`_.
+QUIC was standardised in RFC 9000, but HTTP/3 standardisation is still ongoing.
+``aioquic`` closely tracks the specification drafts and is regularly tested for
+interoperability against other `QUIC implementations`_.
 
 To learn more about ``aioquic`` please `read the documentation`_.
 
