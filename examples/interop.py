@@ -139,7 +139,7 @@ async def test_version_negotiation(server: Server, configuration: QuicConfigurat
         for event in configuration.quic_logger.to_dict()["traces"][0]["events"]:
             if (
                 event["name"] == "transport:packet_received"
-                and event["data"]["packet_type"] == "version_negotiation"
+                and event["data"]["header"]["packet_type"] == "version_negotiation"
             ):
                 server.result |= Result.V
 
@@ -167,7 +167,7 @@ async def test_retry(server: Server, configuration: QuicConfiguration):
         for event in configuration.quic_logger.to_dict()["traces"][0]["events"]:
             if (
                 event["name"] == "transport:packet_received"
-                and event["data"]["packet_type"] == "retry"
+                and event["data"]["header"]["packet_type"] == "retry"
             ):
                 server.result |= Result.S
 
@@ -359,7 +359,7 @@ async def test_nat_rebinding(server: Server, configuration: QuicConfiguration):
         for event in configuration.quic_logger.to_dict()["traces"][0]["events"]:
             if (
                 event["name"] == "transport:packet_received"
-                and event["data"]["packet_type"] == "1RTT"
+                and event["data"]["header"]["packet_type"] == "1RTT"
             ):
                 for frame in event["data"]["frames"]:
                     if frame["frame_type"] == "path_challenge":
@@ -392,7 +392,7 @@ async def test_address_mobility(server: Server, configuration: QuicConfiguration
         for event in configuration.quic_logger.to_dict()["traces"][0]["events"]:
             if (
                 event["name"] == "transport:packet_received"
-                and event["data"]["packet_type"] == "1RTT"
+                and event["data"]["header"]["packet_type"] == "1RTT"
             ):
                 for frame in event["data"]["frames"]:
                     if frame["frame_type"] == "path_challenge":
