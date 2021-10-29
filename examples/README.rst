@@ -5,6 +5,7 @@ After checking out the code using git you can run:
 
 .. code-block:: console
 
+   $ sudo apt install libssl-dev
    $ pip install -e .
    $ pip install asgiref dnslib httpbin starlette wsproto
 
