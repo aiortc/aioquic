@@ -63,7 +63,7 @@ Features
 Requirements
 ------------
 
-``aioquic`` requires Python 3.6 or better, and the OpenSSL development headers.
+``aioquic`` requires Python 3.7 or better, and the OpenSSL development headers.
 
 Linux
 .....
