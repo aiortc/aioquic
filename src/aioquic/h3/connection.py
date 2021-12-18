@@ -74,7 +74,7 @@ class Setting(IntEnum):
     MAX_HEADER_LIST_SIZE = 0x6
     QPACK_BLOCKED_STREAMS = 0x7
     NUM_PLACEHOLDERS = 0x9
-    H3_DATAGRAM = 0x276
+    H3_DATAGRAM = 0xffd277
     ENABLE_WEBTRANSPORT = 0x2B603742
 
     #  Dummy setting to check it is correctly ignored by the peer.
