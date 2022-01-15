@@ -13,7 +13,7 @@ import wsproto.events
 import aioquic
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.h0.connection import H0_ALPN, H0Connection
-from aioquic.h3.connection import H3_ALPN, H3Connection
+from aioquic.h3.connection import H3_ALPN, H3Connection, Setting
 from aioquic.h3.events import (
     DatagramReceived,
     DataReceived,
@@ -32,8 +32,31 @@ try:
 except ImportError:
     uvloop = None
 
+class H3ConnectionWithDatagram(H3Connection):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+    # Overrides H3Connection._validate_settings() to enable HTTP Datagram
+    def _validate_settings(self, settings: Dict[int, int]) -> None:
+        settings[Setting.H3_DATAGRAM] = 1
+        settings[Setting.ENABLE_WEBTRANSPORT] = 1
+        return super()._validate_settings(settings)
+
+    # Overrides H3Connection._get_local_settings() to enable HTTP Datagram and
+    # extended CONNECT methods.
+    def _get_local_settings(self) -> Dict[int, int]:
+        settings = super()._get_local_settings()
+        settings[H3_DATAGRAM_05] = 1
+        settings[Setting.ENABLE_WEBTRANSPORT] = 1
+        settings[ENABLE_CONNECT_PROTOCOL] = 1
+        return settings
+
 AsgiApplication = Callable
-HttpConnection = Union[H0Connection, H3Connection]
+HttpConnection = Union[H0Connection, H3ConnectionWithDatagram]
+# https://datatracker.ietf.org/doc/html/draft-ietf-masque-h3-datagram-05#section-9.1
+H3_DATAGRAM_05 = 0xffd277
+# https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-h3-websockets-00#section-5
+ENABLE_CONNECT_PROTOCOL = 0x08
 
 SERVER_NAME = "aioquic/" + aioquic.__version__
 
@@ -289,6 +312,7 @@ class WebTransportHandler:
                 (b":status", b"200"),
                 (b"server", SERVER_NAME.encode()),
                 (b"date", formatdate(time.time(), usegmt=True).encode()),
+                (b"sec-webtransport-http3-draft",b"draft02")
             ]
             self.connection.send_headers(stream_id=self.stream_id, headers=headers)
 
@@ -447,7 +471,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
     def quic_event_received(self, event: QuicEvent) -> None:
         if isinstance(event, ProtocolNegotiated):
             if event.alpn_protocol in H3_ALPN:
-                self._http = H3Connection(self._quic, enable_webtransport=True)
+                self._http = H3ConnectionWithDatagram(self._quic, enable_webtransport=True)
             elif event.alpn_protocol in H0_ALPN:
                 self._http = H0Connection(self._quic)
         elif isinstance(event, DatagramFrameReceived):
