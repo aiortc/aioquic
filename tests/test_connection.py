@@ -1983,7 +1983,7 @@ class QuicConnectionTest(TestCase):
 
         data = encode_transport_parameters(
             QuicTransportParameters(
-                max_ack_delay=2 ** 14,
+                max_ack_delay=2**14,
                 original_destination_connection_id=client.original_destination_connection_id,
             )
         )

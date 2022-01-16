@@ -177,12 +177,14 @@ class QuicConnectionState(Enum):
     DRAINING = 3
     TERMINATED = 4
 
+
 @dataclass
 class QuicNetworkPathChallenge:
-    '''
+    """
     Can be received on differente path, not a problem according to the draft
-    '''
-    #is_validated: bool = False
+    """
+
+    # is_validated: bool = False
     local_challenge: Optional[bytes] = None
     remote_challenge: Optional[bytes] = None
 
@@ -1160,11 +1162,10 @@ class QuicConnection:
         self._logger.debug("Network path %s discovered", network_path.addr)
         return network_path
 
-    #TODO for now we only consider the last challenge
     def _find_network_challenge(self) -> QuicNetworkPathChallenge:
         # check existing network challenge
         for idx, network_chall in enumerate(self._network_challenges):
-            if idx == len(self._network_challenges)-1:
+            if idx == len(self._network_challenges) - 1:
                 return network_chall
 
         # new network path
@@ -1854,10 +1855,6 @@ class QuicConnection:
             context.quic_logger_frames.append(
                 self._quic_logger.encode_path_response_frame(data=data)
             )
-
-        self._logger.debug("path_response: %s - %s", data, context.network_challenge.local_challenge)
-        self._logger.debug("path_response: %s", context)
-
         if data != context.network_challenge.local_challenge:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.PROTOCOL_VIOLATION,
@@ -1868,7 +1865,7 @@ class QuicConnection:
             "Network path %s validated by challenge", context.network_path.addr
         )
         context.network_path.is_validated = True
-	# endpoint can abandon any path validation for other addresses
+        # endpoint can abandon any path validation for other addresses
         self._network_challenges = [QuicNetworkPathChallenge()]
 
     def _handle_ping_frame(
@@ -2387,7 +2384,7 @@ class QuicConnection:
                 )
             if (
                 quic_transport_parameters.max_ack_delay is not None
-                and quic_transport_parameters.max_ack_delay >= 2 ** 14
+                and quic_transport_parameters.max_ack_delay >= 2**14
             ):
                 raise QuicConnectionError(
                     error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
@@ -2548,7 +2545,11 @@ class QuicConnection:
             )
 
     def _write_application(
-        self, builder: QuicPacketBuilder, network_path: QuicNetworkPath, network_challenge: QuicNetworkPathChallenge,  now: float
+        self,
+        builder: QuicPacketBuilder,
+        network_path: QuicNetworkPath,
+        network_challenge: QuicNetworkPathChallenge,
+        now: float,
     ) -> None:
         crypto_stream: Optional[QuicStream] = None
         if self._cryptos[tls.Epoch.ONE_RTT].send.is_valid():
@@ -2591,7 +2592,7 @@ class QuicConnection:
                     )
                     network_challenge.local_challenge = challenge
                     if network_challenge not in self._network_challenges:
-                    	self._network_challenges.append(network_challenge)
+                        self._network_challenges.append(network_challenge)
 
                 # PATH RESPONSE
                 if network_challenge.remote_challenge is not None:
