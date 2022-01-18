@@ -115,7 +115,8 @@ class StreamReset(QuicEvent):
 @dataclass
 class StreamStop(QuicEvent):
     """
-    The StreamStop event is fired when the remote peer closes a stream.
+    The StreamStop event is fired when the remote peer closes a stream that it
+    was receiving on.
     """
 
     error_code: int
