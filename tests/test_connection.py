@@ -1740,7 +1740,7 @@ class QuicConnectionTest(TestCase):
             client.send_stream_data(stream_id=stream_id, data=b"hello")
             consume_events(client)
 
-            # client receives STOP_STREAM
+            # client receives STOP_SENDING
             client._handle_stop_sending_frame(
                 client_receive_context(client),
                 QuicFrameType.STOP_SENDING,
