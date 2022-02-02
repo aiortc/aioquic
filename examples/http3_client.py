@@ -253,10 +253,14 @@ async def perform_http_request(
     # perform request
     start = time.time()
     if data is not None:
+        data_bytes = data.encode()
         http_events = await client.post(
             url,
-            data=data.encode(),
-            headers={"content-type": "application/x-www-form-urlencoded"},
+            data=data_bytes,
+            headers={
+                "content-length": str(len(data_bytes)),
+                "content-type": "application/x-www-form-urlencoded",
+            },
         )
         method = "POST"
     else:
