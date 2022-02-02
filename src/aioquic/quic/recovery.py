@@ -215,7 +215,7 @@ class QuicPacketRecovery:
             not self.peer_completed_address_validation
             or sum(space.ack_eliciting_in_flight for space in self.spaces) > 0
         ):
-            timeout = self.get_probe_timeout() * (2 ** self._pto_count)
+            timeout = self.get_probe_timeout() * (2**self._pto_count)
             return self._time_of_last_sent_ack_eliciting_packet + timeout
 
         return None

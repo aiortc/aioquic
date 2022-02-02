@@ -2415,7 +2415,7 @@ class QuicConnection:
                 )
             if (
                 quic_transport_parameters.max_ack_delay is not None
-                and quic_transport_parameters.max_ack_delay >= 2 ** 14
+                and quic_transport_parameters.max_ack_delay >= 2**14
             ):
                 raise QuicConnectionError(
                     error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
