@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import functools
 import logging
 import os
 import sys
@@ -8,6 +9,14 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519
+
+
+def asynctest(coro):
+    @functools.wraps(coro)
+    def wrap(*args, **kwargs):
+        asyncio.run(coro(*args, **kwargs))
+
+    return wrap
 
 
 def generate_certificate(*, alternative_names, common_name, hash_algorithm, key):
@@ -69,10 +78,6 @@ def load(name):
     path = os.path.join(os.path.dirname(__file__), name)
     with open(path, "rb") as fp:
         return fp.read()
-
-
-def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 SERVER_CACERTFILE = os.path.join(os.path.dirname(__file__), "pycacert.pem")
