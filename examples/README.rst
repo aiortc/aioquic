@@ -82,7 +82,7 @@ The demo server runs a :code:`WebTransport` echo service at `/wt`. You can conne
 
   let stream = await transport.createBidirectionalStream();
   let reader = stream.readable.getReader();
-  let writer = stream.writable.getWriter()
+  let writer = stream.writable.getWriter();
 
   await writer.write(new Uint8Array([65, 66, 67]));
   let received = await reader.read();

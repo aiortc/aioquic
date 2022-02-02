@@ -289,6 +289,7 @@ class WebTransportHandler:
                 (b":status", b"200"),
                 (b"server", SERVER_NAME.encode()),
                 (b"date", formatdate(time.time(), usegmt=True).encode()),
+                (b"sec-webtransport-http3-draft", b"draft02"),
             ]
             self.connection.send_headers(stream_id=self.stream_id, headers=headers)
 
