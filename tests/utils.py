@@ -6,7 +6,6 @@ import os
 import sys
 
 from cryptography import x509
-from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519
 
@@ -40,12 +39,12 @@ def generate_certificate(*, alternative_names, common_name, hash_algorithm, key)
             ),
             critical=False,
         )
-    cert = builder.sign(key, hash_algorithm, default_backend())
+    cert = builder.sign(key, hash_algorithm)
     return cert, key
 
 
 def generate_ec_certificate(common_name, alternative_names=[], curve=ec.SECP256R1):
-    key = ec.generate_private_key(backend=default_backend(), curve=curve)
+    key = ec.generate_private_key(curve=curve)
     return generate_certificate(
         alternative_names=alternative_names,
         common_name=common_name,
