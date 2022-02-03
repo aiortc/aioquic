@@ -172,14 +172,13 @@ def hkdf_expand_label(
         algorithm=algorithm,
         length=length,
         info=hkdf_label(label, hash_value, length),
-        backend=default_backend(),
     ).derive(secret)
 
 
 def hkdf_extract(
     algorithm: hashes.HashAlgorithm, salt: bytes, key_material: bytes
 ) -> bytes:
-    h = hmac.HMAC(salt, algorithm, backend=default_backend())
+    h = hmac.HMAC(salt, algorithm)
     h.update(key_material)
     return h.finalize()
 
@@ -190,9 +189,7 @@ def load_pem_private_key(
     """
     Load a PEM-encoded private key.
     """
-    return serialization.load_pem_private_key(
-        data, password=password, backend=default_backend()
-    )
+    return serialization.load_pem_private_key(data, password=password)
 
 
 def load_pem_x509_certificates(data: bytes) -> List[x509.Certificate]:
@@ -203,11 +200,7 @@ def load_pem_x509_certificates(data: bytes) -> List[x509.Certificate]:
     certificates = []
     for chunk in data.split(boundary):
         if chunk:
-            certificates.append(
-                x509.load_pem_x509_certificate(
-                    chunk + boundary, backend=default_backend()
-                )
-            )
+            certificates.append(x509.load_pem_x509_certificate(chunk + boundary))
     return certificates
 
 
@@ -971,7 +964,7 @@ class KeySchedule:
         self.algorithm = cipher_suite_hash(cipher_suite)
         self.cipher_suite = cipher_suite
         self.generation = 0
-        self.hash = hashes.Hash(self.algorithm, default_backend())
+        self.hash = hashes.Hash(self.algorithm)
         self.hash_empty_value = self.hash.copy().finalize()
         self.secret = bytes(self.algorithm.digest_size)
 
@@ -987,7 +980,7 @@ class KeySchedule:
             length=self.algorithm.digest_size,
         )
 
-        h = hmac.HMAC(hmac_key, algorithm=self.algorithm, backend=default_backend())
+        h = hmac.HMAC(hmac_key, algorithm=self.algorithm)
         h.update(self.hash.copy().finalize())
         return h.finalize()
 
@@ -1396,7 +1389,7 @@ class Context:
         for group in self._supported_groups:
             if group == Group.SECP256R1:
                 self._ec_private_key = ec.generate_private_key(
-                    GROUP_TO_CURVE[Group.SECP256R1](), default_backend()
+                    GROUP_TO_CURVE[Group.SECP256R1]()
                 )
                 key_share.append(encode_public_key(self._ec_private_key.public_key()))
                 supported_groups.append(Group.SECP256R1)
@@ -1562,12 +1555,10 @@ class Context:
         certificate = pull_certificate(input_buf)
 
         self._peer_certificate = x509.load_der_x509_certificate(
-            certificate.certificates[0][0], backend=default_backend()
+            certificate.certificates[0][0]
         )
         self._peer_certificate_chain = [
-            x509.load_der_x509_certificate(
-                certificate.certificates[i][0], backend=default_backend()
-            )
+            x509.load_der_x509_certificate(certificate.certificates[i][0])
             for i in range(1, len(certificate.certificates))
         ]
 
@@ -1799,7 +1790,7 @@ class Context:
                 break
             elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
                 self._ec_private_key = ec.generate_private_key(
-                    GROUP_TO_CURVE[key_share[0]](), default_backend()
+                    GROUP_TO_CURVE[key_share[0]]()
                 )
                 public_key = self._ec_private_key.public_key()
                 shared_key = self._ec_private_key.exchange(ec.ECDH(), peer_public_key)
