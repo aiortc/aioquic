@@ -71,13 +71,17 @@ class HeadersState(Enum):
 
 class Setting(IntEnum):
     QPACK_MAX_TABLE_CAPACITY = 0x1
-    MAX_HEADER_LIST_SIZE = 0x6
+    MAX_FIELD_SECTION_SIZE = 0x6
     QPACK_BLOCKED_STREAMS = 0x7
-    NUM_PLACEHOLDERS = 0x9
+
+    # https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-h3-websockets-02#section-5
+    ENABLE_CONNECT_PROTOCOL = 0x8
+    # https://datatracker.ietf.org/doc/html/draft-ietf-masque-h3-datagram-05#section-9.1
     H3_DATAGRAM = 0xFFD277
+    # https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2-02#section-10.1
     ENABLE_WEBTRANSPORT = 0x2B603742
 
-    #  Dummy setting to check it is correctly ignored by the peer.
+    # Dummy setting to check it is correctly ignored by the peer.
     # https://tools.ietf.org/html/draft-ietf-quic-http-34#section-7.2.4.1
     DUMMY = 0x21
 
@@ -553,9 +557,10 @@ class H3Connection:
         """
         Return the local HTTP/3 settings.
         """
-        settings = {
+        settings: Dict[int, int] = {
             Setting.QPACK_MAX_TABLE_CAPACITY: self._max_table_capacity,
             Setting.QPACK_BLOCKED_STREAMS: self._blocked_streams,
+            Setting.ENABLE_CONNECT_PROTOCOL: 1,
             Setting.DUMMY: 1,
         }
         if self._enable_webtransport:
@@ -1067,24 +1072,24 @@ class H3Connection:
         return http_events
 
     def _validate_settings(self, settings: Dict[int, int]) -> None:
-        if Setting.H3_DATAGRAM in settings:
-            if settings[Setting.H3_DATAGRAM] not in (0, 1):
-                raise SettingsError("H3_DATAGRAM setting must be 0 or 1")
+        for setting in [
+            Setting.ENABLE_CONNECT_PROTOCOL,
+            Setting.ENABLE_WEBTRANSPORT,
+            Setting.H3_DATAGRAM,
+        ]:
+            if setting in settings and settings[setting] not in (0, 1):
+                raise SettingsError(f"{setting.name} setting must be 0 or 1")
 
-            if (
-                settings[Setting.H3_DATAGRAM] == 1
-                and self._quic._remote_max_datagram_frame_size is None
-            ):
-                raise SettingsError(
-                    "H3_DATAGRAM requires max_datagram_frame_size transport parameter"
-                )
+        if (
+            settings.get(Setting.H3_DATAGRAM) == 1
+            and self._quic._remote_max_datagram_frame_size is None
+        ):
+            raise SettingsError(
+                "H3_DATAGRAM requires max_datagram_frame_size transport parameter"
+            )
 
-        if Setting.ENABLE_WEBTRANSPORT in settings:
-            if settings[Setting.ENABLE_WEBTRANSPORT] not in (0, 1):
-                raise SettingsError("ENABLE_WEBTRANSPORT setting must be 0 or 1")
-
-            if (
-                settings[Setting.ENABLE_WEBTRANSPORT] == 1
-                and settings.get(Setting.H3_DATAGRAM) != 1
-            ):
-                raise SettingsError("ENABLE_WEBTRANSPORT requires H3_DATAGRAM")
+        if (
+            settings.get(Setting.ENABLE_WEBTRANSPORT) == 1
+            and settings.get(Setting.H3_DATAGRAM) != 1
+        ):
+            raise SettingsError("ENABLE_WEBTRANSPORT requires H3_DATAGRAM")

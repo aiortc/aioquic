@@ -1495,6 +1495,31 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
+    def test_validate_settings_enable_connect_protocol_invalid_value(self):
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive SETTINGS with an invalid ENABLE_CONNECT_PROTOCOL value
+        settings = copy.copy(DUMMY_SETTINGS)
+        settings[Setting.ENABLE_CONNECT_PROTOCOL] = 2
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(settings)),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (
+                ErrorCode.H3_SETTINGS_ERROR,
+                "ENABLE_CONNECT_PROTOCOL setting must be 0 or 1",
+            ),
+        )
+
     def test_validate_settings_enable_webtransport_invalid_value(self):
         quic_server = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=False)
