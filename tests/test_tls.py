@@ -1296,22 +1296,6 @@ class VerifyCertificateTest(TestCase):
                 server_name="localhost",
             )
 
-    @patch("aioquic.tls.lib.X509_STORE_new")
-    def test_verify_certificate_chain_internal_error(self, mock_store_new):
-        mock_store_new.return_value = tls.ffi.NULL
-
-        certificate, _ = generate_ec_certificate(
-            common_name="localhost", curve=ec.SECP256R1
-        )
-
-        with self.assertRaises(tls.AlertInternalError) as cm:
-            verify_certificate(
-                cadata=certificate.public_bytes(serialization.Encoding.PEM),
-                certificate=certificate,
-                server_name="localhost",
-            )
-        self.assertEqual(str(cm.exception), "OpenSSL call to X509_store_new failed")
-
     def test_verify_dates(self):
         certificate, _ = generate_ec_certificate(
             common_name="example.com", curve=ec.SECP256R1
