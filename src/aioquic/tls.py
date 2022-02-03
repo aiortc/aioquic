@@ -24,7 +24,6 @@ import certifi
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.bindings.openssl.binding import Binding
 from cryptography.hazmat.primitives import hashes, hmac, serialization
 from cryptography.hazmat.primitives.asymmetric import (
     dsa,
@@ -38,13 +37,9 @@ from cryptography.hazmat.primitives.asymmetric import (
 )
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from OpenSSL import crypto
 
 from .buffer import Buffer
-
-binding = Binding()
-binding.init_static_locks()
-ffi = binding.ffi
-lib = binding.lib
 
 TLS_VERSION_1_2 = 0x0303
 TLS_VERSION_1_3 = 0x0304
@@ -204,29 +199,6 @@ def load_pem_x509_certificates(data: bytes) -> List[x509.Certificate]:
     return certificates
 
 
-def openssl_assert(ok: bool, func: str) -> None:
-    if not ok:
-        lib.ERR_clear_error()
-        raise AlertInternalError("OpenSSL call to %s failed" % func)
-
-
-def openssl_decode_string(charp) -> str:
-    return ffi.string(charp).decode("utf-8") if charp else ""
-
-
-def openssl_encode_path(s: Optional[str]) -> Any:
-    if s is not None:
-        return os.fsencode(s)
-    return ffi.NULL
-
-
-def cert_x509_ptr(certificate: x509.Certificate) -> Any:
-    """
-    Accessor for private attribute.
-    """
-    return getattr(certificate, "_x509")
-
-
 def verify_certificate(
     certificate: x509.Certificate,
     chain: List[x509.Certificate] = [],
@@ -263,63 +235,26 @@ def verify_certificate(
         except ssl.CertificateError as exc:
             raise AlertBadCertificate("\n".join(exc.args)) from exc
 
-    # verify certificate chain
-    store = lib.X509_STORE_new()
-    openssl_assert(store != ffi.NULL, "X509_store_new")
-    store = ffi.gc(store, lib.X509_STORE_free)
-
-    # load default CAs
-    openssl_assert(
-        lib.X509_STORE_set_default_paths(store), "X509_STORE_set_default_paths"
-    )
-    openssl_assert(
-        lib.X509_STORE_load_locations(
-            store,
-            openssl_encode_path(certifi.where()),
-            openssl_encode_path(None),
-        ),
-        "X509_STORE_load_locations",
-    )
-
-    # load extra CAs
+    # load CAs
+    store = crypto.X509Store()
+    store.load_locations(certifi.where())
     if cadata is not None:
         for cert in load_pem_x509_certificates(cadata):
-            openssl_assert(
-                lib.X509_STORE_add_cert(store, cert_x509_ptr(cert)),
-                "X509_STORE_add_cert",
-            )
+            store.add_cert(crypto.X509.from_cryptography(cert))
 
     if cafile is not None or capath is not None:
-        openssl_assert(
-            lib.X509_STORE_load_locations(
-                store, openssl_encode_path(cafile), openssl_encode_path(capath)
-            ),
-            "X509_STORE_load_locations",
-        )
+        store.load_locations(cafile, capath)
 
-    chain_stack = lib.sk_X509_new_null()
-    openssl_assert(chain_stack != ffi.NULL, "sk_X509_new_null")
-    chain_stack = ffi.gc(chain_stack, lib.sk_X509_free)
-    for cert in chain:
-        openssl_assert(
-            lib.sk_X509_push(chain_stack, cert_x509_ptr(cert)), "sk_X509_push"
-        )
-
-    store_ctx = lib.X509_STORE_CTX_new()
-    openssl_assert(store_ctx != ffi.NULL, "X509_STORE_CTX_new")
-    store_ctx = ffi.gc(store_ctx, lib.X509_STORE_CTX_free)
-    openssl_assert(
-        lib.X509_STORE_CTX_init(
-            store_ctx, store, cert_x509_ptr(certificate), chain_stack
-        ),
-        "X509_STORE_CTX_init",
+    # verify certificate chain
+    store_ctx = crypto.X509StoreContext(
+        store,
+        crypto.X509.from_cryptography(certificate),
+        [crypto.X509.from_cryptography(cert) for cert in chain],
     )
-
-    res = lib.X509_verify_cert(store_ctx)
-    if not res:
-        err = lib.X509_STORE_CTX_get_error(store_ctx)
-        err_str = openssl_decode_string(lib.X509_verify_cert_error_string(err))
-        raise AlertBadCertificate(err_str)
+    try:
+        store_ctx.verify_certificate()
+    except crypto.X509StoreContextError as exc:
+        raise AlertBadCertificate(exc.args[0][2])
 
 
 class CipherSuite(IntEnum):
