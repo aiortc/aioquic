@@ -3,7 +3,7 @@ import json
 import os
 import time
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional
 
 from ..h3.events import Headers
 from .packet import (
@@ -47,7 +47,7 @@ class QuicLoggerTrace:
 
     def __init__(self, *, is_client: bool, odcid: bytes) -> None:
         self._odcid = odcid
-        self._events: Deque[Tuple[float, str, str, Dict[str, Any]]] = deque()
+        self._events: Deque[Dict[str, Any]] = deque()
         self._vantage_point = {
             "name": "aioquic",
             "type": "client" if is_client else "server",

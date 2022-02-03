@@ -1,5 +1,5 @@
 import math
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .logger import QuicLoggerTrace
 from .packet_builder import QuicDeliveryState, QuicSentPacket
@@ -386,7 +386,7 @@ class QuicPacketRecovery:
         return loss_space
 
     def _log_metrics_updated(self, log_rtt=False) -> None:
-        data = {
+        data: Dict[str, Any] = {
             "bytes_in_flight": self._cc.bytes_in_flight,
             "cwnd": self._cc.congestion_window,
         }
