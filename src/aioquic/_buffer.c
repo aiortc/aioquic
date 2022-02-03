@@ -403,7 +403,7 @@ static PyTypeObject BufferType = {
 static struct PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
     MODULE_NAME,                        /* m_name */
-    "A faster buffer.",                 /* m_doc */
+    "Serialization utilities.",         /* m_doc */
     -1,                                 /* m_size */
     NULL,                               /* m_methods */
     NULL,                               /* m_reload */
