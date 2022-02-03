@@ -12,12 +12,13 @@ jobs:
         with:
           python-version: 3.7
       - name: Install packages
-        run: pip install black flake8 isort mypy
+        run: pip install black flake8 isort mypy types-certifi types-cryptography types-pyopenssl
       - name: Run linters
         run: |
           flake8 examples src tests
           isort --check-only --diff examples src tests
           black --check --diff examples src tests
+          mypy src tests
 
   test:
     runs-on: ${{ matrix.os }}

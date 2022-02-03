@@ -73,7 +73,7 @@ def generate_ed448_certificate(common_name, alternative_names=[]):
     )
 
 
-def load(name):
+def load(name: str) -> bytes:
     path = os.path.join(os.path.dirname(__file__), name)
     with open(path, "rb") as fp:
         return fp.read()
