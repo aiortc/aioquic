@@ -27,6 +27,10 @@ from aioquic.quic.events import DatagramFrameReceived, ProtocolNegotiated, QuicE
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import SessionTicket
 
+from random import choice
+from string import digits
+import itertools
+
 try:
     import uvloop
 except ImportError:
@@ -303,7 +307,12 @@ class WebTransportHandler:
                 )
             end_stream = True
         elif message["type"] == "webtransport.datagram.send":
-            self.connection.send_datagram(flow_id=self.stream_id, data=message["data"])
+            print('Try to stream datagrams continuously...')
+            for chunk in iter(lambda: ''.join(choice(digits) for i in range(512)).encode(), b''):
+                if chunk is not None:
+                    self.connection.send_datagram(flow_id=self.stream_id, data=chunk) 
+                    self.transmit()
+            # self.connection.send_datagram(flow_id=self.stream_id, data=message["data"])
         elif message["type"] == "webtransport.stream.send":
             self.connection._quic.send_stream_data(
                 stream_id=message["stream"], data=message["data"]
@@ -315,7 +324,7 @@ class WebTransportHandler:
             )
         if end_stream:
             self.closed = True
-        self.transmit()
+        # self.transmit()
 
 
 Handler = Union[HttpRequestHandler, WebSocketHandler, WebTransportHandler]
