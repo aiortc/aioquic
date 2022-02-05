@@ -29,7 +29,6 @@ from aioquic.tls import SessionTicket
 
 from random import choice
 from string import digits
-import itertools
 
 try:
     import uvloop
