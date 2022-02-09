@@ -1,3 +1,4 @@
+import logging
 import math
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
@@ -154,6 +155,7 @@ class QuicPacketRecovery:
         initial_rtt: float,
         peer_completed_address_validation: bool,
         send_probe: Callable[[], None],
+        logger: Optional[logging.LoggerAdapter] = None,
         quic_logger: Optional[QuicLoggerTrace] = None,
     ) -> None:
         self.max_ack_delay = 0.025
@@ -161,6 +163,7 @@ class QuicPacketRecovery:
         self.spaces: List[QuicPacketSpace] = []
 
         # callbacks
+        self._logger = logger
         self._quic_logger = quic_logger
         self._send_probe = send_probe
 
@@ -319,20 +322,7 @@ class QuicPacketRecovery:
             self._detect_loss(loss_space, now=now)
         else:
             self._pto_count += 1
-
-            # reschedule some data
-            for space in self.spaces:
-                self._on_packets_lost(
-                    tuple(
-                        filter(
-                            lambda i: i.is_crypto_packet, space.sent_packets.values()
-                        )
-                    ),
-                    space=space,
-                    now=now,
-                )
-
-            self._send_probe()
+            self.reschedule_data(now=now)
 
     def on_packet_sent(self, packet: QuicSentPacket, space: QuicPacketSpace) -> None:
         space.sent_packets[packet.packet_number] = packet
@@ -348,6 +338,25 @@ class QuicPacketRecovery:
 
             if self._quic_logger is not None:
                 self._log_metrics_updated()
+
+    def reschedule_data(self, now: float) -> None:
+        """
+        Schedule some data for retransmission.
+        """
+        # if there is any outstanding CRYPTO, retransmit it
+        crypto_scheduled = False
+        for space in self.spaces:
+            packets = tuple(
+                filter(lambda i: i.is_crypto_packet, space.sent_packets.values())
+            )
+            if packets:
+                self._on_packets_lost(packets, space=space, now=now)
+                crypto_scheduled = True
+        if crypto_scheduled and self._logger is not None:
+            self._logger.debug("Scheduled CRYPTO data for retransmission")
+
+        # ensure an ACK-elliciting packet is sent
+        self._send_probe()
 
     def _detect_loss(self, space: QuicPacketSpace, now: float) -> None:
         """
