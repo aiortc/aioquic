@@ -351,6 +351,8 @@ class QuicConnectionTest(TestCase):
     def test_connect_with_loss_1(self):
         """
         Check connection is established even in the client's INITIAL is lost.
+
+        The client's PTO fires, triggering retransmission.
         """
 
         client_configuration = QuicConfiguration(is_client=True)
@@ -421,6 +423,176 @@ class QuicConnectionTest(TestCase):
         self.assertAlmostEqual(client.get_timer(), 60.4)  # idle timeout
 
     def test_connect_with_loss_2(self):
+        """
+        Check connection is established even in the server's INITIAL is lost.
+
+        The client receives HANDSHAKE packets before it has the corresponding keys
+        and decides to retransmit its own CRYPTO to speedup handshake completion.
+        """
+
+        client_configuration = QuicConfiguration(is_client=True)
+        client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+
+        client = QuicConnection(configuration=client_configuration)
+        client._ack_delay = 0
+
+        server_configuration = QuicConfiguration(is_client=False)
+        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+
+        server = QuicConnection(
+            configuration=server_configuration,
+            original_destination_connection_id=client.original_destination_connection_id,
+        )
+        server._ack_delay = 0
+
+        # client sends INITIAL
+        now = 0.0
+        client.connect(SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280])
+        self.assertEqual(client.get_timer(), 0.2)
+
+        # server receives INITIAL, sends INITIAL + HANDSHAKE but first datagram is lost
+        now += TICK
+        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        items = server.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280, 1068])
+        self.assertEqual(server.get_timer(), 0.25)
+        self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
+        self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
+        self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
+        self.assertIsNone(server.next_event())
+
+        # client only receives second datagram, retransmits INITIAL
+        now += TICK
+        client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280])
+        self.assertAlmostEqual(client.get_timer(), 0.3)
+        self.assertIsNone(client.next_event())
+
+        # server receives duplicate INITIAL, retransmits INITIAL + HANDSHAKE
+        now += TICK
+        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        items = server.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280, 1068])
+        self.assertAlmostEqual(server.get_timer(), 0.35)
+        self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
+        self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
+
+        # handshake continues normally
+        now += TICK
+        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+        client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [376])
+        self.assertAlmostEqual(client.get_timer(), 0.525)
+        self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
+        self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(client.next_event()), events.ConnectionIdIssued)
+
+        now += TICK
+        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        items = server.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [229])
+        self.assertAlmostEqual(server.get_timer(), 0.525)
+        self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
+        self.assertEqual(len(server._loss.spaces[1].sent_packets), 0)
+        self.assertEqual(type(server.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(server.next_event()), events.ConnectionIdIssued)
+
+        now += TICK
+        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [32])
+        self.assertAlmostEqual(client.get_timer(), 60.3)  # idle timeout
+
+    def test_connect_with_loss_3(self):
+        """
+        Check connection is established even in the server's INITIAL + HANDSHAKE are lost.
+
+        The server receives duplicate CRYPTO and decides to retransmit its own
+        CRYPTO to speedup handshake completion.
+        """
+
+        client_configuration = QuicConfiguration(is_client=True)
+        client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+
+        client = QuicConnection(configuration=client_configuration)
+        client._ack_delay = 0
+
+        server_configuration = QuicConfiguration(is_client=False)
+        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+
+        server = QuicConnection(
+            configuration=server_configuration,
+            original_destination_connection_id=client.original_destination_connection_id,
+        )
+        server._ack_delay = 0
+
+        # client sends INITIAL
+        now = 0.0
+        client.connect(SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280])
+        self.assertEqual(client.get_timer(), 0.2)
+
+        # server receives INITIAL, sends INITIAL + HANDSHAKE
+        now += TICK
+        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        items = server.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280, 1068])
+        self.assertEqual(server.get_timer(), 0.25)
+        self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
+        self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
+        self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
+        self.assertIsNone(server.next_event())
+
+        # INITIAL + HANDSHAKE are lost, client retransmits INITIAL
+        now = client.get_timer()
+        client.handle_timer(now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280])
+        self.assertAlmostEqual(client.get_timer(), 0.6)
+        self.assertIsNone(client.next_event())
+
+        # server receives duplicate INITIAL, retransmits INITIAL + HANDSHAKE
+        now += TICK
+        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        items = server.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [1280, 1068])
+        self.assertEqual(server.get_timer(), 0.45)
+        self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
+        self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
+
+        # handshake continues normally
+        now += TICK
+        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+        client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [376])
+        self.assertAlmostEqual(client.get_timer(), 0.625)
+        self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
+        self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(client.next_event()), events.ConnectionIdIssued)
+
+        now += TICK
+        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        items = server.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [229])
+        self.assertAlmostEqual(server.get_timer(), 0.625)
+        self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
+        self.assertEqual(len(server._loss.spaces[1].sent_packets), 0)
+        self.assertEqual(type(server.next_event()), events.HandshakeCompleted)
+        self.assertEqual(type(server.next_event()), events.ConnectionIdIssued)
+
+        now += TICK
+        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+        items = client.datagrams_to_send(now=now)
+        self.assertEqual(datagram_sizes(items), [32])
+        self.assertAlmostEqual(client.get_timer(), 60.4)  # idle timeout
+
+    def test_connect_with_loss_4(self):
         """
         Check connection is established even in the server's HANDSHAKE is lost.
         """
@@ -517,7 +689,10 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(datagram_sizes(items), [32])
         self.assertAlmostEqual(client.get_timer(), 60.4)  # idle timeout
 
-    def test_connect_with_loss_3(self):
+    def test_connect_with_loss_5(self):
+        """
+        Check connection is established even in the server's HANDSHAKE_DONE is lost.
+        """
         client_configuration = QuicConfiguration(is_client=True)
         client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
 
@@ -562,7 +737,7 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
         self.assertEqual(type(client.next_event()), events.ConnectionIdIssued)
 
-        # server completes handshake
+        # server completes handshake, but HANDSHAKE_DONE is lost
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
@@ -595,176 +770,6 @@ class QuicConnectionTest(TestCase):
         items = server.datagrams_to_send(now=now)
         self.assertFalse(server._handshake_done_pending)
         self.assertEqual(datagram_sizes(items), [224])
-
-    def test_connect_with_loss_4(self):
-        """
-        Check connection is established even in the server's INITIAL + HANDSHAKE is lost.
-
-        The server receives duplicate CRYPTO and decides to retransmit its own
-        CRYPTO to speedup handshake completion.
-        """
-
-        client_configuration = QuicConfiguration(is_client=True)
-        client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
-
-        client = QuicConnection(configuration=client_configuration)
-        client._ack_delay = 0
-
-        server_configuration = QuicConfiguration(is_client=False)
-        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
-
-        server = QuicConnection(
-            configuration=server_configuration,
-            original_destination_connection_id=client.original_destination_connection_id,
-        )
-        server._ack_delay = 0
-
-        # client sends INITIAL
-        now = 0.0
-        client.connect(SERVER_ADDR, now=now)
-        items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280])
-        self.assertEqual(client.get_timer(), 0.2)
-
-        # server receives INITIAL, sends INITIAL + HANDSHAKE
-        now += TICK
-        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
-        items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1068])
-        self.assertEqual(server.get_timer(), 0.25)
-        self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
-        self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
-        self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
-        self.assertIsNone(server.next_event())
-
-        # INITIAL + HANDSHAKE are lost, client retransmits INITIAL
-        now = client.get_timer()
-        client.handle_timer(now=now)
-        items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280])
-        self.assertAlmostEqual(client.get_timer(), 0.6)
-        self.assertIsNone(client.next_event())
-
-        # server receives duplicate INITIAL, retransmits INITIAL + HANDSHAKE
-        now += TICK
-        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
-        items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1068])
-        self.assertEqual(server.get_timer(), 0.45)
-        self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
-        self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
-
-        # handshake continues normally
-        now += TICK
-        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
-        client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
-        items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [376])
-        self.assertAlmostEqual(client.get_timer(), 0.625)
-        self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
-        self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
-        self.assertEqual(type(client.next_event()), events.ConnectionIdIssued)
-
-        now += TICK
-        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
-        items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [229])
-        self.assertAlmostEqual(server.get_timer(), 0.625)
-        self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
-        self.assertEqual(len(server._loss.spaces[1].sent_packets), 0)
-        self.assertEqual(type(server.next_event()), events.HandshakeCompleted)
-        self.assertEqual(type(server.next_event()), events.ConnectionIdIssued)
-
-        now += TICK
-        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
-        items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [32])
-        self.assertAlmostEqual(client.get_timer(), 60.4)  # idle timeout
-
-    def test_connect_with_loss_5(self):
-        """
-        Check connection is established even in the server's INITIAL is lost.
-
-        The server receives duplicate CRYPTO and decides to retransmit its own
-        CRYPTO to speedup handshake completion.
-        """
-
-        client_configuration = QuicConfiguration(is_client=True)
-        client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
-
-        client = QuicConnection(configuration=client_configuration)
-        client._ack_delay = 0
-
-        server_configuration = QuicConfiguration(is_client=False)
-        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
-
-        server = QuicConnection(
-            configuration=server_configuration,
-            original_destination_connection_id=client.original_destination_connection_id,
-        )
-        server._ack_delay = 0
-
-        # client sends INITIAL
-        now = 0.0
-        client.connect(SERVER_ADDR, now=now)
-        items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280])
-        self.assertEqual(client.get_timer(), 0.2)
-
-        # server receives INITIAL, sends INITIAL + HANDSHAKE but first datagram is lost
-        now += TICK
-        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
-        items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1068])
-        self.assertEqual(server.get_timer(), 0.25)
-        self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
-        self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
-        self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
-        self.assertIsNone(server.next_event())
-
-        # client only receives second datagram, retransmits INITIAL
-        now += TICK
-        client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
-        items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280])
-        self.assertAlmostEqual(client.get_timer(), 0.3)
-        self.assertIsNone(client.next_event())
-
-        # server receives duplicate INITIAL, retransmits INITIAL + HANDSHAKE
-        now += TICK
-        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
-        items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1280, 1068])
-        self.assertAlmostEqual(server.get_timer(), 0.35)
-        self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
-        self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
-
-        # handshake continues normally
-        now += TICK
-        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
-        client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
-        items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [376])
-        self.assertAlmostEqual(client.get_timer(), 0.525)
-        self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
-        self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
-        self.assertEqual(type(client.next_event()), events.ConnectionIdIssued)
-
-        now += TICK
-        server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
-        items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [229])
-        self.assertAlmostEqual(server.get_timer(), 0.525)
-        self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
-        self.assertEqual(len(server._loss.spaces[1].sent_packets), 0)
-        self.assertEqual(type(server.next_event()), events.HandshakeCompleted)
-        self.assertEqual(type(server.next_event()), events.ConnectionIdIssued)
-
-        now += TICK
-        client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
-        items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [32])
-        self.assertAlmostEqual(client.get_timer(), 60.3)  # idle timeout
 
     def test_connect_with_no_transport_parameters(self):
         def patch(client):
