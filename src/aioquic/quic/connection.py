@@ -269,6 +269,7 @@ class QuicConnection:
         self._connect_called = False
         self._cryptos: Dict[tls.Epoch, CryptoPair] = {}
         self._crypto_buffers: Dict[tls.Epoch, Buffer] = {}
+        self._crypto_retransmitted = False
         self._crypto_streams: Dict[tls.Epoch, QuicStream] = {}
         self._events: Deque[events.QuicEvent] = deque()
         self._handshake_complete = False
@@ -362,6 +363,7 @@ class QuicConnection:
             peer_completed_address_validation=not self._is_client,
             quic_logger=self._quic_logger,
             send_probe=self._send_probe,
+            logger=self._logger,
         )
 
         # things to send
@@ -890,6 +892,16 @@ class QuicConnection:
                         event="packet_dropped",
                         data={"trigger": "key_unavailable"},
                     )
+
+                # if a client receives HANDSHAKE or 1-RTT packets before it has handshake keys,
+                # it can assume that the server's INITIAL was lost
+                if (
+                    self._is_client
+                    and epoch in (tls.Epoch.HANDSHAKE, tls.Epoch.ONE_RTT)
+                    and not self._crypto_retransmitted
+                ):
+                    self._loss.reschedule_data(now=now)
+                    self._crypto_retransmitted = True
                 continue
             except CryptoError as exc:
                 self._logger.debug(exc)
@@ -1548,6 +1560,20 @@ class QuicConnection:
                 self._logger.info(
                     "ALPN negotiated protocol %s", self.tls.alpn_negotiated
                 )
+        else:
+            self._logger.info(
+                "Duplicate CRYPTO data received for epoch %s", context.epoch
+            )
+
+            # if a server receives duplicate CRYPTO in an INITIAL packet,
+            # it can assume the client did not receive the server's CRYPTO
+            if (
+                not self._is_client
+                and context.epoch == tls.Epoch.INITIAL
+                and not self._crypto_retransmitted
+            ):
+                self._loss.reschedule_data(now=context.time)
+                self._crypto_retransmitted = True
 
     def _handle_data_blocked_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -1614,7 +1640,7 @@ class QuicConnection:
                 reason_phrase="Clients must not send HANDSHAKE_DONE frames",
             )
 
-        #  for clients, the handshake is now confirmed
+        # for clients, the handshake is now confirmed
         if not self._handshake_confirmed:
             self._discard_epoch(tls.Epoch.HANDSHAKE)
             self._handshake_confirmed = True
