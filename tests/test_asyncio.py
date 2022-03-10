@@ -349,6 +349,11 @@ class HighLevelTest(TestCase):
             self.assertEqual(response, b"gnip")
 
     @asynctest
+    async def test_connect_local_port_bind(self):
+        with self.assertRaises(OverflowError):
+            await self.run_client(local_port=-1, port=self.bogus_port)
+
+    @asynctest
     async def test_change_connection_id(self):
         async with self.run_server() as server_port:
             configuration = QuicConfiguration(is_client=True)
