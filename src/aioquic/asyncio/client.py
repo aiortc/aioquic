@@ -1,7 +1,6 @@
 import asyncio
 import ipaddress
 import socket
-import sys
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Callable, Optional, cast
 
@@ -11,6 +10,10 @@ from ..tls import SessionTicketHandler
 from .protocol import QuicConnectionProtocol, QuicStreamHandler
 
 __all__ = ["connect"]
+
+# keep compatibility for Python 3.7 on Windows
+if not hasattr(socket, "IPPROTO_IPV6"):
+    socket.IPPROTO_IPV6 = 41
 
 
 @asynccontextmanager
@@ -61,13 +64,7 @@ async def connect(
     infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
     addr = infos[0][4]
     if len(addr) == 2:
-        # determine behaviour for IPv4
-        if sys.platform == "win32":
-            # on Windows, we must use an IPv4 socket to reach an IPv4 host
-            local_host = "0.0.0.0"
-        else:
-            # other platforms support dual-stack sockets
-            addr = ("::ffff:" + addr[0], addr[1], 0, 0)
+        addr = ("::ffff:" + addr[0], addr[1], 0, 0)
 
     # prepare QUIC connection
     if configuration is None:
@@ -78,10 +75,20 @@ async def connect(
         configuration=configuration, session_ticket_handler=session_ticket_handler
     )
 
+    # explicitly enable IPv4/IPv6 dual stack
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    completed = False
+    try:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        sock.bind((local_host, local_port, 0, 0))
+        completed = True
+    finally:
+        if not completed:
+            sock.close()
     # connect
     transport, protocol = await loop.create_datagram_endpoint(
         lambda: create_protocol(connection, stream_handler=stream_handler),
-        local_addr=(local_host, local_port),
+        sock=sock,
     )
     protocol = cast(QuicConnectionProtocol, protocol)
     try:
