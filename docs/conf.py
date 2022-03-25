@@ -21,30 +21,6 @@ import sys, os
 sys.path.insert(0, os.path.abspath('..'))
 
 
-class MockBuffer:
-    Buffer = None
-    BufferReadError = None
-    BufferWriteError = None
-
-
-class MockCrypto:
-    AEAD = None
-    CryptoError = ValueError
-    HeaderProtection = None
-
-
-class MockPylsqpack:
-    Decoder = None
-    Encoder = None
-    StreamBlocked = None
-
-
-sys.modules.update({
-    "aioquic._buffer": MockBuffer(),
-    "aioquic._crypto": MockCrypto(),
-    "pylsqpack": MockPylsqpack(),
-})
-
 # -- General configuration ------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
@@ -126,6 +102,7 @@ html_theme_options = {
     'github_button': True,
     'github_user': 'aiortc',
     'github_repo': 'aioquic',
+    'logo': 'aioquic.svg',
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,
