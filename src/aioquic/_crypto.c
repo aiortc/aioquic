@@ -104,6 +104,7 @@ AEAD_dealloc(AEADObject *self)
 {
     EVP_CIPHER_CTX_free(self->decrypt_ctx);
     EVP_CIPHER_CTX_free(self->encrypt_ctx);
+    Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
 static PyObject*
@@ -285,6 +286,7 @@ static void
 HeaderProtection_dealloc(HeaderProtectionObject *self)
 {
     EVP_CIPHER_CTX_free(self->ctx);
+    Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
 static int HeaderProtection_mask(HeaderProtectionObject *self, const unsigned char* sample)
