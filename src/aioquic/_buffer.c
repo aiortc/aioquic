@@ -54,6 +54,7 @@ static void
 Buffer_dealloc(BufferObject *self)
 {
     free(self->base);
+    Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
 static PyObject *
