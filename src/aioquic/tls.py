@@ -438,11 +438,11 @@ def push_key_share(buf: Buffer, value: KeyShareEntry) -> None:
 
 
 def pull_alpn_protocol(buf: Buffer) -> str:
-    return pull_opaque(buf, 1).decode("ascii")
+    return pull_opaque(buf, 1).decode("latin-1")
 
 
 def push_alpn_protocol(buf: Buffer, protocol: str) -> None:
-    push_opaque(buf, 1, protocol.encode("ascii"))
+    push_opaque(buf, 1, protocol.encode("latin-1"))
 
 
 # PRE SHARED KEY
