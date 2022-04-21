@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import Any, Callable, Dict, Optional, Text, Tuple, Union, cast
 
 from ..quic import events
@@ -57,7 +58,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
 
         This method can only be called for clients and a single time.
         """
-        self._quic.connect(addr, now=self._loop.time())
+        self._quic.connect(addr, now=time.perf_counter())
         self.transmit()
 
     async def create_stream(
@@ -99,7 +100,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         self._transmit_task = None
 
         # send datagrams
-        for data, addr in self._quic.datagrams_to_send(now=self._loop.time()):
+        for data, addr in self._quic.datagrams_to_send(now=time.perf_counter()):
             self._transport.sendto(data, addr)
 
         # re-arm timer
@@ -132,7 +133,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         self._transport = cast(asyncio.DatagramTransport, transport)
 
     def datagram_received(self, data: Union[bytes, Text], addr: NetworkAddress) -> None:
-        self._quic.receive_datagram(cast(bytes, data), addr, now=self._loop.time())
+        self._quic.receive_datagram(cast(bytes, data), addr, now=time.perf_counter())
         self._process_events()
         self.transmit()
 
@@ -169,7 +170,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         return reader, writer
 
     def _handle_timer(self) -> None:
-        now = max(self._timer_at, self._loop.time())
+        now = max(self._timer_at, time.perf_counter())
         self._timer = None
         self._timer_at = None
         self._quic.handle_timer(now=now)
