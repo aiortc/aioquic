@@ -14,7 +14,7 @@ class EventLoopPolicy(asyncio.DefaultEventLoopPolicy):
 
     def new_event_loop(self):
         loop = super().new_event_loop()
-        loop._clock_resolution = time.get_clock_info('perf_counter').resolution
+        loop._clock_resolution = time.get_clock_info("perf_counter").resolution
         loop.time = time.perf_counter
         return loop
 
@@ -100,5 +100,5 @@ SKIP_TESTS = frozenset(os.environ.get("AIOQUIC_SKIP_TESTS", "").split(","))
 if os.environ.get("AIOQUIC_DEBUG"):
     logging.basicConfig(level=logging.DEBUG)
 
-if time.get_clock_info('monotonic').resolution > 0.001:
+if time.get_clock_info("monotonic").resolution > 0.001:
     asyncio.set_event_loop_policy(EventLoopPolicy())
