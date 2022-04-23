@@ -11,7 +11,6 @@ from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519
 
 
 class EventLoopPolicy(asyncio.DefaultEventLoopPolicy):
-
     def new_event_loop(self):
         loop = super().new_event_loop()
         loop._clock_resolution = time.get_clock_info("perf_counter").resolution
