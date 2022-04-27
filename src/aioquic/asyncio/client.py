@@ -49,10 +49,14 @@ async def connect(
     local_host = "::"
 
     # lookup remote address
-    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
+    infos = await loop.getaddrinfo(
+        host,
+        port,
+        family=socket.AF_INET6,
+        type=socket.SOCK_DGRAM,
+        flags=socket.AI_V4MAPPED | socket.AI_ALL | socket.AI_ADDRCONFIG,
+    )
     addr = infos[0][4]
-    if len(addr) == 2:
-        addr = ("::ffff:" + addr[0], addr[1], 0, 0)
 
     # prepare QUIC connection
     if configuration is None:
