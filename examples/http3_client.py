@@ -45,7 +45,7 @@ class URL:
         parsed = urlparse(url)
 
         self.authority = parsed.netloc
-        self.full_path = parsed.path
+        self.full_path = parsed.path or "/"
         if parsed.query:
             self.full_path += "?" + parsed.query
         self.scheme = parsed.scheme
