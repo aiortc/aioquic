@@ -366,6 +366,25 @@ async def run(
     else:
         port = 443
 
+    # check validity of 2nd urls and later.
+    for i in range(1, len(urls)):
+        _p = urlparse(urls[i])
+
+        # fill in if empty
+        _scheme = _p.scheme or parsed.scheme
+        _host = _p.hostname or host
+        _port = _p.port or port
+
+        assert _scheme == parsed.scheme, "URL scheme doesn't match"
+        assert _host == host, "URL hostname doesn't match"
+        assert _port == port, "URL port doesn't match"
+
+        # reconstruct url with new hostname and port
+        _p = _p._replace(scheme=_scheme)
+        _p = _p._replace(netloc="{}:{}".format(_host, _port))
+        _p = urlparse(_p.geturl())
+        urls[i] = _p.geturl()
+
     async with connect(
         host,
         port,
