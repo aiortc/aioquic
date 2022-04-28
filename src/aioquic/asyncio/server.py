@@ -212,4 +212,4 @@ async def serve(
         ),
         local_addr=(host, port),
     )
-    return cast(QuicServer, protocol)
+    return protocol
