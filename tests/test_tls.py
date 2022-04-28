@@ -1287,7 +1287,13 @@ class VerifyCertificateTest(TestCase):
             # fail
             with self.assertRaises(tls.AlertBadCertificate) as cm:
                 verify_certificate(certificate=certificate, server_name="localhost")
-            self.assertEqual(str(cm.exception), "self signed certificate")
+            self.assertIn(
+                str(cm.exception),
+                (
+                    "self signed certificate",
+                    "self-signed certificate",
+                ),
+            )
 
             # ok
             verify_certificate(
