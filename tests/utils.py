@@ -3,7 +3,6 @@ import datetime
 import functools
 import logging
 import os
-import sys
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
@@ -90,15 +89,3 @@ SKIP_TESTS = frozenset(os.environ.get("AIOQUIC_SKIP_TESTS", "").split(","))
 
 if os.environ.get("AIOQUIC_DEBUG"):
     logging.basicConfig(level=logging.DEBUG)
-
-if (
-    sys.platform == "win32"
-    and sys.version_info.major == 3
-    and sys.version_info.minor == 8
-):
-    # Python 3.8 uses ProactorEventLoop by default,
-    # which breaks UDP / IPv6 support, see:
-    #
-    # https://bugs.python.org/issue39148
-
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
