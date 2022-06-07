@@ -74,11 +74,11 @@ On Debian/Ubuntu run:
 
    $ sudo apt install libssl-dev python3-dev
 
-On Alpine Linux you will also need the following:
+On Alpine Linux run:
 
 .. code-block:: console
 
-   $ sudo apt install bsd-compat-headers libffi-dev
+   $ sudo apk add openssl-dev python3-dev bsd-compat-headers libffi-dev
 
 OS X
 ....
