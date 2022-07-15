@@ -525,7 +525,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--retry",
         action="store_true",
-        help="send a retry for new connections",
+        help="the ASGI application as <module>:<attribute> to send a retry for new connections",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="increase logging verbosity"
