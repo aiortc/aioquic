@@ -30,9 +30,9 @@ What is ``aioquic``?
 ``aioquic`` is a library for the QUIC network protocol in Python. It features
 a minimal TLS 1.3 implementation, a QUIC stack and an HTTP/3 stack.
 
-QUIC was standardised in RFC 9000, but HTTP/3 standardisation is still ongoing.
-``aioquic`` closely tracks the specification drafts and is regularly tested for
-interoperability against other `QUIC implementations`_.
+QUIC was standardised in `RFC 9000`_ and HTTP/3 in `RFC 9114`_.
+``aioquic`` is regularly tested for interoperability against other
+`QUIC implementations`_.
 
 To learn more about ``aioquic`` please `read the documentation`_.
 
@@ -51,9 +51,9 @@ different concurrency models.
 Features
 --------
 
-- QUIC stack conforming with RFC 9000
-- HTTP/3 stack conforming with draft-ietf-quic-http-34
-- minimal TLS 1.3 implementation
+- QUIC stack conforming with `RFC 9000`_
+- HTTP/3 stack conforming with `RFC 9114`_
+- minimal TLS 1.3 implementation conforming with `RFC 8446`_
 - IPv4 and IPv6 support
 - connection migration and NAT rebinding
 - logging TLS traffic secrets
@@ -129,3 +129,6 @@ License
 .. _cryptography: https://cryptography.io/
 .. _Chocolatey: https://chocolatey.org/
 .. _BSD license: https://aioquic.readthedocs.io/en/latest/license.html
+.. _RFC 8446: https://datatracker.ietf.org/doc/html/rfc8446
+.. _RFC 9000: https://datatracker.ietf.org/doc/html/rfc9000
+.. _RFC 9114: https://datatracker.ietf.org/doc/html/rfc9114
