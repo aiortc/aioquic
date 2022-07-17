@@ -64,7 +64,7 @@ def save_session_ticket(ticket):
             pickle.dump(ticket, fp)
 
 
-async def run(
+async def main(
     configuration: QuicConfiguration,
     host: str,
     port: int,
@@ -155,9 +155,8 @@ if __name__ == "__main__":
     else:
         logger.debug("No session ticket defined...")
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
-        run(
+    asyncio.run(
+        main(
             configuration=configuration,
             host=args.host,
             port=args.port,

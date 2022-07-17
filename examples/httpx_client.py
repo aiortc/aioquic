@@ -150,7 +150,7 @@ def save_session_ticket(ticket):
             pickle.dump(ticket, fp)
 
 
-async def run(
+async def main(
     configuration: QuicConfiguration,
     url: str,
     data: str,
@@ -287,9 +287,8 @@ if __name__ == "__main__":
         except FileNotFoundError:
             pass
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
-        run(
+    asyncio.run(
+        main(
             configuration=configuration,
             url=args.url,
             data=args.data,

@@ -345,7 +345,7 @@ def save_session_ticket(ticket: SessionTicket) -> None:
             pickle.dump(ticket, fp)
 
 
-async def run(
+async def main(
     configuration: QuicConfiguration,
     urls: List[str],
     data: Optional[str],
@@ -544,9 +544,8 @@ if __name__ == "__main__":
 
     if uvloop is not None:
         uvloop.install()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
-        run(
+    asyncio.run(
+        main(
             configuration=configuration,
             urls=args.url,
             data=args.data,

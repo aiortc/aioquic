@@ -36,7 +36,7 @@ class SiduckClient(QuicConnectionProtocol):
                 waiter.set_result(None)
 
 
-async def run(configuration: QuicConfiguration, host: str, port: int) -> None:
+async def main(configuration: QuicConfiguration, host: str, port: int) -> None:
     async with connect(
         host, port, configuration=configuration, create_protocol=SiduckClient
     ) as client:
@@ -91,7 +91,10 @@ if __name__ == "__main__":
     if args.secrets_log:
         configuration.secrets_log_file = open(args.secrets_log, "a")
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
-        run(configuration=configuration, host=args.host, port=args.port)
+    asyncio.run(
+        main(
+            configuration=configuration,
+            host=args.host,
+            port=args.port,
+        )
     )
