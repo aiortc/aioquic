@@ -114,7 +114,7 @@ class CryptoTest(TestCase):
     """
     Test vectors from:
 
-    https://tools.ietf.org/html/draft-ietf-quic-tls-18#appendix-A
+    https://datatracker.ietf.org/doc/html/draft-ietf-quic-tls-18#appendix-A
     """
 
     def create_crypto(self, is_client):
