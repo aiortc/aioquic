@@ -349,6 +349,7 @@ async def test_nat_rebinding(server: Server, configuration: QuicConfiguration):
 
         # replace transport
         protocol._transport.close()
+        loop = asyncio.get_event_loop()
         await loop.create_datagram_endpoint(lambda: protocol, local_addr=("::", 0))
 
         # cause more traffic
@@ -379,6 +380,7 @@ async def test_address_mobility(server: Server, configuration: QuicConfiguration
 
         # replace transport
         protocol._transport.close()
+        loop = asyncio.get_event_loop()
         await loop.create_datagram_endpoint(lambda: protocol, local_addr=("::", 0))
 
         # change connection ID
@@ -480,7 +482,7 @@ def print_result(server: Server) -> None:
     print("%s%s%s" % (server.name, " " * (20 - len(server.name)), result))
 
 
-async def run(servers, tests, quic_log=False, secrets_log_file=None) -> None:
+async def main(servers, tests, quic_log=False, secrets_log_file=None) -> None:
     for server in servers:
         if server.structured_logging:
             server.result |= Result.L
@@ -557,9 +559,8 @@ if __name__ == "__main__":
     if args.test:
         tests = list(filter(lambda x: x[0] == args.test, tests))
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
-        run(
+    asyncio.run(
+        main(
             servers=servers,
             tests=tests,
             quic_log=args.quic_log,

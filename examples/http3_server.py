@@ -476,6 +476,25 @@ class SessionTicketStore:
         return self.tickets.pop(label, None)
 
 
+async def main(
+    host: str,
+    port: int,
+    configuration: QuicConfiguration,
+    session_ticket_store: SessionTicketStore,
+    retry: bool,
+) -> None:
+    await serve(
+        args.host,
+        args.port,
+        configuration=configuration,
+        create_protocol=HttpServerProtocol,
+        session_ticket_fetcher=session_ticket_store.pop,
+        session_ticket_handler=session_ticket_store.add,
+        retry=args.retry,
+    )
+    await asyncio.Future()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="QUIC server")
     parser.add_argument(
@@ -565,23 +584,18 @@ if __name__ == "__main__":
     # load SSL certificate and key
     configuration.load_cert_chain(args.certificate, args.private_key)
 
-    ticket_store = SessionTicketStore()
-
     if uvloop is not None:
         uvloop.install()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
-        serve(
-            args.host,
-            args.port,
-            configuration=configuration,
-            create_protocol=HttpServerProtocol,
-            session_ticket_fetcher=ticket_store.pop,
-            session_ticket_handler=ticket_store.add,
-            retry=args.retry,
-        )
-    )
+
     try:
-        loop.run_forever()
+        asyncio.run(
+            main(
+                host=args.host,
+                port=args.port,
+                configuration=configuration,
+                session_ticket_store=SessionTicketStore(),
+                retry=args.retry,
+            )
+        )
     except KeyboardInterrupt:
         pass
