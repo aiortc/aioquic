@@ -6,7 +6,7 @@ After checking out the code using git you can run:
 .. code-block:: console
 
    $ pip install -e .
-   $ pip install asgiref dnslib httpbin starlette wsproto
+   $ pip install asgiref dnslib httpbin starlette "werkzeug<2.1" wsproto
 
 
 HTTP/3
