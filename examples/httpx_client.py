@@ -9,8 +9,7 @@ from collections import deque
 from typing import AsyncIterator, Deque, Dict, Optional, Tuple, cast
 from urllib.parse import urlparse
 
-import httpcore
-from httpx import AsyncClient
+import httpx
 
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
@@ -23,7 +22,16 @@ from aioquic.quic.logger import QuicFileLogger
 logger = logging.getLogger("client")
 
 
-class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
+class H3ResponseStream(httpx.AsyncByteStream):
+    def __init__(self, aiterator: AsyncIterator[bytes]):
+        self._aiterator = aiterator
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for part in self._aiterator:
+            yield part
+
+
+class H3Transport(QuicConnectionProtocol, httpx.AsyncBaseTransport):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -31,14 +39,9 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
         self._read_queue: Dict[int, Deque[H3Event]] = {}
         self._read_ready: Dict[int, asyncio.Event] = {}
 
-    async def handle_async_request(
-        self,
-        method: bytes,
-        url: Tuple[bytes, bytes, Optional[int], bytes],
-        headers: Headers = None,
-        stream: httpcore.AsyncByteStream = None,
-        extensions: dict = None,
-    ) -> Tuple[int, Headers, httpcore.AsyncByteStream, dict]:
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        assert isinstance(request.stream, httpx.AsyncByteStream)
+
         stream_id = self._quic.get_next_available_stream_id()
         self._read_queue[stream_id] = deque()
         self._read_ready[stream_id] = asyncio.Event()
@@ -47,18 +50,18 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
         self._http.send_headers(
             stream_id=stream_id,
             headers=[
-                (b":method", method),
-                (b":scheme", url[0]),
-                (b":authority", url[1]),
-                (b":path", url[3]),
+                (b":method", request.method.encode()),
+                (b":scheme", request.url.raw_scheme),
+                (b":authority", request.url.netloc),
+                (b":path", request.url.raw_path),
             ]
             + [
                 (k.lower(), v)
-                for (k, v) in headers
+                for (k, v) in request.headers.raw
                 if k.lower() not in (b"connection", b"host")
             ],
         )
-        async for data in stream:
+        async for data in request.stream:
             self._http.send_data(stream_id=stream_id, data=data, end_stream=False)
         self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
 
@@ -67,15 +70,14 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
 
         # process response
         status_code, headers, stream_ended = await self._receive_response(stream_id)
-        response_stream = httpcore.AsyncIteratorByteStream(
-            aiterator=self._receive_response_data(stream_id, stream_ended)
-        )
 
-        return (
-            status_code,
-            headers,
-            response_stream,
-            {
+        return httpx.Response(
+            status_code=status_code,
+            headers=headers,
+            stream=H3ResponseStream(
+                self._receive_response_data(stream_id, stream_ended)
+            ),
+            extensions={
                 "http_version": b"HTTP/3",
             },
         )
@@ -153,7 +155,7 @@ def save_session_ticket(ticket):
 async def main(
     configuration: QuicConfiguration,
     url: str,
-    data: str,
+    data: Optional[str],
     include: bool,
     output_dir: Optional[str],
 ) -> None:
@@ -173,8 +175,8 @@ async def main(
         create_protocol=H3Transport,
         session_ticket_handler=save_session_ticket,
     ) as transport:
-        async with AsyncClient(
-            transport=cast(httpcore.AsyncHTTPTransport, transport)
+        async with httpx.AsyncClient(
+            transport=cast(httpx.AsyncBaseTransport, transport)
         ) as client:
             # perform request
             start = time.time()
