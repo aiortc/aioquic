@@ -342,9 +342,7 @@ class SignatureAlgorithm(IntEnum):
 
 @contextmanager
 def pull_block(buf: Buffer, capacity: int) -> Generator:
-    length = 0
-    for b in buf.pull_bytes(capacity):
-        length = (length << 8) | b
+    length = int.from_bytes(buf.pull_bytes(capacity), byteorder="big")
     end = buf.tell() + length
     yield length
     assert buf.tell() == end
@@ -361,10 +359,8 @@ def push_block(buf: Buffer, capacity: int) -> Generator:
     yield
     end = buf.tell()
     length = end - start
-    while capacity:
-        buf.seek(start - capacity)
-        buf.push_uint8((length >> (8 * (capacity - 1))) & 0xFF)
-        capacity -= 1
+    buf.seek(start - capacity)
+    buf.push_bytes(length.to_bytes(capacity, byteorder="big"))
     buf.seek(end)
 
 
@@ -1218,10 +1214,9 @@ class Context:
         while len(self._receive_buffer) >= 4:
             # determine message length
             message_type = self._receive_buffer[0]
-            message_length = 0
-            for b in self._receive_buffer[1:4]:
-                message_length = (message_length << 8) | b
-            message_length += 4
+            message_length = 4 + int.from_bytes(
+                self._receive_buffer[1:4], byteorder="big"
+            )
 
             # check message is complete
             if len(self._receive_buffer) < message_length:
