@@ -37,10 +37,10 @@ class QuicLoggerTrace:
     """
     A QUIC event trace.
 
-    Events are logged in the format defined by qlog draft-03.
+    Events are logged in the format defined by qlog.
 
     See:
-    - https://datatracker.ietf.org/doc/html/draft-ietf-quic-qlog-main-schema
+    - https://datatracker.ietf.org/doc/html/draft-ietf-quic-qlog-main-schema-02
     - https://datatracker.ietf.org/doc/html/draft-marx-quic-qlog-quic-events
     - https://datatracker.ietf.org/doc/html/draft-marx-quic-qlog-h3-events
     """
@@ -280,13 +280,7 @@ class QuicLoggerTrace:
 
 class QuicLogger:
     """
-    A QUIC event logger.
-
-    Serves as a container for traces in the format defined by qlog draft-03.
-
-    See:
-    - https://datatracker.ietf.org/doc/html/draft-marx-qlog-main-schema-03
-    - https://datatracker.ietf.org/doc/html/draft-marx-qlog-event-definitions-quic-h3-02
+    A QUIC event logger which stores traces in memory.
     """
 
     def __init__(self) -> None:

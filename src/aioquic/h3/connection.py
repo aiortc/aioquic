@@ -74,7 +74,7 @@ class Setting(IntEnum):
     MAX_FIELD_SECTION_SIZE = 0x6
     QPACK_BLOCKED_STREAMS = 0x7
 
-    # https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-h3-websockets-02#section-5
+    # https://datatracker.ietf.org/doc/html/rfc9220#section-5
     ENABLE_CONNECT_PROTOCOL = 0x8
     # https://datatracker.ietf.org/doc/html/draft-ietf-masque-h3-datagram-05#section-9.1
     H3_DATAGRAM = 0xFFD277
@@ -82,7 +82,7 @@ class Setting(IntEnum):
     ENABLE_WEBTRANSPORT = 0x2B603742
 
     # Dummy setting to check it is correctly ignored by the peer.
-    # https://tools.ietf.org/html/draft-ietf-quic-http-34#section-7.2.4.1
+    # https://datatracker.ietf.org/doc/html/rfc9114#section-7.2.4.1
     DUMMY = 0x21
 
 

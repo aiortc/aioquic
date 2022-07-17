@@ -15,7 +15,7 @@ from .utils import SKIP_TESTS
 
 PROTOCOL_VERSION = QuicProtocolVersion.VERSION_1
 
-# https://tools.ietf.org/html/draft-ietf-quic-tls-34#appendix-A.5
+# https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.5
 CHACHA20_CLIENT_PACKET_NUMBER = 654360564
 CHACHA20_CLIENT_PLAIN_HEADER = binascii.unhexlify("4200bff4")
 CHACHA20_CLIENT_PLAIN_PAYLOAD = binascii.unhexlify("01")
@@ -23,7 +23,7 @@ CHACHA20_CLIENT_ENCRYPTED_PACKET = binascii.unhexlify(
     "4cfe4189655e5cd55c41f69080575d7999c25a5bfb"
 )
 
-# https://tools.ietf.org/html/draft-ietf-quic-tls-34#appendix-A.2
+# https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.2
 LONG_CLIENT_PACKET_NUMBER = 2
 LONG_CLIENT_PLAIN_HEADER = binascii.unhexlify(
     "c300000001088394c8f03e5157080000449e00000002"
@@ -79,7 +79,7 @@ LONG_CLIENT_ENCRYPTED_PACKET = binascii.unhexlify(
     "e221af44860018ab0856972e194cd934"
 )
 
-# https://tools.ietf.org/html/draft-ietf-quic-tls-34#appendix-A.3
+# https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.3
 LONG_SERVER_PACKET_NUMBER = 1
 LONG_SERVER_PLAIN_HEADER = binascii.unhexlify(
     "c1000000010008f067a5502a4262b50040750001"
@@ -115,7 +115,7 @@ class CryptoTest(TestCase):
     """
     Test vectors from:
 
-    https://tools.ietf.org/html/draft-ietf-quic-tls-34#appendix-A
+    https://datatracker.ietf.org/doc/html/rfc9001#appendix-A
     """
 
     def create_crypto(self, is_client):
@@ -128,7 +128,7 @@ class CryptoTest(TestCase):
         return pair
 
     def test_derive_key_iv_hp(self):
-        # https://tools.ietf.org/html/draft-ietf-quic-tls-34#appendix-A.1
+        # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.1
 
         # client
         secret = binascii.unhexlify(
@@ -150,7 +150,7 @@ class CryptoTest(TestCase):
 
     @skipIf("chacha20" in SKIP_TESTS, "Skipping chacha20 tests")
     def test_derive_key_iv_hp_chacha20(self):
-        # https://tools.ietf.org/html/draft-ietf-quic-tls-34#appendix-A.5
+        # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.5
 
         # server
         secret = binascii.unhexlify(
