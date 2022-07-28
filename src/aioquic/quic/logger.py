@@ -254,6 +254,14 @@ class QuicLoggerTrace:
             {"name": h[0].decode("utf8"), "value": h[1].decode("utf8")} for h in headers
         ]
 
+    # Multicast
+
+    def encode_mc_announce_frame(self, channel_id: bytes, source: bytes, group: bytes):
+        return [
+            {"channel id": channel_id,
+             "source ip": source,
+             "group ip": group}
+        ]
     # CORE
 
     def log_event(self, *, category: str, event: str, data: Dict) -> None:

@@ -414,6 +414,7 @@ class QuicConnection:
             0x1E: (self._handle_handshake_done_frame, EPOCHS("1")),
             0x30: (self._handle_datagram_frame, EPOCHS("01")),
             0x31: (self._handle_datagram_frame, EPOCHS("01")),
+            0xff3e811: (self._handle_mc_announce_frame_v4, EPOCHS("01")),
         }
 
     @property
@@ -2161,6 +2162,32 @@ class QuicConnection:
                     limit=limit,
                 )
             )
+
+    def _handle_mc_announce_frame_v4(
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle a MC_ANNOUNCE frame
+        """
+        channel_id = buf.pull_uint_var()
+        source_ip = buf.pull_bytes(4)
+        group_ip = buf.pull_bytes(4)
+        port = buf.pull_bytes(2)
+        header_aead_alg = buf.pull_bytes(2)
+        header_secret_length = buf.pull_uint_var()
+        header_secret = buf.pull_bytes(header_secret_length)
+        aead_alg = buf.pull_bytes(2)
+        integrity_alg = buf.pull_bytes(2)
+        max_rate = buf.pull_uint_var()
+        max_ack_delay = buf.pull_uint_var()
+
+        # log frame
+        if self._quic_logger is not None:
+            context.quic_logger_frames.append(
+                self._quic_logger.encode_mc_announce_frame(channel_id=channel_id, source=source_ip, group=group_ip)
+            )
+
+
 
     def _log_key_retired(self, key_type: str, trigger: str) -> None:
         """
