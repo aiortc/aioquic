@@ -414,7 +414,7 @@ class QuicConnection:
             0x1E: (self._handle_handshake_done_frame, EPOCHS("1")),
             0x30: (self._handle_datagram_frame, EPOCHS("01")),
             0x31: (self._handle_datagram_frame, EPOCHS("01")),
-            0xff3e811: (self._handle_mc_announce_frame_v4, EPOCHS("01")),
+            0xFF3E811: (self._handle_mc_announce_frame_v4, EPOCHS("01")),
         }
 
     @property
@@ -2181,6 +2181,8 @@ class QuicConnection:
         max_rate = buf.pull_uint_var()
         max_ack_delay = buf.pull_uint_var()
 
+        print("Received announce frame for channel with ID: " + str(channel_id) + " source IP: " + str(source_ip)
+              + " group IP: " + str(group_ip))
         # log frame
         if self._quic_logger is not None:
             context.quic_logger_frames.append(
@@ -2289,7 +2291,6 @@ class QuicConnection:
         is_probing = None
         while not buf.eof():
             frame_type = buf.pull_uint_var()
-
             # check frame type is known
             try:
                 frame_handler, frame_epochs = self.__frame_handlers[frame_type]
