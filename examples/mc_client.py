@@ -109,7 +109,9 @@ async def main(
         local_port=local_port,
     ) as client:
         client = cast(McClient, client)
+        client.datagram_received(str.encode("BOGUS"), "Multicast")
         await client.wait_closed()
+
         #client._quic.close(error_code=ErrorCode.H3_NO_ERROR)
 
 

@@ -101,7 +101,10 @@ RETIRE_CONNECTION_ID_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 STOP_SENDING_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE
 STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE  # + reason length
-
+MC_ANNOUNCE_V4_CAPACITY = 1 + 4 + 4 + 2 + 2 + UINT_VAR_MAX_SIZE + 2 + 2 + UINT_VAR_MAX_SIZE + UINT_VAR_MAX_SIZE #TODO: Whats the correct length of the key? we dont know beforehand -> Do in write function
+MC_ANNOUNCE_V6_CAPACITY = 1 + 16 + 16 + 2 + 2 + UINT_VAR_MAX_SIZE + 2 + 2 + UINT_VAR_MAX_SIZE + UINT_VAR_MAX_SIZE #TODO: Whats the correct length of the key? we dont know beforehand
+MC_KEY_CAPACITY = 1 + UINT_VAR_MAX_SIZE + UINT_VAR_MAX_SIZE + UINT_VAR_MAX_SIZE
+#TODO: Add other frames
 
 def EPOCHS(shortcut: str) -> FrozenSet[tls.Epoch]:
     return frozenset(EPOCH_SHORTCUTS[i] for i in shortcut)
@@ -415,6 +418,17 @@ class QuicConnection:
             0x30: (self._handle_datagram_frame, EPOCHS("01")),
             0x31: (self._handle_datagram_frame, EPOCHS("01")),
             0xFF3E811: (self._handle_mc_announce_frame_v4, EPOCHS("01")),
+            0xFF3E812: (self._handle_mc_announce_frame_v6, EPOCHS("01")),
+            0xff3e801: (self._handle_mc_key_frame, EPOCHS("01")),
+            0xff3e803: (self._handle_mc_leave_frame, EPOCHS("01")),
+            0xff3e804: (self._handle_mc_integrity_frame, EPOCHS("01")),
+            0xff3e805: (self._handle_mc_integrity_frame, EPOCHS("01")),
+            0xff3e806: (self._handle_mc_ack_frame, EPOCHS("01")),
+            0xff3e807: (self._handle_mc_ack_frame, EPOCHS("01")),
+            0xff3e809: (self._handle_mc_limits_frame, EPOCHS("01")),
+            0xff3e80a: (self._handle_mc_retire_frame, EPOCHS("01")),
+            0xff3e80b: (self._handle_mc_state_frame, EPOCHS("01")),
+            0xff3e80c: (self._handle_mc_state_frame, EPOCHS("01")),
         }
 
     @property
@@ -701,6 +715,9 @@ class QuicConnection:
         # stop handling packets when closing
         if self._state in END_STATES:
             return
+
+        if addr == "Multicast":
+            print("Received a multicast packet from external socket")
 
         # log datagram
         if self._quic_logger is not None:
@@ -2167,13 +2184,14 @@ class QuicConnection:
             self, context: QuicReceiveContext, frame_type: int, buf: Buffer
     ) -> None:
         """
-        Handle a MC_ANNOUNCE frame
+        Handle a MC_ANNOUNCE frame for v4
         """
-        channel_id = buf.pull_uint_var()
-        source_ip = buf.pull_bytes(4)
-        group_ip = buf.pull_bytes(4)
-        port = buf.pull_bytes(2)
-        header_aead_alg = buf.pull_bytes(2)
+        id_len = buf.pull_uint8()
+        channel_id = buf.pull_uint8(id_len)
+        source_ip = self._pull_v4_address(buf)
+        group_ip = self._pull_v4_address(buf)
+        port = buf.pull_uint16(1)
+        header_aead_alg = buf.pull_uint16(2)
         header_secret_length = buf.pull_uint_var()
         header_secret = buf.pull_bytes(header_secret_length)
         aead_alg = buf.pull_bytes(2)
@@ -2182,14 +2200,136 @@ class QuicConnection:
         max_ack_delay = buf.pull_uint_var()
 
         print("Received announce frame for channel with ID: " + str(channel_id) + " source IP: " + str(source_ip)
-              + " group IP: " + str(group_ip))
+              + " group IP: " + str(group_ip) + " port: " + str(port) + " header aead: " + str(header_aead_alg))
         # log frame
         if self._quic_logger is not None:
             context.quic_logger_frames.append(
                 self._quic_logger.encode_mc_announce_frame(channel_id=channel_id, source=source_ip, group=group_ip)
             )
 
+    #TODO: Needs testing
+    def _handle_mc_announce_frame_v6 (
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle a MC_ANNOUNCE frame for v6
+        """
+        id_len = buf.pull_uint8()
+        channel_id = buf.pull_uint8(id_len)
+        source_ip = self._pull_v6_address(buf)
+        group_ip = self._pull_v6_address(buf)
+        port = buf.pull_uint16(1)
+        header_aead_alg = buf.pull_uint16(2)
+        header_secret_length = buf.pull_uint_var()
+        header_secret = buf.pull_bytes(header_secret_length)
+        aead_alg = buf.pull_bytes(2)
+        integrity_alg = buf.pull_bytes(2)
+        max_rate = buf.pull_uint_var()
+        max_ack_delay = buf.pull_uint_var()
 
+        print("Received announce frame for channel with ID: " + str(channel_id) + " source IP: " + str(source_ip)
+              + " group IP: " + str(group_ip) + " port: " + str(port) + " header aead: " + str(header_aead_alg))
+        # log frame
+        if self._quic_logger is not None:
+            context.quic_logger_frames.append(
+                self._quic_logger.encode_mc_announce_frame(channel_id=channel_id, source=source_ip, group=group_ip)
+            )
+
+    def _handle_mc_key_frame (
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle an MC_KEY frame
+        """
+        id_len = buf.pull_uint8()
+        channel_id = buf.pull_uint8(id_len)
+        key_sequence_number = buf.pull_uint_var()
+        secret_len = buf.pull_uint_var()
+        secret = buf.pull_uint8(secret_len)
+
+    def _handle_mc_join_frame (
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle an MC_JOIN frame
+        """
+        id_len = buf.pull_uint8()
+        channel_id = buf.pull_uint8(id_len)
+        mc_limits_seq = buf.pull_uint_var()
+        mc_state_seq = buf.pull_uint_var()
+        mc_key_seq = buf.pull_uint_var()
+
+    def _handle_mc_leave_frame (
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle an MC_LEAVE frame
+        """
+        id_len = buf.pull_uint8()
+        channel_id = buf.pull_uint8(id_len)
+        mc_state_seq = buf.pull_uint_var()
+        after_packet = buf.pull_uint_var()
+
+    def _handle_mc_integrity_frame (
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle an MC_INTEGRITY frame
+        """
+        id_len = buf.pull_uint8()
+        channel_id = buf.pull_uint8(id_len)
+        packet_number_start = buf.pull_uint_var()
+        #TODO: Pull hashes
+
+    def _handle_mc_ack_frame (
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle an MC_ACK frame
+        """
+        id_len = buf.pull_uint8()
+        channel_id = buf.pull_uint8(id_len)
+        largest_ack = buf.pull_uint_var()
+        ack_delay = buf.pull_uint_var()
+        ack_range_count = buf.pull_uint_var()
+        first_ack_range = buf.pull_uint_var()
+        #TODO: ECN counts
+
+    def _handle_mc_limits_frame (
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle an MC_LIMITS frame
+        """
+        limits_seq = buf.pull_uint_var()
+        buf.pull_bytes(1)
+        max_rate = buf.pull_uint_var()
+        max_channel_ids = buf.pull_uint_var()
+        max_joined_count = buf.pull_uint_var()
+
+    def _handle_mc_retire_frame (
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle an MC_RETIRE frame
+        """
+        id_len = buf.pull_uint8()
+        channel_id = buf.pull_uint8(id_len)
+        after_packet = buf.pull_uint_var()
+
+    def _handle_mc_state_frame (
+            self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        """
+        Handle an MC_STATE frame
+        """
+        id_len = buf.pull_uint8()
+        channel_id = buf.pull_uint8(id_len)
+        channel_state_seq = buf.pull_uint_var()
+        state = buf.pull_uint8()
+        reason_code = buf.pull_uint_var()
+        reason_phrase_len = buf.pull_uint_var()
+        reason = buf.pull_bytes(reason_phrase_len)
 
     def _log_key_retired(self, key_type: str, trigger: str) -> None:
         """
@@ -3238,3 +3378,33 @@ class QuicConnection:
                     limit=limit,
                 )
             )
+
+    def _pull_v4_address(self, buf: Buffer) -> str:
+        ip = ""
+        ip += str(buf.pull_uint8(1))
+        ip += "."
+        ip += str(buf.pull_uint8(1))
+        ip += "."
+        ip += str(buf.pull_uint8(1))
+        ip += "."
+        ip += str(buf.pull_uint8(1))
+        return ip
+
+    def _pull_v6_address(self, buf: Buffer) -> str:
+        ip = ""
+        ip += str(buf.pull_uint16(1))
+        ip += ":"
+        ip += str(buf.pull_uint16(1))
+        ip += ":"
+        ip += str(buf.pull_uint16(1))
+        ip += ":"
+        ip += str(buf.pull_uint16(1))
+        ip += ":"
+        ip += str(buf.pull_uint16(1))
+        ip += ":"
+        ip += str(buf.pull_uint16(1))
+        ip += ":"
+        ip += str(buf.pull_uint16(1))
+        ip += ":"
+        ip += str(buf.pull_uint16(1))
+        return ip
