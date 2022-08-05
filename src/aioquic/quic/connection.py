@@ -53,6 +53,7 @@ from .packet_builder import (
 )
 from .recovery import K_GRANULARITY, QuicPacketRecovery, QuicPacketSpace
 from .stream import FinalSizeError, QuicStream, StreamFinishedError
+from ..multicast import do_join
 
 logger = logging.getLogger("quic")
 
@@ -2206,6 +2207,7 @@ class QuicConnection:
             context.quic_logger_frames.append(
                 self._quic_logger.encode_mc_announce_frame(channel_id=channel_id, source=source_ip, group=group_ip)
             )
+        #do_join()
 
     #TODO: Needs testing
     def _handle_mc_announce_frame_v6 (
@@ -2234,6 +2236,7 @@ class QuicConnection:
             context.quic_logger_frames.append(
                 self._quic_logger.encode_mc_announce_frame(channel_id=channel_id, source=source_ip, group=group_ip)
             )
+
 
     def _handle_mc_key_frame (
             self, context: QuicReceiveContext, frame_type: int, buf: Buffer

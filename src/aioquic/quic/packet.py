@@ -431,6 +431,19 @@ class QuicFrameType(IntEnum):
     HANDSHAKE_DONE = 0x1E
     DATAGRAM = 0x30
     DATAGRAM_WITH_LENGTH = 0x31
+    MC_ANNOUNCE_V4 = 0xFF3E811
+    MC_ANNOUNCE_V6 = 0xFF3E812
+    MC_KEY = 0xff3e801
+    MC_LEAVE = 0xff3e803
+    MC_INTEGRITY = 0xff3e804
+    MC_INTEGRITY_LEN = 0xff3e805
+    MC_ACK = 0xff3e806
+    MC_ACK_ECN = 0xff3e807
+    MC_LIMITS = 0xff3e809
+    MC_RETIRE = 0xff3e80a
+    MC_STATE_QUIC = 0xff3e80b
+    MC_STATE_APP = 0xff3e80c
+
 
 
 NON_ACK_ELICITING_FRAME_TYPES = frozenset(

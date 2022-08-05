@@ -5,6 +5,22 @@ import setuptools
 
 root_dir = os.path.abspath(os.path.dirname(__file__))
 
+include_dirs = ['/usr/local/include']
+library_dirs = ['/usr/local/lib']
+
+install_path = os.getenv('INSTALL_PATH', None)
+if install_path:
+    include_dirs.append('%s/include' % install_path)
+    library_dirs.append('%s/lib' % install_path)
+
+multicast_glue_ext = setuptools.Extension('multicast_glue',
+                                          define_macros=[('MAJOR_VERSION', '1'),
+                                                         ('MINOR_VERSION', '0')],
+                                          include_dirs=include_dirs,
+                                          libraries=['mcrx'],
+                                          library_dirs=library_dirs,
+                                          sources=['src/aioquic/multicast_glue.cxx'])
+
 about = {}
 about_file = os.path.join(root_dir, "src", "aioquic", "about.py")
 with open(about_file, encoding="utf-8") as fp:
@@ -57,6 +73,7 @@ setuptools.setup(
             libraries=libraries,
             sources=["src/aioquic/_crypto.c"],
         ),
+        multicast_glue_ext,
     ],
     package_dir={"": "src"},
     package_data={"aioquic": ["py.typed", "_buffer.pyi", "_crypto.pyi"]},
