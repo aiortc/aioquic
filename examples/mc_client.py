@@ -13,13 +13,10 @@ from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.connection import H3_ALPN, ErrorCode, H3Connection
 from aioquic.h3.events import (
-    DataReceived,
     H3Event,
-    HeadersReceived,
-    PushPromiseReceived,
 )
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import QuicEvent
+from aioquic.quic.events import QuicEvent, JoinChannel
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import CipherSuite, SessionTicket
 
@@ -60,6 +57,13 @@ class McClient(QuicConnectionProtocol):
         if self._http is not None:
             for http_event in self._http.handle_event(event):
                 self.http_event_received(http_event)
+
+        if isinstance(event, JoinChannel):
+            print("Got join event")
+            print(event)
+
+
+async def join_channel(event: QuicEvent) -> None:
 
 '''
 def process_http_pushes(

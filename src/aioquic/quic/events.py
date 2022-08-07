@@ -110,3 +110,20 @@ class StreamReset(QuicEvent):
 
     stream_id: int
     "The ID of the stream that was reset."
+
+
+@dataclass
+class JoinChannel(QuicEvent):
+    """
+    The JoinChannel event is fired when the server instructed the client to join a new channel
+    and the Client is able to do so within its limits.
+    """
+
+    source_ip: str
+    "The source ip of the multicast channel"
+
+    group_ip: str
+    "The group ip of the multicast channel"
+
+    port: int
+    "The port for the multicast channel"

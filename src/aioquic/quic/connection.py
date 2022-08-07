@@ -2200,6 +2200,7 @@ class QuicConnection:
         max_rate = buf.pull_uint_var()
         max_ack_delay = buf.pull_uint_var()
 
+        self._events.append(events.JoinChannel(source_ip=source_ip, group_ip=group_ip, port=port))
         print("Received announce frame for channel with ID: " + str(channel_id) + " source IP: " + str(source_ip)
               + " group IP: " + str(group_ip) + " port: " + str(port) + " header aead: " + str(header_aead_alg))
         # log frame
@@ -2207,7 +2208,6 @@ class QuicConnection:
             context.quic_logger_frames.append(
                 self._quic_logger.encode_mc_announce_frame(channel_id=channel_id, source=source_ip, group=group_ip)
             )
-        #do_join()
 
     #TODO: Needs testing
     def _handle_mc_announce_frame_v6 (
@@ -2216,6 +2216,7 @@ class QuicConnection:
         """
         Handle a MC_ANNOUNCE frame for v6
         """
+
         id_len = buf.pull_uint8()
         channel_id = buf.pull_uint8(id_len)
         source_ip = self._pull_v6_address(buf)
@@ -2229,6 +2230,7 @@ class QuicConnection:
         max_rate = buf.pull_uint_var()
         max_ack_delay = buf.pull_uint_var()
 
+
         print("Received announce frame for channel with ID: " + str(channel_id) + " source IP: " + str(source_ip)
               + " group IP: " + str(group_ip) + " port: " + str(port) + " header aead: " + str(header_aead_alg))
         # log frame
@@ -2236,7 +2238,6 @@ class QuicConnection:
             context.quic_logger_frames.append(
                 self._quic_logger.encode_mc_announce_frame(channel_id=channel_id, source=source_ip, group=group_ip)
             )
-
 
     def _handle_mc_key_frame (
             self, context: QuicReceiveContext, frame_type: int, buf: Buffer
