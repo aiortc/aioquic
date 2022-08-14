@@ -96,6 +96,10 @@ You will need to set some environment variables to link against OpenSSL:
    $ export CFLAGS=-I/usr/local/opt/openssl/include
    $ export LDFLAGS=-L/usr/local/opt/openssl/lib
 
+   $ LIBMCRXD=/Users/jholland/src/github/libmcrx
+   $ export CFLAGS="-I/usr/local/opt/openssl/include -I${LIBMCRXD}/include"
+   $ export LDFLAGS="-L/usr/local/opt/openssl/lib -L${LIBMCRXD}"
+
 Windows
 .......
 

@@ -2550,6 +2550,11 @@ class QuicConnection:
                 ),
             )
 
+        if self._is_client:
+            self._logger.info(f'rx transport parameters: server_multicast={quic_transport_parameters.server_multicast}')
+        else:
+            self._logger.info(f'rx transport parameters: client_multicast={quic_transport_parameters.client_multicast}')
+
         # validate remote parameters
         if not self._is_client:
             for attr in [
@@ -2696,6 +2701,9 @@ class QuicConnection:
             quic_transport_parameters.retry_source_connection_id = (
                 self._retry_source_connection_id
             )
+            quic_transport_parameters.server_multicast = self._configuration.server_multicast
+        else:
+            quic_transport_parameters.client_multicast = self._configuration.client_multicast
 
         # log event
         if self._quic_logger is not None:

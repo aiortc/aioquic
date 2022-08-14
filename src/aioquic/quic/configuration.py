@@ -10,7 +10,7 @@ from ..tls import (
     load_pem_x509_certificates,
 )
 from .logger import QuicLogger
-from .packet import QuicProtocolVersion
+from .packet import QuicProtocolVersion, QuicMulticastClientParams
 
 
 @dataclass
@@ -95,6 +95,9 @@ class QuicConfiguration:
         ]
     )
     verify_mode: Optional[int] = None
+
+    client_multicast: Optional[QuicMulticastClientParams] = None
+    server_multicast: bool = False
 
     def load_cert_chain(
         self,

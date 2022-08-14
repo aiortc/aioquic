@@ -265,6 +265,14 @@ class QuicPreferredAddress:
     connection_id: bytes
     stateless_reset_token: bytes
 
+@dataclass
+class QuicMulticastClientParams:
+    ipv6_allowed: bool
+    ipv4_allowed: bool
+    max_aggregate_rate: int
+    max_channel_ids: int
+    hash_algorithms: List[int]
+    aead_algorithms: List[int]
 
 @dataclass
 class QuicTransportParameters:
@@ -287,7 +295,8 @@ class QuicTransportParameters:
     retry_source_connection_id: Optional[bytes] = None
     max_datagram_frame_size: Optional[int] = None
     quantum_readiness: Optional[bytes] = None
-
+    client_multicast: Optional[QuicMulticastClientParams] = None
+    server_multicast: Optional[bool] = None
 
 PARAMS = {
     0x00: ("original_destination_connection_id", bytes),
@@ -310,6 +319,8 @@ PARAMS = {
     # extensions
     0x0020: ("max_datagram_frame_size", int),
     0x0C37: ("quantum_readiness", bytes),
+    0xff3e808: ("server_multicast", bool),
+    0xff3e800: ("client_multicast", QuicMulticastClientParams),
 }
 
 
@@ -337,7 +348,6 @@ def pull_quic_preferred_address(buf: Buffer) -> QuicPreferredAddress:
         stateless_reset_token=stateless_reset_token,
     )
 
-
 def push_quic_preferred_address(
     buf: Buffer, preferred_address: QuicPreferredAddress
 ) -> None:
@@ -358,6 +368,44 @@ def push_quic_preferred_address(
     buf.push_bytes(preferred_address.stateless_reset_token)
 
 
+def push_quic_multicast_client_params(
+    buf: Buffer, client_params: QuicMulticastClientParams
+) -> None:
+    first_byte = 0
+    if client_params.ipv4_allowed:
+        first_byte |= 1
+    if client_params.ipv6_allowed:
+        first_byte |= 2
+    buf.push_uint8(first_byte)
+    buf.push_uint_var(client_params.max_aggregate_rate)
+    buf.push_uint_var(client_params.max_channel_ids)
+    buf.push_uint_var(len(client_params.hash_algorithms))
+    buf.push_uint_var(len(client_params.aead_algorithms))
+    for alg in client_params.hash_algorithms:
+        buf.push_uint16(alg)
+    for alg in client_params.aead_algorithms:
+        buf.push_uint16(alg)
+
+def pull_quic_multicast_client_params(buf: Buffer) -> QuicMulticastClientParams:
+    first_byte = buf.pull_uint8()
+    ipv4_allowed = ((first_byte & 1) == 1)
+    ipv6_allowed = ((first_byte & 2) == 2)
+    max_aggregate_rate = buf.pull_uint_var()
+    max_channel_ids = buf.pull_uint_var()
+    hash_len = buf.pull_uint_var()
+    aead_len = buf.pull_uint_var()
+    hash_algorithms = [buf.pull_uint16() for count in range(hash_len)]
+    aead_algorithms = [buf.pull_uint16() for count in range(aead_len)]
+    return QuicMulticastClientParams(
+        ipv4_allowed=ipv4_allowed,
+        ipv6_allowed=ipv6_allowed,
+        max_aggregate_rate=max_aggregate_rate,
+        max_channel_ids=max_channel_ids,
+        hash_algorithms=hash_algorithms,
+        aead_algorithms=aead_algorithms,
+    )
+
+
 def pull_quic_transport_parameters(buf: Buffer) -> QuicTransportParameters:
     params = QuicTransportParameters()
     while not buf.eof():
@@ -373,6 +421,8 @@ def pull_quic_transport_parameters(buf: Buffer) -> QuicTransportParameters:
                 setattr(params, param_name, buf.pull_bytes(param_len))
             elif param_type == QuicPreferredAddress:
                 setattr(params, param_name, pull_quic_preferred_address(buf))
+            elif param_type == QuicMulticastClientParams:
+                setattr(params, param_name, pull_quic_multicast_client_params(buf))
             else:
                 setattr(params, param_name, True)
         else:
@@ -396,6 +446,8 @@ def push_quic_transport_parameters(
                 param_buf.push_bytes(param_value)
             elif param_type == QuicPreferredAddress:
                 push_quic_preferred_address(param_buf, param_value)
+            elif param_type == QuicMulticastClientParams:
+                push_quic_multicast_client_params(param_buf, param_value)
             buf.push_uint_var(param_id)
             buf.push_uint_var(param_buf.tell())
             buf.push_bytes(param_buf.data)

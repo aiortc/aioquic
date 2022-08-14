@@ -19,6 +19,7 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent, JoinChannel
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import CipherSuite, SessionTicket
+from aioquic.quic.packet import QuicMulticastClientParams
 
 try:
     import uvloop
@@ -64,8 +65,7 @@ class McClient(QuicConnectionProtocol):
 
 
 async def join_channel(event: QuicEvent) -> None:
-
-'''
+    '''
 def process_http_pushes(
     client: McClient,
     include: bool,
@@ -203,6 +203,23 @@ if __name__ == "__main__":
                 configuration.session_ticket = pickle.load(fp)
         except FileNotFoundError:
             pass
+
+    # hashes:
+    # 0x3 = sha-256-120 from:
+    # https://www.iana.org/assignments/named-information/named-information.xhtml#hash-alg
+
+    # aeads:
+    # 0x1301 = TLS_AES_128_GCM_SHA256 from:
+    # https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-parameters-4
+    params = QuicMulticastClientParams(
+        ipv4_allowed=True,
+        ipv6_allowed=True,
+        max_aggregate_rate=100000,
+        max_channel_ids=64,
+        hash_algorithms=[3],
+        aead_algorithms=[0x1301],
+    )
+    configuration.client_multicast = params
 
     if uvloop is not None:
         uvloop.install()
