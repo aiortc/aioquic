@@ -527,7 +527,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--server", type=str, help="only run against the specified server."
     )
-    parser.add_argument("--test", type=str, help="only run the specifed test.")
+    parser.add_argument("--test", type=str, help="only run the specified test.")
     parser.add_argument(
         "-l",
         "--secrets-log",

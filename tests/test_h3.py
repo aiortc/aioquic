@@ -796,7 +796,7 @@ class H3ConnectionTest(TestCase):
             )
             h3_server.send_data(stream_id=push_stream_id, data=b"text", end_stream=True)
 
-            # receive push promise / reponse
+            # receive push promise / response
             events = h3_transfer(quic_server, h3_client)
             self.assertEqual(
                 events,
