@@ -1819,7 +1819,7 @@ class Context:
                 max_early_data_size=self._max_early_data,
             )
 
-            # send messsage
+            # send message
             push_new_session_ticket(onertt_buf, self._new_session_ticket)
 
             # notify application

@@ -338,7 +338,7 @@ class QuicPacketBuilder:
             if self._packet.in_flight:
                 self._datagram_flight_bytes += self._packet.sent_bytes
 
-            # short header packets cannot be coallesced, we need a new datagram
+            # short header packets cannot be coalesced, we need a new datagram
             if not self._packet_long_header:
                 self._flush_current_datagram()
 

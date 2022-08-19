@@ -1656,7 +1656,7 @@ class QuicConnectionTest(TestCase):
 
     def test_handle_path_response_frame_bad(self):
         with client_and_server() as (client, server):
-            # server receives unsollicited PATH_RESPONSE
+            # server receives unsolicited PATH_RESPONSE
             with self.assertRaises(QuicConnectionError) as cm:
                 server._handle_path_response_frame(
                     client_receive_context(client),
