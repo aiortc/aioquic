@@ -3,7 +3,6 @@ name: tests
 on: [push, pull_request]
 
 jobs:
-
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -13,7 +12,7 @@ jobs:
           python-version: 3.7
       - name: Build documentation
         env:
-          READTHEDOCS: 'True'
+          READTHEDOCS: "True"
         run: |
           pip install . -r requirements/doc.txt
           make -C docs html SPHINXOPTS=-W
@@ -34,6 +33,17 @@ jobs:
           black --check --diff examples src tests
           mypy src tests
 
+  codespell:
+    name: Check for spelling errors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: codespell-project/actions-codespell@master
+        with:
+          check_filenames: true
+          check_hidden: false
+          ignore_words_list: quicly
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -41,10 +51,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python:
-          - '3.10'
-          - '3.9'
-          - '3.8'
-          - '3.7'
+          - "3.10"
+          - "3.9"
+          - "3.8"
+          - "3.7"
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-python@v1
