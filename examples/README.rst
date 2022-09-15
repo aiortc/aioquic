@@ -5,8 +5,8 @@ After checking out the code using git you can run:
 
 .. code-block:: console
 
-   $ pip install -e .
-   $ pip install asgiref dnslib httpbin starlette "werkzeug<2.1" wsproto
+   pip install -e .
+   pip install asgiref dnslib "flask<2.2" httpbin starlette "werkzeug<2.1" wsproto
 
 
 HTTP/3
@@ -19,7 +19,7 @@ You can run the example server, which handles both HTTP/0.9 and HTTP/3:
 
 .. code-block:: console
 
-   $ python examples/http3_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem
+   python examples/http3_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem
 
 HTTP/3 client
 .............
@@ -28,19 +28,19 @@ You can run the example client to perform an HTTP/3 request:
 
 .. code-block:: console
 
-  $ python examples/http3_client.py --ca-certs tests/pycacert.pem https://localhost:4433/
+  python examples/http3_client.py --ca-certs tests/pycacert.pem https://localhost:4433/
 
 Alternatively you can perform an HTTP/0.9 request:
 
 .. code-block:: console
 
-  $ python examples/http3_client.py --ca-certs tests/pycacert.pem --legacy-http https://localhost:4433/
+  python examples/http3_client.py --ca-certs tests/pycacert.pem --legacy-http https://localhost:4433/
 
 You can also open a WebSocket over HTTP/3:
 
 .. code-block:: console
 
-  $ python examples/http3_client.py --ca-certs tests/pycacert.pem wss://localhost:4433/ws
+  python examples/http3_client.py --ca-certs tests/pycacert.pem wss://localhost:4433/ws
 
 Chromium and Chrome usage
 .........................
@@ -55,20 +55,20 @@ To access the demo server running on the local machine, launch Chromium or Chrom
 
 .. code:: bash
 
-  $ google-chrome \
-      --enable-experimental-web-platform-features \
-      --ignore-certificate-errors-spki-list=BSQJ0jkQ7wwhR7KvPZ+DSNk2XTZ/MS6xCbo9qu++VdQ= \
-      --origin-to-force-quic-on=localhost:4433 \
-      https://localhost:4433/
+  google-chrome \
+    --enable-experimental-web-platform-features \
+    --ignore-certificate-errors-spki-list=BSQJ0jkQ7wwhR7KvPZ+DSNk2XTZ/MS6xCbo9qu++VdQ= \
+    --origin-to-force-quic-on=localhost:4433 \
+    https://localhost:4433/
 
 The fingerprint passed to the `--ignore-certificate-errors-spki-list`_ option is obtained by running:
 
 .. code:: bash
 
-  $ openssl x509 -in tests/ssl_cert.pem -pubkey -noout | \
-      openssl pkey -pubin -outform der | \
-      openssl dgst -sha256 -binary | \
-      openssl enc -base64
+  openssl x509 -in tests/ssl_cert.pem -pubkey -noout | \
+    openssl pkey -pubin -outform der | \
+    openssl dgst -sha256 -binary | \
+    openssl enc -base64
 
 WebTransport
 ............
@@ -103,13 +103,13 @@ override this with the ``--resolver`` argument.
 
 .. code-block:: console
 
-    $ python examples/doq_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem
+    python examples/doq_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem
 
 You can then run the client with a specific query:
 
 .. code-block:: console
 
-    $ python examples/doq_client.py --ca-certs tests/pycacert.pem --query-type "A" --query-name "quic.aiortc.org" --port 4784
+    python examples/doq_client.py --ca-certs tests/pycacert.pem --query-type "A" --query-name "quic.aiortc.org" --port 4784
 
 .. _Google Public DNS: https://developers.google.com/speed/public-dns
 .. _--enable-experimental-web-platform-features: https://peter.sh/experiments/chromium-command-line-switches/#enable-experimental-web-platform-features
