@@ -730,6 +730,15 @@ class QuicConnection:
                     buf, host_cid_length=self._configuration.connection_id_length
                 )
             except ValueError:
+                if self._quic_logger is not None:
+                    self._quic_logger.log_event(
+                        category="transport",
+                        event="packet_dropped",
+                        data={
+                            "trigger": "header_parse_error",
+                            "raw": {"length": buf.capacity - start_off},
+                        },
+                    )
                 return
 
             # check destination CID matches
