@@ -9,8 +9,10 @@ from collections import deque
 from typing import AsyncIterator, Deque, Dict, Optional, Tuple, cast
 from urllib.parse import urlparse
 
-import httpcore
+import httpx
 from httpx import AsyncClient
+from httpx._transports.default import AsyncResponseStream
+from httpx._models import Request, Response
 
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
@@ -23,9 +25,10 @@ from aioquic.quic.logger import QuicFileLogger
 logger = logging.getLogger("client")
 
 
-class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
+class H3Transport(QuicConnectionProtocol, httpx.AsyncHTTPTransport):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        QuicConnectionProtocol.__init__(self, *args, **kwargs)
+        httpx.AsyncHTTPTransport.__init__(self)
 
         self._http = H3Connection(self._quic)
         self._read_queue: Dict[int, Deque[H3Event]] = {}
@@ -33,12 +36,8 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
 
     async def handle_async_request(
         self,
-        method: bytes,
-        url: Tuple[bytes, bytes, Optional[int], bytes],
-        headers: Headers = None,
-        stream: httpcore.AsyncByteStream = None,
-        extensions: dict = None,
-    ) -> Tuple[int, Headers, httpcore.AsyncByteStream, dict]:
+        request: Request
+    ) -> Response:
         stream_id = self._quic.get_next_available_stream_id()
         self._read_queue[stream_id] = deque()
         self._read_ready[stream_id] = asyncio.Event()
@@ -47,18 +46,18 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
         self._http.send_headers(
             stream_id=stream_id,
             headers=[
-                (b":method", method),
-                (b":scheme", url[0]),
-                (b":authority", url[1]),
-                (b":path", url[3]),
+                (b":method", request.method.encode()),
+                (b":scheme", request.url.raw_scheme), 
+                (b":authority", request.url.raw_host),
+                (b":path", request.url.raw_path),
             ]
             + [
                 (k.lower(), v)
-                for (k, v) in headers
+                for (k, v) in request.headers.raw
                 if k.lower() not in (b"connection", b"host")
             ],
         )
-        async for data in stream:
+        async for data in request.stream:
             self._http.send_data(stream_id=stream_id, data=data, end_stream=False)
         self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
 
@@ -67,17 +66,13 @@ class H3Transport(QuicConnectionProtocol, httpcore.AsyncHTTPTransport):
 
         # process response
         status_code, headers, stream_ended = await self._receive_response(stream_id)
-        response_stream = httpcore.AsyncIteratorByteStream(
-            aiterator=self._receive_response_data(stream_id, stream_ended)
+        response_stream = AsyncResponseStream(
+            self._receive_response_data(stream_id, stream_ended)
         )
 
-        return (
-            status_code,
-            headers,
-            response_stream,
-            {
+        return Response(status_code=status_code, headers=headers, stream=response_stream, extensions={
                 "http_version": b"HTTP/3",
-            },
+            }
         )
 
     def http_event_received(self, event: H3Event):
@@ -174,7 +169,7 @@ async def main(
         session_ticket_handler=save_session_ticket,
     ) as transport:
         async with AsyncClient(
-            transport=cast(httpcore.AsyncHTTPTransport, transport)
+            transport=cast(httpx.AsyncHTTPTransport, transport)
         ) as client:
             # perform request
             start = time.time()
