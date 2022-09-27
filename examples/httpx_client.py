@@ -28,16 +28,16 @@ logger = logging.getLogger("client")
 class H3Transport(QuicConnectionProtocol, httpx.AsyncHTTPTransport):
     def __init__(self, *args, **kwargs):
         QuicConnectionProtocol.__init__(self, *args, **kwargs)
+
+        # TODO: We must initialize the HTTPTransport but it is not clear
+        #       which arguments belong to it and which are for the other base
         httpx.AsyncHTTPTransport.__init__(self)
 
         self._http = H3Connection(self._quic)
         self._read_queue: Dict[int, Deque[H3Event]] = {}
         self._read_ready: Dict[int, asyncio.Event] = {}
 
-    async def handle_async_request(
-        self,
-        request: Request
-    ) -> Response:
+    async def handle_async_request(self, request: Request) -> Response:
         stream_id = self._quic.get_next_available_stream_id()
         self._read_queue[stream_id] = deque()
         self._read_ready[stream_id] = asyncio.Event()
@@ -47,7 +47,7 @@ class H3Transport(QuicConnectionProtocol, httpx.AsyncHTTPTransport):
             stream_id=stream_id,
             headers=[
                 (b":method", request.method.encode()),
-                (b":scheme", request.url.raw_scheme), 
+                (b":scheme", request.url.raw_scheme),
                 (b":authority", request.url.raw_host),
                 (b":path", request.url.raw_path),
             ]
@@ -70,9 +70,13 @@ class H3Transport(QuicConnectionProtocol, httpx.AsyncHTTPTransport):
             self._receive_response_data(stream_id, stream_ended)
         )
 
-        return Response(status_code=status_code, headers=headers, stream=response_stream, extensions={
+        return Response(
+            status_code=status_code,
+            headers=headers,
+            stream=response_stream,
+            extensions={
                 "http_version": b"HTTP/3",
-            }
+            },
         )
 
     def http_event_received(self, event: H3Event):
