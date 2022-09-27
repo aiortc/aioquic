@@ -48,7 +48,7 @@ class H3Transport(QuicConnectionProtocol, httpx.AsyncHTTPTransport):
             headers=[
                 (b":method", request.method.encode()),
                 (b":scheme", request.url.raw_scheme),
-                (b":authority", request.url.raw_host),
+                (b":authority", request.url.netloc),
                 (b":path", request.url.raw_path),
             ]
             + [
