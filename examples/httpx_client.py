@@ -25,13 +25,10 @@ from aioquic.quic.logger import QuicFileLogger
 logger = logging.getLogger("client")
 
 
-class H3Transport(QuicConnectionProtocol, httpx.AsyncHTTPTransport):
+class H3Transport(QuicConnectionProtocol, httpx.AsyncBaseTransport):
     def __init__(self, *args, **kwargs):
-        QuicConnectionProtocol.__init__(self, *args, **kwargs)
-
-        # TODO: We must initialize the HTTPTransport but it is not clear
-        #       which arguments belong to it and which are for the other base
-        httpx.AsyncHTTPTransport.__init__(self)
+        # Initialize `QuicConnectionProtocol`; the base transport is just a protocol
+        super().__init__(*args, **kwargs)
 
         self._http = H3Connection(self._quic)
         self._read_queue: Dict[int, Deque[H3Event]] = {}
@@ -173,7 +170,7 @@ async def main(
         session_ticket_handler=save_session_ticket,
     ) as transport:
         async with AsyncClient(
-            transport=cast(httpx.AsyncHTTPTransport, transport)
+            transport=cast(httpx.AsyncBaseTransport, transport)
         ) as client:
             # perform request
             start = time.time()
