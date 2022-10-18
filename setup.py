@@ -65,6 +65,6 @@ setuptools.setup(
         "certifi",
         "cryptography >= 3.1",
         "pylsqpack >= 0.3.3, < 0.4.0",
-        "pyopenssl >= 20",
+        "pyopenssl >= 20, < 22",
     ],
 )
