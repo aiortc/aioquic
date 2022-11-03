@@ -5,7 +5,18 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
-from typing import Any, Deque, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Deque,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from .. import tls
 from ..buffer import (
@@ -207,6 +218,8 @@ class QuicReceiveContext:
     time: float
 
 
+QuicTokenHandler = Callable[[bytes], None]
+
 END_STATES = frozenset(
     [
         QuicConnectionState.CLOSING,
@@ -239,6 +252,7 @@ class QuicConnection:
         retry_source_connection_id: Optional[bytes] = None,
         session_ticket_fetcher: Optional[tls.SessionTicketFetcher] = None,
         session_ticket_handler: Optional[tls.SessionTicketHandler] = None,
+        token_handler: Optional[QuicTokenHandler] = None,
     ) -> None:
         assert configuration.max_datagram_size >= SMALLEST_MAX_DATAGRAM_SIZE, (
             "The smallest allowed maximum datagram size is "
@@ -252,6 +266,10 @@ class QuicConnection:
                 retry_source_connection_id is None
             ), "Cannot set retry_source_connection_id for a client"
         else:
+            assert token_handler is None, "Cannot set `token_handler` for a server"
+            assert (
+                configuration.token == b""
+            ), "Cannot set `configuration.token` for a server"
             assert (
                 configuration.certificate is not None
             ), "SSL certificate is required for a server"
@@ -319,7 +337,7 @@ class QuicConnection:
         )
         self._peer_cid_available: List[QuicConnectionId] = []
         self._peer_cid_sequence_numbers: Set[int] = set([0])
-        self._peer_token = b""
+        self._peer_token = configuration.token
         self._quic_logger: Optional[QuicLoggerTrace] = None
         self._remote_ack_delay_exponent = 3
         self._remote_active_connection_id_limit = 2
@@ -385,6 +403,7 @@ class QuicConnection:
         # callbacks
         self._session_ticket_fetcher = session_ticket_fetcher
         self._session_ticket_handler = session_ticket_handler
+        self._token_handler = token_handler
 
         # frame handlers
         self.__frame_handlers = {
@@ -1911,6 +1930,9 @@ class QuicConnection:
                 frame_type=frame_type,
                 reason_phrase="Clients must not send NEW_TOKEN frames",
             )
+
+        if self._token_handler is not None:
+            self._token_handler(token)
 
     def _handle_padding_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
