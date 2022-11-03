@@ -1630,13 +1630,24 @@ class QuicConnectionTest(TestCase):
             )
 
     def test_handle_new_token_frame(self):
-        with client_and_server() as (client, server):
+        new_token = None
+
+        def token_handler(token):
+            nonlocal new_token
+            new_token = token
+
+        with client_and_server(client_kwargs={"token_handler": token_handler}) as (
+            client,
+            server,
+        ):
             # client receives NEW_TOKEN
             client._handle_new_token_frame(
                 client_receive_context(client),
                 QuicFrameType.NEW_TOKEN,
                 Buffer(data=binascii.unhexlify("080102030405060708")),
             )
+
+        self.assertEqual(new_token, binascii.unhexlify("0102030405060708"))
 
     def test_handle_new_token_frame_from_client(self):
         with client_and_server() as (client, server):

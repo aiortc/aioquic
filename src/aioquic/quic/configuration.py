@@ -86,6 +86,13 @@ class QuicConfiguration:
     The TLS session ticket which should be used for session resumption.
     """
 
+    token: bytes = b""
+    """
+    The address validation token that can be used to validate future connections.
+
+    .. note:: This is only used by clients.
+    """
+
     cadata: Optional[bytes] = None
     cafile: Optional[str] = None
     capath: Optional[str] = None
