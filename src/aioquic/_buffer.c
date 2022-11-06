@@ -15,6 +15,8 @@ typedef struct {
     uint8_t *pos;
 } BufferObject;
 
+static PyObject *BufferType;
+
 #define CHECK_READ_BOUNDS(self, len) \
     if (len < 0 || self->pos + len > self->end) { \
         PyErr_SetString(BufferReadError, "Read out of bounds"); \
@@ -54,7 +56,10 @@ static void
 Buffer_dealloc(BufferObject *self)
 {
     free(self->base);
-    Py_TYPE(self)->tp_free((PyObject *) self);
+    PyTypeObject *tp = Py_TYPE(self);
+    freefunc free = PyType_GetSlot(tp, Py_tp_free);
+    free(self);
+    Py_DECREF(tp);
 }
 
 static PyObject *
@@ -360,44 +365,21 @@ static PyGetSetDef Buffer_getset[] = {
     {NULL}
 };
 
-static PyTypeObject BufferType = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    MODULE_NAME ".Buffer",              /* tp_name */
-    sizeof(BufferObject),               /* tp_basicsize */
-    0,                                  /* tp_itemsize */
-    (destructor)Buffer_dealloc,         /* tp_dealloc */
-    0,                                  /* tp_print */
-    0,                                  /* tp_getattr */
-    0,                                  /* tp_setattr */
-    0,                                  /* tp_reserved */
-    0,                                  /* tp_repr */
-    0,                                  /* tp_as_number */
-    0,                                  /* tp_as_sequence */
-    0,                                  /* tp_as_mapping */
-    0,                                  /* tp_hash  */
-    0,                                  /* tp_call */
-    0,                                  /* tp_str */
-    0,                                  /* tp_getattro */
-    0,                                  /* tp_setattro */
-    0,                                  /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT,                 /* tp_flags */
-    "Buffer objects",                   /* tp_doc */
-    0,                                  /* tp_traverse */
-    0,                                  /* tp_clear */
-    0,                                  /* tp_richcompare */
-    0,                                  /* tp_weaklistoffset */
-    0,                                  /* tp_iter */
-    0,                                  /* tp_iternext */
-    Buffer_methods,                     /* tp_methods */
-    0,                                  /* tp_members */
-    Buffer_getset,                      /* tp_getset */
-    0,                                  /* tp_base */
-    0,                                  /* tp_dict */
-    0,                                  /* tp_descr_get */
-    0,                                  /* tp_descr_set */
-    0,                                  /* tp_dictoffset */
-    (initproc)Buffer_init,              /* tp_init */
-    0,                                  /* tp_alloc */
+static PyType_Slot BufferType_slots[] = {
+    {Py_tp_dealloc, Buffer_dealloc},
+    {Py_tp_methods, Buffer_methods},
+    {Py_tp_doc, "Buffer objects"},
+    {Py_tp_getset, Buffer_getset},
+    {Py_tp_init, Buffer_init},
+    {0, 0},
+};
+
+static PyType_Spec BufferType_spec = {
+    MODULE_NAME ".Buffer",
+    sizeof(BufferObject),
+    0,
+    Py_TPFLAGS_DEFAULT,
+    BufferType_slots
 };
 
 
@@ -431,11 +413,14 @@ PyInit__buffer(void)
     Py_INCREF(BufferWriteError);
     PyModule_AddObject(m, "BufferWriteError", BufferWriteError);
 
-    BufferType.tp_new = PyType_GenericNew;
-    if (PyType_Ready(&BufferType) < 0)
+    BufferType = PyType_FromSpec(&BufferType_spec);
+    if (BufferType == NULL)
         return NULL;
-    Py_INCREF(&BufferType);
-    PyModule_AddObject(m, "Buffer", (PyObject *)&BufferType);
+
+    PyObject *o = PyType_FromSpec(&BufferType_spec);
+    if (o == NULL)
+        return NULL;
+    PyModule_AddObject(m, "Buffer", o);
 
     return m;
 }
