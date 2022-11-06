@@ -1,5 +1,6 @@
 import os.path
 import sys
+from wheel.bdist_wheel import bdist_wheel
 
 import setuptools
 
@@ -20,6 +21,17 @@ if sys.platform == "win32":
 else:
     extra_compile_args = ["-std=c99"]
     libraries = ["crypto"]
+
+
+class bdist_wheel_abi3(bdist_wheel):
+    def get_tag(self):
+        python, abi, plat = super().get_tag()
+
+        if python.startswith("cp"):
+            return "cp37", "abi3", plat
+
+        return python, abi, plat
+
 
 setuptools.setup(
     name=about["__title__"],
@@ -43,6 +55,7 @@ setuptools.setup(
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Topic :: Internet :: WWW/HTTP",
     ],
     ext_modules=[
@@ -50,14 +63,19 @@ setuptools.setup(
             "aioquic._buffer",
             extra_compile_args=extra_compile_args,
             sources=["src/aioquic/_buffer.c"],
+            define_macros=[("Py_LIMITED_API", "0x03070000")],
+            py_limited_api=True,
         ),
         setuptools.Extension(
             "aioquic._crypto",
             extra_compile_args=extra_compile_args,
             libraries=libraries,
             sources=["src/aioquic/_crypto.c"],
+            define_macros=[("Py_LIMITED_API", "0x03070000")],
+            py_limited_api=True,
         ),
     ],
+    cmdclass={"bdist_wheel": bdist_wheel_abi3},
     package_dir={"": "src"},
     package_data={"aioquic": ["py.typed", "_buffer.pyi", "_crypto.pyi"]},
     packages=["aioquic", "aioquic.asyncio", "aioquic.h0", "aioquic.h3", "aioquic.quic"],
