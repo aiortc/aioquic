@@ -63,54 +63,7 @@ Features
 Requirements
 ------------
 
-``aioquic`` requires Python 3.7 or better, and the OpenSSL development headers.
-
-Linux
-.....
-
-On Debian/Ubuntu run:
-
-.. code-block:: console
-
-   sudo apt install libssl-dev python3-dev
-
-On Alpine Linux run:
-
-.. code-block:: console
-
-   sudo apk add openssl-dev python3-dev bsd-compat-headers libffi-dev
-
-OS X
-....
-
-On OS X run:
-
-.. code-block:: console
-
-   brew install openssl
-
-You will need to set some environment variables to link against OpenSSL:
-
-.. code-block:: console
-
-   export CFLAGS=-I/usr/local/opt/openssl/include
-   export LDFLAGS=-L/usr/local/opt/openssl/lib
-
-Windows
-.......
-
-On Windows the easiest way to install OpenSSL is to use `Chocolatey`_.
-
-.. code-block:: console
-
-   choco install openssl
-
-You will need to set some environment variables to link against OpenSSL:
-
-.. code-block:: console
-
-  $Env:INCLUDE = "C:\Progra~1\OpenSSL-Win64\include"
-  $Env:LIB = "C:\Progra~1\OpenSSL-Win64\lib"
+``aioquic`` requires Python 3.7 or better.
 
 Running the examples
 --------------------
