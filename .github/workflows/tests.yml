@@ -63,9 +63,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Disable firewall
         if: matrix.os == 'macos-latest'
-        run: |
-          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
-        shell: bash
+        run: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
       - name: Run tests
         run: |
           python -m pip install -U pip setuptools wheel
@@ -89,7 +87,7 @@ jobs:
         run: |
           pip install wheel
           python setup.py sdist bdist_wheel
-      - name: Upload source package
+      - name: Upload source package and universal wheel
         uses: actions/upload-artifact@v3
         with:
           name: dist
