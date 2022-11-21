@@ -86,7 +86,9 @@ jobs:
         with:
           python-version: 3.7
       - name: Build source package
-        run: python setup.py sdist bdist_wheel
+        run: |
+          pip install wheel
+          python setup.py sdist bdist_wheel
       - name: Upload source package
         uses: actions/upload-artifact@v3
         with:
