@@ -27,9 +27,8 @@ classifiers = [
 ]
 dependencies = [
     "certifi",
-    "cryptography>=3.1,<39",
     "pylsqpack>=0.3.3,<0.4.0",
-    "pyopenssl>=20,<22",
+    "pyopenssl>=22",
 ]
 dynamic = ["version"]
 
