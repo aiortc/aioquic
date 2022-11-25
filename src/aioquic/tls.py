@@ -254,7 +254,7 @@ def verify_certificate(
     try:
         store_ctx.verify_certificate()
     except crypto.X509StoreContextError as exc:
-        raise AlertBadCertificate(exc.args[0][2])
+        raise AlertBadCertificate(exc.args[0])
 
 
 class CipherSuite(IntEnum):
