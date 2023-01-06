@@ -50,13 +50,13 @@ async def main(
     retry: bool,
 ) -> None:
     await serve(
-        args.host,
-        args.port,
+        host,
+        port,
         configuration=configuration,
         create_protocol=DnsServerProtocol,
         session_ticket_fetcher=session_ticket_store.pop,
         session_ticket_handler=session_ticket_store.add,
-        retry=args.retry,
+        retry=retry,
     )
     await asyncio.Future()
 
