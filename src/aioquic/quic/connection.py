@@ -802,7 +802,18 @@ class QuicConnection:
                 common = [
                     x for x in self._configuration.supported_versions if x in versions
                 ]
-                if not common:
+                chosen_version = common[0] if common else None
+                if self._quic_logger is not None:
+                    self._quic_logger.log_event(
+                        category="transport",
+                        event="version_information",
+                        data={
+                            "server_versions": versions,
+                            "client_versions": self._configuration.supported_versions,
+                            "chosen_version": chosen_version,
+                        },
+                    )
+                if chosen_version is None:
                     self._logger.error("Could not find a common protocol version")
                     self._close_event = events.ConnectionTerminated(
                         error_code=QuicErrorCode.INTERNAL_ERROR,
@@ -812,7 +823,7 @@ class QuicConnection:
                     self._close_end()
                     return
                 self._packet_number = 0
-                self._version = QuicProtocolVersion(common[0])
+                self._version = QuicProtocolVersion(chosen_version)
                 self._version_negotiation_count += 1
                 self._logger.info("Retrying with %s", self._version)
                 self._connect(now=now)
@@ -1202,6 +1213,21 @@ class QuicConnection:
         Start the client handshake.
         """
         assert self._is_client
+
+        if self._quic_logger is not None:
+            self._quic_logger.log_event(
+                category="transport",
+                event="version_information",
+                data={
+                    "client_versions": self._configuration.supported_versions,
+                    "chosen_version": self._version,
+                },
+            )
+            self._quic_logger.log_event(
+                category="transport",
+                event="alpn_information",
+                data={"client_alpns": self._configuration.alpn_protocols},
+            )
 
         self._close_at = now + self._configuration.idle_timeout
         self._initialize(self._peer_cid.cid)
