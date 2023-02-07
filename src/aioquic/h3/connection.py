@@ -76,8 +76,8 @@ class Setting(IntEnum):
 
     # https://datatracker.ietf.org/doc/html/rfc9220#section-5
     ENABLE_CONNECT_PROTOCOL = 0x8
-    # https://datatracker.ietf.org/doc/html/draft-ietf-masque-h3-datagram-05#section-9.1
-    H3_DATAGRAM = 0xFFD277
+    # https://www.rfc-editor.org/rfc/rfc9297.html#section-5.1
+    H3_DATAGRAM = 0x33
     # https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2-02#section-10.1
     ENABLE_WEBTRANSPORT = 0x2B603742
 
