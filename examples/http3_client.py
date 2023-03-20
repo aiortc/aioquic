@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import logging
 import os
 import pickle
@@ -249,6 +250,7 @@ async def perform_http_request(
     data: Optional[str],
     include: bool,
     output_dir: Optional[str],
+    headers: Dict[str, str],
 ) -> None:
     # perform request
     start = time.time()
@@ -257,6 +259,7 @@ async def perform_http_request(
         http_events = await client.post(
             url,
             data=data_bytes,
+            # for now only changing headers on GET method
             headers={
                 "content-length": str(len(data_bytes)),
                 "content-type": "application/x-www-form-urlencoded",
@@ -264,7 +267,7 @@ async def perform_http_request(
         )
         method = "POST"
     else:
-        http_events = await client.get(url)
+        http_events = await client.get(url, headers=headers)
         method = "GET"
     elapsed = time.time() - start
 
@@ -353,6 +356,7 @@ async def main(
     output_dir: Optional[str],
     local_port: int,
     zero_rtt: bool,
+    headers: str,
 ) -> None:
     # parse URL
     parsed = urlparse(urls[0])
@@ -365,6 +369,11 @@ async def main(
         port = parsed.port
     else:
         port = 443
+
+    try:
+        headers = json.loads(headers)
+    except (json.decoder.JSONDecodeError, TypeError):
+        assert False, f"{headers} is not a valid json input for headers"
 
     # check validity of 2nd urls and later.
     for i in range(1, len(urls)):
@@ -418,6 +427,7 @@ async def main(
                     data=data,
                     include=include,
                     output_dir=output_dir,
+                    headers=headers,
                 )
                 for url in urls
             ]
@@ -451,6 +461,12 @@ if __name__ == "__main__":
         "--include",
         action="store_true",
         help="include the HTTP response headers in the output",
+    )
+    parser.add_argument(
+        "-H",
+        "--headers",
+        type=str,
+        help="HTTP headers to be included in the request. Formatted as a json string.",
     )
     parser.add_argument(
         "--max-data",
@@ -553,5 +569,6 @@ if __name__ == "__main__":
             output_dir=args.output_dir,
             local_port=args.local_port,
             zero_rtt=args.zero_rtt,
+            headers=args.headers,
         )
     )
