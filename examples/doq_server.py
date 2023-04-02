@@ -63,7 +63,6 @@ async def main(
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(description="DNS over QUIC server")
     parser.add_argument(
         "--host",
