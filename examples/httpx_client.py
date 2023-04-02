@@ -10,7 +10,6 @@ from typing import AsyncIterator, Deque, Dict, Optional, Tuple, cast
 from urllib.parse import urlparse
 
 import httpx
-
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h3.connection import H3_ALPN, H3Connection

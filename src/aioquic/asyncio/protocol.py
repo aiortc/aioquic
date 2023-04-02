@@ -66,8 +66,8 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         """
         Create a QUIC stream and return a pair of (reader, writer) objects.
 
-        The returned reader and writer objects are instances of :class:`asyncio.StreamReader`
-        and :class:`asyncio.StreamWriter` classes.
+        The returned reader and writer objects are instances of
+        :class:`asyncio.StreamReader` and :class:`asyncio.StreamWriter` classes.
         """
         stream_id = self._quic.get_next_available_stream_id(
             is_unidirectional=is_unidirectional

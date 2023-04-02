@@ -6,13 +6,12 @@ import socket
 from unittest import TestCase, skipIf
 from unittest.mock import patch
 
-from cryptography.hazmat.primitives import serialization
-
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.asyncio.server import serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.logger import QuicLogger
+from cryptography.hazmat.primitives import serialization
 
 from .utils import (
     SERVER_CACERTFILE,

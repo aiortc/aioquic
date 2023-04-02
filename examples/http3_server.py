@@ -7,10 +7,9 @@ from collections import deque
 from email.utils import formatdate
 from typing import Callable, Deque, Dict, List, Optional, Union, cast
 
+import aioquic
 import wsproto
 import wsproto.events
-
-import aioquic
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.connection import H3_ALPN, H3Connection
