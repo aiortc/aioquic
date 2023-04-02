@@ -509,7 +509,8 @@ class QuicConnectionTest(TestCase):
 
     def test_connect_with_loss_3(self):
         """
-        Check connection is established even in the server's INITIAL + HANDSHAKE are lost.
+        Check connection is established even in the server's INITIAL + HANDSHAKE are
+        lost.
 
         The server receives duplicate CRYPTO and decides to retransmit its own
         CRYPTO to speedup handshake completion.

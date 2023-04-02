@@ -9,10 +9,9 @@ from collections import deque
 from typing import BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
 from urllib.parse import urlparse
 
+import aioquic
 import wsproto
 import wsproto.events
-
-import aioquic
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h0.connection import H0_ALPN, H0Connection
@@ -441,7 +440,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cipher-suites",
         type=str,
-        help="only advertise the given cipher suites, e.g. `AES_256_GCM_SHA384,CHACHA20_POLY1305_SHA256`",
+        help=(
+            "only advertise the given cipher suites, e.g. `AES_256_GCM_SHA384,"
+            "CHACHA20_POLY1305_SHA256`"
+        ),
     )
     parser.add_argument(
         "-d", "--data", type=str, help="send the specified data in a POST request"
