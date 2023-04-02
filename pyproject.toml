@@ -42,6 +42,17 @@ dev = [
 homepage = "https://github.com/aiortc/aioquic"
 documentation = "https://aioquic.readthedocs.io/"
 
+[tool.coverage.run]
+source = ["aioquic"]
+
+[tool.mypy]
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+ignore_missing_imports = true
+strict_optional = false
+warn_redundant_casts = true
+warn_unused_ignores = true
+
 [tool.ruff]
 select = [
     "E",  # pycodestyle
