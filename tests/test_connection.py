@@ -124,7 +124,7 @@ def client_and_server(
     server = QuicConnection(
         configuration=server_configuration,
         original_destination_connection_id=client.original_destination_connection_id,
-        **server_kwargs
+        **server_kwargs,
     )
     server._ack_delay = 0
     disable_packet_pacing(server)

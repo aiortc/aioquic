@@ -111,7 +111,7 @@ class ContextTest(TestCase):
             cadata=cadata,
             cafile=cafile,
             is_client=True,
-            **kwargs
+            **kwargs,
         )
         client.handshake_extensions = [
             (
@@ -130,7 +130,7 @@ class ContextTest(TestCase):
             alpn_protocols=alpn_protocols,
             is_client=False,
             max_early_data=0xFFFFFFFF,
-            **kwargs
+            **kwargs,
         )
         server.certificate = configuration.certificate
         server.certificate_private_key = configuration.private_key

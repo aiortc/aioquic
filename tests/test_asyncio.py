@@ -71,7 +71,7 @@ class HighLevelTest(TestCase):
         cafile=SERVER_CACERTFILE,
         configuration=None,
         request=b"ping",
-        **kwargs
+        **kwargs,
     ):
         if host is None:
             host = self.server_host
@@ -106,7 +106,7 @@ class HighLevelTest(TestCase):
             port=0,
             configuration=configuration,
             stream_handler=handle_stream,
-            **kwargs
+            **kwargs,
         )
         try:
             yield server._transport.get_extra_info("sockname")[1]
@@ -235,7 +235,6 @@ class HighLevelTest(TestCase):
         async with self.run_server(
             session_ticket_fetcher=store.pop, session_ticket_handler=store.add
         ) as server_port:
-
             # first request
             response = await self.run_client(
                 port=server_port, session_ticket_handler=save_ticket
