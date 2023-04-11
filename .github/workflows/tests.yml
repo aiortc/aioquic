@@ -83,8 +83,8 @@ jobs:
           python-version: 3.7
       - name: Build source package and universal wheel
         run: |
-          pip install wheel
-          python setup.py sdist bdist_wheel
+          pip install -U build
+          python -m build
       - name: Upload source package and universal wheel
         uses: actions/upload-artifact@v3
         with:
