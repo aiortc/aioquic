@@ -83,7 +83,7 @@ class AEAD:
     def _init_nonce(self, packet_number: int) -> None:
         # reference: https://datatracker.ietf.org/doc/html/rfc9001#section-5.3
 
-        # left-pad the reconstructed packet number (62 bits ~ 8 bytes) and XOR it with the IV
+        # left-pad the reconstructed packet number (62 bits ~ 8 bytes) and XOR it with IV
         self._binding.ffi.memmove(self._nonce, self._iv, AEAD_NONCE_LENGTH)
         for i in range(8):
             self._nonce[AEAD_NONCE_LENGTH - 1 - i] ^= (packet_number >> (8 * i)) & 0xFF
@@ -275,14 +275,16 @@ class HeaderProtection:
     def _update_mask(self, pn_offset: int, buffer_len: int) -> None:
         # reference: https://datatracker.ietf.org/doc/html/rfc9001#section-5.4.2
 
-        # sample data starts 4 bytes after the beginning of the Packet Number field (regardless of its length)
+        # sample data starts 4 bytes after the beginning of the Packet Number field
+        # (regardless of its length)
         sample_offset = pn_offset + 4
         assert pn_offset + SAMPLE_LENGTH <= buffer_len
 
         if self._is_chacha20:
             # reference: https://datatracker.ietf.org/doc/html/rfc9001#section-5.4.4
 
-            # the first four bytes after pn_offset are block counter, the next 12 bytes are the nonce
+            # the first four bytes after pn_offset are block counter,
+            # the next 12 bytes are the nonce
             self._assert(
                 self._binding.lib.EVP_CipherInit_ex(
                     self._ctx,  # EVP_CIPHER_CTX *ctx
