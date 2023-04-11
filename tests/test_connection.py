@@ -124,7 +124,7 @@ def client_and_server(
     server = QuicConnection(
         configuration=server_configuration,
         original_destination_connection_id=client.original_destination_connection_id,
-        **server_kwargs
+        **server_kwargs,
     )
     server._ack_delay = 0
     disable_packet_pacing(server)
@@ -509,7 +509,8 @@ class QuicConnectionTest(TestCase):
 
     def test_connect_with_loss_3(self):
         """
-        Check connection is established even in the server's INITIAL + HANDSHAKE are lost.
+        Check connection is established even in the server's INITIAL + HANDSHAKE are
+        lost.
 
         The server receives duplicate CRYPTO and decides to retransmit its own
         CRYPTO to speedup handshake completion.

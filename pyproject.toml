@@ -1,2 +1,65 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aioquic"
+description = "An implementation of QUIC and HTTP/3"
+readme = "README.rst"
+requires-python = ">=3.7"
+license = { text = "BSD-3-Clause" }
+authors = [
+    { name = "Jeremy Lainé", email = "jeremy.laine@m4x.org" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = [
+    "certifi",
+    "pylsqpack>=0.3.3,<0.4.0",
+    "pyopenssl>=22",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "coverage[toml]>=7.2.2",
+]
+
+[project.urls]
+homepage = "https://github.com/aiortc/aioquic"
+documentation = "https://aioquic.readthedocs.io/"
+
+[tool.coverage.run]
+source = ["aioquic"]
+
+[tool.mypy]
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+ignore_missing_imports = true
+strict_optional = false
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.ruff]
+select = [
+    "E",  # pycodestyle
+    "F",  # Pyflakes
+    "W",  # pycodestyle
+    "I",  # isort
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "aioquic.__version__"}

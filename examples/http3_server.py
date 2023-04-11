@@ -7,10 +7,9 @@ from collections import deque
 from email.utils import formatdate
 from typing import Callable, Deque, Dict, List, Optional, Union, cast
 
+import aioquic
 import wsproto
 import wsproto.events
-
-import aioquic
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.connection import H3_ALPN, H3Connection
@@ -484,13 +483,13 @@ async def main(
     retry: bool,
 ) -> None:
     await serve(
-        args.host,
-        args.port,
+        host,
+        port,
         configuration=configuration,
         create_protocol=HttpServerProtocol,
         session_ticket_fetcher=session_ticket_store.pop,
         session_ticket_handler=session_ticket_store.add,
-        retry=args.retry,
+        retry=retry,
     )
     await asyncio.Future()
 

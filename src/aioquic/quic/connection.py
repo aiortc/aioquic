@@ -902,8 +902,8 @@ class QuicConnection:
                         data={"trigger": "key_unavailable"},
                     )
 
-                # if a client receives HANDSHAKE or 1-RTT packets before it has handshake keys,
-                # it can assume that the server's INITIAL was lost
+                # If a client receives HANDSHAKE or 1-RTT packets before it has
+                # handshake keys, it can assume that the server's INITIAL was lost.
                 if (
                     self._is_client
                     and epoch in (tls.Epoch.HANDSHAKE, tls.Epoch.ONE_RTT)
