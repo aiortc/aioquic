@@ -34,6 +34,8 @@ class _CryptoBase:
 
 class AEAD(_CryptoBase):
     def __init__(self, cipher_name: bytes, key: bytes, iv: bytes) -> None:
+        super().__init__()
+
         # check and store key and iv
         self._key_len = len(key)
         if self._key_len > AEAD_KEY_LENGTH_MAX:
@@ -229,6 +231,7 @@ class AEAD(_CryptoBase):
 
 class HeaderProtection(_CryptoBase):
     def __init__(self, cipher_name: bytes, key: bytes) -> None:
+        super().__init__()
         self._is_chacha20 = cipher_name == b"chacha20"
 
         # create cipher with given type
