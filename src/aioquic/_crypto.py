@@ -22,10 +22,18 @@ def _get_cipher_by_name(binding: Binding, cipher_name: bytes):  # -> EVP_CIPHER
     return evp_cipher
 
 
-class AEAD:
-    def __init__(self, cipher_name: bytes, key: bytes, iv: bytes) -> None:
+class _CryptoBase:
+    def __init__(self) -> None:
         self._binding = Binding()
 
+    def _assert(self, value) -> None:
+        if not value:
+            self._binding.lib.ERR_clear_error()
+            raise CryptoError("OpenSSL call failed")
+
+
+class AEAD(_CryptoBase):
+    def __init__(self, cipher_name: bytes, key: bytes, iv: bytes) -> None:
         # check and store key and iv
         self._key_len = len(key)
         if self._key_len > AEAD_KEY_LENGTH_MAX:
@@ -74,11 +82,6 @@ class AEAD:
             )
         )
         return ctx
-
-    def _assert(self, value) -> None:
-        if not value:
-            self._binding.lib.ERR_clear_error()
-            raise CryptoError("OpenSSL call failed")
 
     def _init_nonce(self, packet_number: int) -> None:
         # reference: https://datatracker.ietf.org/doc/html/rfc9001#section-5.3
@@ -224,10 +227,9 @@ class AEAD:
         return bytes(self._binding.ffi.buffer(self._buffer, outlen_with_tag))
 
 
-class HeaderProtection:
+class HeaderProtection(_CryptoBase):
     def __init__(self, cipher_name: bytes, key: bytes) -> None:
         self._is_chacha20 = cipher_name == b"chacha20"
-        self._binding = Binding()
 
         # create cipher with given type
         evp_cipher = _get_cipher_by_name(self._binding, cipher_name)
@@ -266,11 +268,6 @@ class HeaderProtection:
         self._dummy_outlen = self._binding.ffi.new("int *")
         self._mask = self._binding.ffi.new("unsigned char[]", 31)
         self._zero = self._binding.ffi.new("unsigned char[]", 5)
-
-    def _assert(self, value) -> None:
-        if not value:
-            self._binding.lib.ERR_clear_error()
-            raise CryptoError("OpenSSL call failed")
 
     def _update_mask(self, pn_offset: int, buffer_len: int) -> None:
         # reference: https://datatracker.ietf.org/doc/html/rfc9001#section-5.4.2

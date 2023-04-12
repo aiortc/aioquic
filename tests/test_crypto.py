@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 from aioquic.buffer import Buffer
 from aioquic.quic.crypto import (
-    INITIAL_CIPHER_SUITE,
     AEAD,
+    INITIAL_CIPHER_SUITE,
     CryptoError,
     CryptoPair,
     derive_key_iv_hp,
