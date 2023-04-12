@@ -83,7 +83,8 @@ class AEAD:
     def _init_nonce(self, packet_number: int) -> None:
         # reference: https://datatracker.ietf.org/doc/html/rfc9001#section-5.3
 
-        # left-pad the reconstructed packet number (62 bits ~ 8 bytes) and XOR it with IV
+        # left-pad the reconstructed packet number (62 bits ~ 8 bytes)
+        # and XOR it with the IV
         self._binding.ffi.memmove(self._nonce, self._iv, AEAD_NONCE_LENGTH)
         for i in range(8):
             self._nonce[AEAD_NONCE_LENGTH - 1 - i] ^= (packet_number >> (8 * i)) & 0xFF
@@ -207,7 +208,8 @@ class AEAD:
         )
 
         # append the AEAD tag to the cipher text
-        if self._outlen[0] + AEAD_TAG_LENGTH > PACKET_LENGTH_MAX:
+        outlen_with_tag = self._outlen[0] + AEAD_TAG_LENGTH
+        if outlen_with_tag > PACKET_LENGTH_MAX:
             raise CryptoError("Invalid payload length")
         self._assert(
             self._binding.lib.EVP_CIPHER_CTX_ctrl(
@@ -219,9 +221,7 @@ class AEAD:
         )
 
         # return the encrypted cipher text and AEAD tag
-        return bytes(
-            self._binding.ffi.buffer(self._buffer, self._outlen[0] + AEAD_TAG_LENGTH)
-        )
+        return bytes(self._binding.ffi.buffer(self._buffer, outlen_with_tag))
 
 
 class HeaderProtection:
