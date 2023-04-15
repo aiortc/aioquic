@@ -399,10 +399,10 @@ class CryptoTest(TestCase):
             aead.decrypt(bytes([0] * 1501), associated_data=b"", packet_number=0)
         self.assertEquals(str(cm.exception), "Invalid payload length")
 
-    def test_aead_assert(self):
+    def test_aead_handle_openssl_failure(self):
         # ensure errors are cleared
         aead = AEAD(b"chacha20-poly1305", bytes([0] * 32), bytes([0] * 12))
         with patch.object(aead._binding.lib, "ERR_clear_error") as mock:
             with self.assertRaises(CryptoError):
-                aead._assert(False)
+                aead._handle_openssl_failure()
             mock.assert_called_once()
