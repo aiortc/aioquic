@@ -5,9 +5,11 @@ from unittest.mock import patch
 from aioquic.buffer import Buffer
 from aioquic.quic.crypto import (
     AEAD,
+    CIPHER_SUITES,
     INITIAL_CIPHER_SUITE,
     CryptoError,
     CryptoPair,
+    HeaderProtection,
     derive_key_iv_hp,
 )
 from aioquic.quic.packet import PACKET_FIXED_BIT, QuicProtocolVersion
@@ -128,6 +130,21 @@ class CryptoTest(TestCase):
             version=PROTOCOL_VERSION,
         )
         return pair
+
+    def create_aead(
+        self,
+        cipher_name: bytes = CIPHER_SUITES[INITIAL_CIPHER_SUITE][1],
+        key: bytes = b"topsecret16bytes",
+        iv: bytes = b"12!nullbytes",
+    ) -> AEAD:
+        return AEAD(cipher_name, key, iv)
+
+    def create_hp(
+        self,
+        cipher_name: bytes = CIPHER_SUITES[INITIAL_CIPHER_SUITE][0],
+        key: bytes = b"topsecret16bytes",
+    ) -> HeaderProtection:
+        return HeaderProtection(cipher_name, key)
 
     def test_derive_key_iv_hp(self):
         # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.1
@@ -346,62 +363,80 @@ class CryptoTest(TestCase):
         self.assertEqual(pair1.key_phase, 1)
         self.assertEqual(pair2.key_phase, 1)
 
-    def test_aead_args_validation(self):
-        # check valid first
-        cipher_name = b"chacha20-poly1305"
-        key = bytes([0] * 32)
-        iv = bytes([0] * 12)
-        AEAD(cipher_name, key, iv)
-
+    def test_aead_init_args_validation(self):
         # invalid cipher
         with self.assertRaises(CryptoError) as cm:
-            AEAD(b"tango9000", key, iv)
+            self.create_aead(cipher_name=b"tango9000")
         self.assertEquals(str(cm.exception), "Invalid cipher name: tango9000")
 
         # invalid key length
         with self.assertRaises(CryptoError) as cm:
-            AEAD(cipher_name, key + b"too_long", iv)
+            self.create_aead(key=bytes(33))
         self.assertEquals(str(cm.exception), "Invalid key length")
 
         # invalid iv length
         with self.assertRaises(CryptoError) as cm:
-            AEAD(cipher_name, key, b"too_short")
+            self.create_aead(iv=bytes(11))
         self.assertEquals(str(cm.exception), "Invalid iv length")
         with self.assertRaises(CryptoError) as cm:
-            AEAD(cipher_name, key, iv + b"too_long")
+            self.create_aead(iv=bytes(13))
         self.assertEquals(str(cm.exception), "Invalid iv length")
 
     def test_aead_data_length_validation(self):
-        iv = b"thisisnotnul"
-        zero_iv = bytes([0] * 12)
-        aead = AEAD(b"chacha20-poly1305", bytes([0] * 32), iv)
+        aead = self.create_aead()
+        iv = aead._iv
+        zero_nonce = bytes(12)
 
         # too large for encrypt, early abort
-        self.assertEquals(bytes(aead._nonce[0:12]), zero_iv)
+        self.assertEquals(bytes(aead._nonce), zero_nonce)
         with self.assertRaises(CryptoError) as cm:
-            aead.encrypt(bytes([0] * 1501), associated_data=b"", packet_number=0)
+            aead.encrypt(bytes(1501), associated_data=b"", packet_number=0)
         self.assertEquals(str(cm.exception), "Invalid payload length")
-        self.assertEquals(bytes(aead._nonce[0:12]), zero_iv)
+        self.assertEquals(bytes(aead._nonce), zero_nonce)
 
         # too large for encrypt, late tag check
         with self.assertRaises(CryptoError) as cm:
-            aead.encrypt(bytes([0] * 1500), associated_data=b"", packet_number=0)
+            aead.encrypt(bytes(1500), associated_data=b"", packet_number=0)
         self.assertEquals(str(cm.exception), "Invalid payload length")
-        self.assertEquals(bytes(aead._nonce[0:12]), iv)
+        self.assertEquals(bytes(aead._nonce), iv)
 
         # too small for decrypt
         with self.assertRaises(CryptoError) as cm:
-            aead.decrypt(bytes([0] * 11), associated_data=b"", packet_number=0)
+            aead.decrypt(bytes(11), associated_data=b"", packet_number=0)
         self.assertEquals(str(cm.exception), "Invalid payload length")
 
         # too large for decrypt
         with self.assertRaises(CryptoError) as cm:
-            aead.decrypt(bytes([0] * 1501), associated_data=b"", packet_number=0)
+            aead.decrypt(bytes(1501), associated_data=b"", packet_number=0)
         self.assertEquals(str(cm.exception), "Invalid payload length")
 
-    def test_aead_handle_openssl_failure(self):
+    def test_hp_init_args_validation(self):
+        # invalid cipher
+        with self.assertRaises(CryptoError) as cm:
+            self.create_hp(cipher_name=b"tango9000")
+        self.assertEquals(str(cm.exception), "Invalid cipher name: tango9000")
+
+        # invalid key length
+        with self.assertRaises(CryptoError) as cm:
+            self.create_hp(key=bytes(33))
+        self.assertEquals(str(cm.exception), "Invalid key length")
+
+    def test_hp_data_length_validation(self):
+        hp = self.create_hp()
+
+        # too large for apply
+        with self.assertRaises(CryptoError) as cm:
+            hp.apply(plain_header=bytes(501), protected_payload=bytes(1000))
+        self.assertEquals(str(cm.exception), "Invalid payload length")
+
+        # too large for remove
+        with self.assertRaises(CryptoError) as cm:
+            hp.remove(packet=bytes(1501), encrypted_offset=0)
+        self.assertEquals(str(cm.exception), "Invalid payload length")
+
+    def test_handle_openssl_failure(self):
         # ensure errors are cleared
-        aead = AEAD(b"chacha20-poly1305", bytes([0] * 32), bytes([0] * 12))
+        aead = self.create_aead()
         with patch.object(aead._binding.lib, "ERR_clear_error") as mock:
             with self.assertRaises(CryptoError):
                 aead._handle_openssl_failure()

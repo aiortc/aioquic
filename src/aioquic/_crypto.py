@@ -26,7 +26,7 @@ class _CryptoBase:
     def __init__(self) -> None:
         self._binding = Binding()
 
-    def _handle_openssl_failure(self) -> None:
+    def _handle_openssl_failure(self) -> bool:
         self._binding.lib.ERR_clear_error()
         raise CryptoError("OpenSSL call failed")
 
@@ -57,42 +57,31 @@ class AEAD(_CryptoBase):
 
     def _create_ctx(self, evp_cipher, operation: int):  # -> EVP_CIPHER_CTX *
         # create a cipher context with the given type and operation mode
-        ctx = self._binding.lib.EVP_CIPHER_CTX_new()
-        if ctx == self._binding.ffi.NULL:
-            self._handle_openssl_failure()
-        ctx = self._binding.ffi.gc(ctx, self._binding.lib.EVP_CIPHER_CTX_free)
-        if (
-            self._binding.lib.EVP_CipherInit_ex(
-                ctx,  # EVP_CIPHER_CTX *ctx
-                evp_cipher,  # const EVP_CIPHER *type
-                self._binding.ffi.NULL,  # ENGINE *impl
-                self._binding.ffi.NULL,  # const unsigned char *key
-                self._binding.ffi.NULL,  # const unsigned char *iv
-                operation,  # int enc
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        ctx = self._binding.ffi.gc(
+            self._binding.lib.EVP_CIPHER_CTX_new(),
+            self._binding.lib.EVP_CIPHER_CTX_free,
+        )
+        ctx != self._binding.ffi.NULL or self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherInit_ex(
+            ctx,  # EVP_CIPHER_CTX *ctx
+            evp_cipher,  # const EVP_CIPHER *type
+            self._binding.ffi.NULL,  # ENGINE *impl
+            self._binding.ffi.NULL,  # const unsigned char *key
+            self._binding.ffi.NULL,  # const unsigned char *iv
+            operation,  # int enc
+        ) == 1 or self._handle_openssl_failure()
 
         # specify key and initialization vector length
-        if (
-            self._binding.lib.EVP_CIPHER_CTX_set_key_length(
-                ctx,  # EVP_CIPHER_CTX *ctx
-                len(self._key),  # int keylen
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
-        if (
-            self._binding.lib.EVP_CIPHER_CTX_ctrl(
-                ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.lib.EVP_CTRL_AEAD_SET_IVLEN,  # int cmd
-                AEAD_NONCE_LENGTH,  # int ivlen
-                self._binding.ffi.NULL,  # void *NULL
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CIPHER_CTX_set_key_length(
+            ctx,  # EVP_CIPHER_CTX *ctx
+            len(self._key),  # int keylen
+        ) == 1 or self._handle_openssl_failure()
+        self._binding.lib.EVP_CIPHER_CTX_ctrl(
+            ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.lib.EVP_CTRL_AEAD_SET_IVLEN,  # int cmd
+            AEAD_NONCE_LENGTH,  # int ivlen
+            self._binding.ffi.NULL,  # void *NULL
+        ) == 1 or self._handle_openssl_failure()
         return ctx
 
     def _init_nonce(self, packet_number: int) -> None:
@@ -113,69 +102,48 @@ class AEAD(_CryptoBase):
         self._init_nonce(packet_number)
 
         # get the appended AEAD tag (data = cipher text + tag)
-        data_buffer = self._binding.ffi.from_buffer(data)
         cipher_text_len = len(data) - AEAD_TAG_LENGTH
-        if (
-            self._binding.lib.EVP_CIPHER_CTX_ctrl(
-                self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.lib.EVP_CTRL_AEAD_SET_TAG,  # int cmd
-                AEAD_TAG_LENGTH,  # int taglen
-                data_buffer + cipher_text_len,  # void *tag
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CIPHER_CTX_ctrl(
+            self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.lib.EVP_CTRL_AEAD_SET_TAG,  # int cmd
+            AEAD_TAG_LENGTH,  # int taglen
+            data[cipher_text_len:],  # void *tag
+        ) == 1 or self._handle_openssl_failure()
 
         # set key and nonce
-        if (
-            self._binding.lib.EVP_CipherInit_ex(
-                self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.ffi.NULL,  # const EVP_CIPHER *type
-                self._binding.ffi.NULL,  # ENGINE *impl
-                self._key,  # const unsigned char *key
-                self._nonce,  # const unsigned char *iv
-                0,  # int enc
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherInit_ex(
+            self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.ffi.NULL,  # const EVP_CIPHER *type
+            self._binding.ffi.NULL,  # ENGINE *impl
+            self._key,  # const unsigned char *key
+            self._nonce,  # const unsigned char *iv
+            0,  # int enc
+        ) == 1 or self._handle_openssl_failure()
 
         # specify the header as additional authenticated data (AAD)
-        if (
-            self._binding.lib.EVP_CipherUpdate(
-                self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.ffi.NULL,  # unsigned char *out
-                self._dummy_outlen,  # int *outl
-                associated_data,  # const unsigned char *in
-                len(associated_data),  # int inl
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherUpdate(
+            self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.ffi.NULL,  # unsigned char *out
+            self._dummy_outlen,  # int *outl
+            associated_data,  # const unsigned char *in
+            len(associated_data),  # int inl
+        ) == 1 or self._handle_openssl_failure()
 
         # decrypt the cipher text (i.e. received data excluding the appended tag)
-        if (
-            self._binding.lib.EVP_CipherUpdate(
-                self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._buffer,  # unsigned char *out
-                self._outlen,  # int *outl
-                data_buffer,  # const unsigned char *in
-                cipher_text_len,  # int inl
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherUpdate(
+            self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._buffer,  # unsigned char *out
+            self._outlen,  # int *outl
+            data,  # const unsigned char *in
+            cipher_text_len,  # int inl
+        ) == 1 or self._handle_openssl_failure()
 
         # finalize the operation
-        if (
-            self._binding.lib.EVP_CipherFinal_ex(
-                self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.ffi.NULL,  # unsigned char *outm
-                self._dummy_outlen,  # int *outl
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherFinal_ex(
+            self._decrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.ffi.NULL,  # unsigned char *outm
+            self._dummy_outlen,  # int *outl
+        ) == 1 or self._handle_openssl_failure()
 
         # return the decrypted data
         return self._buffer_view[: self._outlen[0]]
@@ -186,71 +154,50 @@ class AEAD(_CryptoBase):
         self._init_nonce(packet_number)
 
         # set key and nonce
-        if (
-            self._binding.lib.EVP_CipherInit_ex(
-                self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.ffi.NULL,  # const EVP_CIPHER *type
-                self._binding.ffi.NULL,  # ENGINE *impl
-                self._key,  # const unsigned char *key
-                self._nonce,  # const unsigned char *iv
-                1,  # int enc
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherInit_ex(
+            self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.ffi.NULL,  # const EVP_CIPHER *type
+            self._binding.ffi.NULL,  # ENGINE *impl
+            self._key,  # const unsigned char *key
+            self._nonce,  # const unsigned char *iv
+            1,  # int enc
+        ) == 1 or self._handle_openssl_failure()
 
         # specify the header as additional authenticated data (AAD)
-        if (
-            self._binding.lib.EVP_CipherUpdate(
-                self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.ffi.NULL,  # unsigned char *out
-                self._dummy_outlen,  # int *outl
-                associated_data,  # const unsigned char *in
-                len(associated_data),  # int inl
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherUpdate(
+            self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.ffi.NULL,  # unsigned char *out
+            self._dummy_outlen,  # int *outl
+            associated_data,  # const unsigned char *in
+            len(associated_data),  # int inl
+        ) == 1 or self._handle_openssl_failure()
 
         # encrypt the data
-        if (
-            self._binding.lib.EVP_CipherUpdate(
-                self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._buffer,  # unsigned char *out
-                self._outlen,  # int *outl
-                data,  # const unsigned char *in
-                len(data),  # int inl
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherUpdate(
+            self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._buffer,  # unsigned char *out
+            self._outlen,  # int *outl
+            data,  # const unsigned char *in
+            len(data),  # int inl
+        ) == 1 or self._handle_openssl_failure()
 
         # finalize the operation
-        if (
-            self._binding.lib.EVP_CipherFinal_ex(
-                self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.ffi.NULL,  # unsigned char *outm
-                self._dummy_outlen,  # int *outl
-            )
-            == 0
-            or self._dummy_outlen[0] != 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherFinal_ex(
+            self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.ffi.NULL,  # unsigned char *outm
+            self._dummy_outlen,  # int *outl
+        ) == 1 and self._dummy_outlen[0] == 0 or self._handle_openssl_failure()
 
         # append the AEAD tag to the cipher text
         outlen_with_tag = self._outlen[0] + AEAD_TAG_LENGTH
         if outlen_with_tag > PACKET_LENGTH_MAX:
             raise CryptoError("Invalid payload length")
-        if (
-            self._binding.lib.EVP_CIPHER_CTX_ctrl(
-                self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.lib.EVP_CTRL_AEAD_GET_TAG,  # int cmd
-                AEAD_TAG_LENGTH,  # int taglen
-                self._buffer + self._outlen[0],  # void *tag
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CIPHER_CTX_ctrl(
+            self._encrypt_ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.lib.EVP_CTRL_AEAD_GET_TAG,  # int cmd
+            AEAD_TAG_LENGTH,  # int taglen
+            self._buffer + self._outlen[0],  # void *tag
+        ) == 1 or self._handle_openssl_failure()
 
         # return the encrypted cipher text and AEAD tag
         return self._buffer_view[:outlen_with_tag]
@@ -260,49 +207,38 @@ class HeaderProtection(_CryptoBase):
     def __init__(self, cipher_name: bytes, key: bytes) -> None:
         super().__init__()
         self._is_chacha20 = cipher_name == b"chacha20"
+        if len(key) > AEAD_KEY_LENGTH_MAX:
+            raise CryptoError("Invalid key length")
 
         # create cipher with given type
         evp_cipher = _get_cipher_by_name(self._binding, cipher_name)
-        self._ctx = self._binding.lib.EVP_CIPHER_CTX_new()
-        if self._ctx == self._binding.ffi.NULL:
-            self._handle_openssl_failure()
         self._ctx = self._binding.ffi.gc(
-            self._ctx, self._binding.lib.EVP_CIPHER_CTX_free
+            self._binding.lib.EVP_CIPHER_CTX_new(),
+            self._binding.lib.EVP_CIPHER_CTX_free,
         )
-        if (
-            self._binding.lib.EVP_CipherInit_ex(
-                self._ctx,  # EVP_CIPHER_CTX *ctx
-                evp_cipher,  # const EVP_CIPHER *type
-                self._binding.ffi.NULL,  # ENGINE *impl
-                self._binding.ffi.NULL,  # const unsigned char *key
-                self._binding.ffi.NULL,  # const unsigned char *iv
-                1,  # int enc
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._ctx != self._binding.ffi.NULL or self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherInit_ex(
+            self._ctx,  # EVP_CIPHER_CTX *ctx
+            evp_cipher,  # const EVP_CIPHER *type
+            self._binding.ffi.NULL,  # ENGINE *impl
+            self._binding.ffi.NULL,  # const unsigned char *key
+            self._binding.ffi.NULL,  # const unsigned char *iv
+            1,  # int enc
+        ) == 1 or self._handle_openssl_failure()
 
         # set cipher key
-        if (
-            self._binding.lib.EVP_CIPHER_CTX_set_key_length(
-                self._ctx,  # EVP_CIPHER_CTX *ctx
-                len(key),  # int keylen
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
-        if (
-            self._binding.lib.EVP_CipherInit_ex(
-                self._ctx,  # EVP_CIPHER_CTX *ctx
-                self._binding.ffi.NULL,  # const EVP_CIPHER *type
-                self._binding.ffi.NULL,  # ENGINE *impl
-                key,  # const unsigned char *key
-                self._binding.ffi.NULL,  # const unsigned char *iv
-                1,  # int enc
-            )
-            == 0
-        ):
-            self._handle_openssl_failure()
+        self._binding.lib.EVP_CIPHER_CTX_set_key_length(
+            self._ctx,  # EVP_CIPHER_CTX *ctx
+            len(key),  # int keylen
+        ) == 1 or self._handle_openssl_failure()
+        self._binding.lib.EVP_CipherInit_ex(
+            self._ctx,  # EVP_CIPHER_CTX *ctx
+            self._binding.ffi.NULL,  # const EVP_CIPHER *type
+            self._binding.ffi.NULL,  # ENGINE *impl
+            key,  # const unsigned char *key
+            self._binding.ffi.NULL,  # const unsigned char *iv
+            1,  # int enc
+        ) == 1 or self._handle_openssl_failure()
 
         # allocate buffers
         self._buffer = self._binding.ffi.new("unsigned char[]", PACKET_LENGTH_MAX)
@@ -324,47 +260,35 @@ class HeaderProtection(_CryptoBase):
 
             # the first four bytes after pn_offset are block counter,
             # the next 12 bytes are the nonce
-            if (
-                self._binding.lib.EVP_CipherInit_ex(
-                    self._ctx,  # EVP_CIPHER_CTX *ctx
-                    self._binding.ffi.NULL,  # const EVP_CIPHER *type
-                    self._binding.ffi.NULL,  # ENGINE *impl
-                    self._binding.ffi.NULL,  # const unsigned char *key
-                    self._buffer + sample_offset,  # const unsigned char *iv
-                    1,  # int enc
-                )
-                == 0
-            ):
-                self._handle_openssl_failure()
+            self._binding.lib.EVP_CipherInit_ex(
+                self._ctx,  # EVP_CIPHER_CTX *ctx
+                self._binding.ffi.NULL,  # const EVP_CIPHER *type
+                self._binding.ffi.NULL,  # ENGINE *impl
+                self._binding.ffi.NULL,  # const unsigned char *key
+                self._buffer + sample_offset,  # const unsigned char *iv
+                1,  # int enc
+            ) == 1 or self._handle_openssl_failure()
 
             # ChaCha20 is used to protect 5 zero bytes
-            if (
-                self._binding.lib.EVP_CipherUpdate(
-                    self._ctx,  # EVP_CIPHER_CTX *ctx
-                    self._mask,  # unsigned char *out
-                    self._dummy_outlen,  # int *outl
-                    self._zero,  # const unsigned char *in
-                    len(self._zero),  # int inl
-                )
-                == 0
-            ):
-                self._handle_openssl_failure()
+            self._binding.lib.EVP_CipherUpdate(
+                self._ctx,  # EVP_CIPHER_CTX *ctx
+                self._mask,  # unsigned char *out
+                self._dummy_outlen,  # int *outl
+                self._zero,  # const unsigned char *in
+                len(self._zero),  # int inl
+            ) == 1 or self._handle_openssl_failure()
 
         else:
             # reference: https://datatracker.ietf.org/doc/html/rfc9001#section-5.4.3
 
             # AES-based header protected simply samples 16 bytes as input for AES-ECB
-            if (
-                self._binding.lib.EVP_CipherUpdate(
-                    self._ctx,  # EVP_CIPHER_CTX *ctx
-                    self._mask,  # unsigned char *out
-                    self._dummy_outlen,  # int *outl
-                    self._buffer + sample_offset,  # const unsigned char *in
-                    SAMPLE_LENGTH,  # int inl
-                )
-                == 0
-            ):
-                self._handle_openssl_failure()
+            self._binding.lib.EVP_CipherUpdate(
+                self._ctx,  # EVP_CIPHER_CTX *ctx
+                self._mask,  # unsigned char *out
+                self._dummy_outlen,  # int *outl
+                self._buffer + sample_offset,  # const unsigned char *in
+                SAMPLE_LENGTH,  # int inl
+            ) == 1 or self._handle_openssl_failure()
 
     def _mask_header(self) -> None:
         # use one byte to mask 4 bits for long headers, and 5 bits for short ones
@@ -385,6 +309,9 @@ class HeaderProtection(_CryptoBase):
 
     def apply(self, plain_header: bytes, protected_payload: bytes) -> bytes:
         # Reference: https://datatracker.ietf.org/doc/html/rfc9001#section-5.4.1
+        buffer_len = len(plain_header) + len(protected_payload)
+        if buffer_len > PACKET_LENGTH_MAX:
+            raise CryptoError("Invalid payload length")
 
         # read the Packet Number Length from the header
         pn_length = (plain_header[0] & 0x03) + 1
@@ -397,7 +324,6 @@ class HeaderProtection(_CryptoBase):
         self._binding.ffi.memmove(
             self._buffer + len(plain_header), protected_payload, len(protected_payload)
         )
-        buffer_len = len(plain_header) + len(protected_payload)
 
         # build the mask and use it
         self._update_mask(pn_offset, buffer_len)
@@ -408,6 +334,8 @@ class HeaderProtection(_CryptoBase):
 
     def remove(self, packet: bytes, encrypted_offset: int) -> Tuple[bytes, int]:
         # Reference: https://datatracker.ietf.org/doc/html/rfc9001#section-5.4.1
+        if len(packet) > PACKET_LENGTH_MAX:
+            raise CryptoError("Invalid payload length")
 
         # copy the packet into the buffer
         self._binding.ffi.memmove(self._buffer, packet, len(packet))
