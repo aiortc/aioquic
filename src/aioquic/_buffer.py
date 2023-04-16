@@ -1,27 +1,26 @@
+import struct
 from typing import Optional
+
+uint16 = struct.Struct(">H")
+uint32 = struct.Struct(">L")
+uint64 = struct.Struct(">Q")
 
 
 class BufferReadError(ValueError):
-    pass
+    def __init__(self, message: str = "Read out of bounds") -> None:
+        super().__init__(message)
 
 
 class BufferWriteError(ValueError):
-    pass
+    def __init__(self, message: str = "Write out of bounds") -> None:
+        super().__init__(message)
 
 
 class Buffer:
-    def __init__(self, capacity: Optional[int] = 0, data: Optional[bytes] = None):
+    def __init__(self, capacity: int = 0, data: Optional[bytes] = None):
         self._pos = 0
         self._data = memoryview(bytearray(capacity if data is None else data))
         self._capacity = len(self._data)
-
-    def _check_read_bounds(self, len: int) -> None:
-        if len < 0 or self._capacity < self._pos + len:
-            raise BufferReadError("Read out of bounds")
-
-    def _check_write_bounds(self, len: int) -> None:
-        if self._capacity < self._pos + len:
-            raise BufferWriteError("Write out of bounds")
 
     @property
     def capacity(self) -> int:
@@ -39,7 +38,7 @@ class Buffer:
             or self._capacity < end
             or end < start
         ):
-            raise BufferReadError("Read out of bounds")
+            raise BufferReadError()
         return bytes(self._data[start:end])
 
     def eof(self) -> bool:
@@ -54,147 +53,103 @@ class Buffer:
         return self._pos
 
     def pull_bytes(self, length: int) -> bytes:
-        self._check_read_bounds(length)
+        if length < 0 or self._capacity < self._pos + length:
+            raise BufferReadError()
         result = bytes(self._data[self._pos : (self._pos + length)])
         self._pos += length
         return result
 
     def pull_uint8(self) -> int:
-        self._check_read_bounds(1)
-        result = self._data[self._pos]
+        try:
+            result = self._data[self._pos]
+        except IndexError:
+            raise BufferReadError()
         self._pos += 1
         return result
 
     def pull_uint16(self) -> int:
-        self._check_read_bounds(2)
-        result = self._data[self._pos] << 8 | self._data[self._pos + 1]
+        try:
+            (result,) = uint16.unpack_from(self._data, self._pos)
+        except struct.error:
+            raise BufferReadError()
         self._pos += 2
         return result
 
     def pull_uint32(self) -> int:
-        self._check_read_bounds(4)
-        result = (
-            self._data[self._pos] << 24
-            | self._data[self._pos + 1] << 16
-            | self._data[self._pos + 2] << 8
-            | self._data[self._pos + 3]
-        )
+        try:
+            (result,) = uint32.unpack_from(self._data, self._pos)
+        except struct.error:
+            raise BufferReadError()
         self._pos += 4
         return result
 
     def pull_uint64(self) -> int:
-        self._check_read_bounds(8)
-        result = (
-            self._data[self._pos] << 56
-            | self._data[self._pos + 1] << 48
-            | self._data[self._pos + 2] << 40
-            | self._data[self._pos + 3] << 32
-            | self._data[self._pos + 4] << 24
-            | self._data[self._pos + 5] << 16
-            | self._data[self._pos + 6] << 8
-            | self._data[self._pos + 7]
-        )
+        try:
+            (result,) = uint64.unpack_from(self._data, self._pos)
+        except struct.error:
+            raise BufferReadError()
         self._pos += 8
         return result
 
     def pull_uint_var(self) -> int:
-        self._check_read_bounds(1)
-        type = self._data[self._pos] >> 6
+        try:
+            first = self._data[self._pos]
+        except IndexError:
+            raise BufferReadError()
+        type = first >> 6
         if type == 0:
-            result = self._data[self._pos] & 0x3F
             self._pos += 1
+            return first
         elif type == 1:
-            self._check_read_bounds(2)
-            result = (self._data[self._pos] & 0x3F) << 8 | self._data[self._pos + 1]
-            self._pos += 2
+            return self.pull_uint16() & 0x3FFF
         elif type == 2:
-            self._check_read_bounds(4)
-            result = (
-                (self._data[self._pos] & 0x3F) << 24
-                | self._data[self._pos + 1] << 16
-                | self._data[self._pos + 2] << 8
-                | self._data[self._pos + 3]
-            )
-            self._pos += 4
+            return self.pull_uint32() & 0x3FFFFFFF
         else:
-            self._check_read_bounds(8)
-            result = (
-                (self._data[self._pos] & 0x3F) << 56
-                | self._data[self._pos + 1] << 48
-                | self._data[self._pos + 2] << 40
-                | self._data[self._pos + 3] << 32
-                | self._data[self._pos + 4] << 24
-                | self._data[self._pos + 5] << 16
-                | self._data[self._pos + 6] << 8
-                | self._data[self._pos + 7]
-            )
-            self._pos += 8
-        return result
+            return self.pull_uint64() & 0x3FFFFFFFFFFFFFFF
 
     def push_bytes(self, value: bytes) -> None:
-        length = len(value)
-        self._check_write_bounds(length)
-        self._data[self._pos : (self._pos + length)] = value
-        self._pos += length
+        end_pos = self._pos + len(value)
+        if self._capacity < end_pos:
+            raise BufferWriteError()
+        self._data[self._pos : end_pos] = value
+        self._pos = end_pos
 
     def push_uint8(self, value: int) -> None:
-        self._check_write_bounds(1)
-        self._data[self._pos] = value
+        try:
+            self._data[self._pos] = value
+        except IndexError:
+            raise BufferWriteError()
         self._pos += 1
 
     def push_uint16(self, value: int) -> None:
-        self._check_write_bounds(2)
-        self._data[self._pos] = value >> 8
-        self._data[self._pos + 1] = value & 0xFF
+        try:
+            uint16.pack_into(self._data, self._pos, value)
+        except struct.error:
+            raise BufferWriteError()
         self._pos += 2
 
     def push_uint32(self, value: int) -> None:
-        self._check_write_bounds(4)
-        self._data[self._pos] = value >> 24
-        self._data[self._pos + 1] = (value >> 16) & 0xFF
-        self._data[self._pos + 2] = (value >> 8) & 0xFF
-        self._data[self._pos + 3] = value & 0xFF
+        try:
+            uint32.pack_into(self._data, self._pos, value)
+        except struct.error:
+            raise BufferWriteError()
         self._pos += 4
 
     def push_uint64(self, value: int) -> None:
-        self._check_write_bounds(8)
-        self._data[self._pos] = value >> 56
-        self._data[self._pos + 1] = (value >> 48) & 0xFF
-        self._data[self._pos + 2] = (value >> 40) & 0xFF
-        self._data[self._pos + 3] = (value >> 32) & 0xFF
-        self._data[self._pos + 4] = (value >> 24) & 0xFF
-        self._data[self._pos + 5] = (value >> 16) & 0xFF
-        self._data[self._pos + 6] = (value >> 8) & 0xFF
-        self._data[self._pos + 7] = value & 0xFF
+        try:
+            uint64.pack_into(self._data, self._pos, value)
+        except struct.error:
+            raise BufferWriteError()
         self._pos += 8
 
     def push_uint_var(self, value: int) -> None:
         if value <= 0x3F:
-            self._check_write_bounds(1)
-            self._data[self._pos] = value
-            self._pos += 1
+            self.push_uint8(value)
         elif value <= 0x3FFF:
-            self._check_write_bounds(2)
-            self._data[self._pos] = (value >> 8) | 0x40
-            self._data[self._pos + 1] = value & 0xFF
-            self._pos += 2
+            self.push_uint16(value | 0x4000)
         elif value <= 0x3FFFFFFF:
-            self._check_write_bounds(4)
-            self._data[self._pos] = (value >> 24) | 0x80
-            self._data[self._pos + 1] = (value >> 16) & 0xFF
-            self._data[self._pos + 2] = (value >> 8) & 0xFF
-            self._data[self._pos + 3] = value & 0xFF
-            self._pos += 4
+            self.push_uint32(value | 0x80000000)
         elif value <= 0x3FFFFFFFFFFFFFFF:
-            self._check_write_bounds(8)
-            self._data[self._pos] = (value >> 56) | 0xC0
-            self._data[self._pos + 1] = (value >> 48) & 0xFF
-            self._data[self._pos + 2] = (value >> 40) & 0xFF
-            self._data[self._pos + 3] = (value >> 32) & 0xFF
-            self._data[self._pos + 4] = (value >> 24) & 0xFF
-            self._data[self._pos + 5] = (value >> 16) & 0xFF
-            self._data[self._pos + 6] = (value >> 8) & 0xFF
-            self._data[self._pos + 7] = value & 0xFF
-            self._pos += 8
+            self.push_uint64(value | 0xC000000000000000)
         else:
             raise ValueError("Integer is too big for a variable-length integer")
