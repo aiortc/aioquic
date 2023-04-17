@@ -103,11 +103,23 @@ class BufferTest(TestCase):
         self.assertEqual(buf.data, b"\x08")
         self.assertEqual(buf.tell(), 1)
 
+    def test_push_uint8_truncated(self):
+        buf = Buffer()
+        with self.assertRaises(BufferWriteError):
+            buf.push_uint8(0x08)
+        self.assertEqual(buf.tell(), 0)
+
     def test_push_uint16(self):
         buf = Buffer(capacity=2)
         buf.push_uint16(0x0807)
         self.assertEqual(buf.data, b"\x08\x07")
         self.assertEqual(buf.tell(), 2)
+
+    def test_push_uint16_truncated(self):
+        buf = Buffer(capacity=1)
+        with self.assertRaises(BufferWriteError):
+            buf.push_uint16(0x0807)
+        self.assertEqual(buf.tell(), 0)
 
     def test_push_uint32(self):
         buf = Buffer(capacity=4)
@@ -115,11 +127,23 @@ class BufferTest(TestCase):
         self.assertEqual(buf.data, b"\x08\x07\x06\x05")
         self.assertEqual(buf.tell(), 4)
 
+    def test_push_uint32_truncated(self):
+        buf = Buffer(capacity=3)
+        with self.assertRaises(BufferWriteError):
+            buf.push_uint32(0x08070605)
+        self.assertEqual(buf.tell(), 0)
+
     def test_push_uint64(self):
         buf = Buffer(capacity=8)
         buf.push_uint64(0x0807060504030201)
         self.assertEqual(buf.data, b"\x08\x07\x06\x05\x04\x03\x02\x01")
         self.assertEqual(buf.tell(), 8)
+
+    def test_push_uint64_truncated(self):
+        buf = Buffer(capacity=7)
+        with self.assertRaises(BufferWriteError):
+            buf.push_uint64(0x0807060504030201)
+        self.assertEqual(buf.tell(), 0)
 
     def test_seek(self):
         buf = Buffer(data=b"01234567")
