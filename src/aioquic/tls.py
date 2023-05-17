@@ -375,7 +375,11 @@ def pull_list(buf: Buffer, capacity: int, func: Callable[[], T]) -> List[T]:
     with pull_block(buf, capacity) as length:
         end = buf.tell() + length
         while buf.tell() < end:
+            try:
             items.append(func())
+            except:
+                # ignore ALPN exception likely due to a greased ALPN value that can't be read as ASCII
+                pass
     return items
 
 
