@@ -93,7 +93,7 @@ if __name__ == "__main__":
         help="The remote peer's host name or IP address",
     )
     parser.add_argument(
-        "--port", type=int, default=784, help="The remote peer's port number"
+        "--port", type=int, default=853, help="The remote peer's port number"
     )
     parser.add_argument(
         "-k",
@@ -135,7 +135,7 @@ if __name__ == "__main__":
         level=logging.DEBUG if args.verbose else logging.INFO,
     )
 
-    configuration = QuicConfiguration(alpn_protocols=["doq-i03"], is_client=True)
+    configuration = QuicConfiguration(alpn_protocols=["doq"], is_client=True)
     if args.ca_certs:
         configuration.load_verify_locations(args.ca_certs)
     if args.insecure:

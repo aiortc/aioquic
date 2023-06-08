@@ -72,8 +72,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port",
         type=int,
-        default=4784,
-        help="listen on the specified port (defaults to 4784)",
+        default=853,
+        help="listen on the specified port (defaults to 853)",
     )
     parser.add_argument(
         "-k",
@@ -123,7 +123,7 @@ if __name__ == "__main__":
         quic_logger = None
 
     configuration = QuicConfiguration(
-        alpn_protocols=["doq-i03"],
+        alpn_protocols=["doq"],
         is_client=False,
         quic_logger=quic_logger,
     )

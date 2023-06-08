@@ -101,15 +101,22 @@ DNS over QUIC
 By default the server will use the `Google Public DNS`_ service, you can
 override this with the ``--resolver`` argument.
 
+By default the server will listen for requests on port 853, which requires
+a privileged user. You can override this with the `--port` argument.
+
+You can run the server locally using:
+
 .. code-block:: console
 
-    python examples/doq_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem
+    python examples/doq_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem --port 8053
 
 You can then run the client with a specific query:
 
 .. code-block:: console
 
-    python examples/doq_client.py --ca-certs tests/pycacert.pem --query-type "A" --query-name "quic.aiortc.org" --port 4784
+    python examples/doq_client.py --ca-certs tests/pycacert.pem --query-type A --query-name quic.aiortc.org --port 8053
+
+Please note that for real-world usage you will need to obtain a valid TLS certificate.
 
 .. _Google Public DNS: https://developers.google.com/speed/public-dns
 .. _--enable-experimental-web-platform-features: https://peter.sh/experiments/chromium-command-line-switches/#enable-experimental-web-platform-features
