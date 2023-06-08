@@ -27,7 +27,6 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
 ]
 dependencies = [
-    "certifi",
     "pylsqpack>=0.3.3,<0.4.0",
     "pyopenssl>=22",
 ]

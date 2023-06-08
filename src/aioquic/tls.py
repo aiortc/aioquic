@@ -1,6 +1,8 @@
 import datetime
+import ipaddress
 import logging
 import os
+import re
 import ssl
 import struct
 from contextlib import contextmanager
@@ -13,6 +15,7 @@ from typing import (
     Dict,
     Generator,
     List,
+    Match,
     Optional,
     Sequence,
     Tuple,
@@ -20,7 +23,11 @@ from typing import (
     Union,
 )
 
-import certifi
+try:
+    import certifi
+except ImportError:
+    certifi = None
+
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.backends import default_backend
@@ -40,6 +47,19 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from OpenSSL import crypto
 
 from .buffer import Buffer
+
+# candidates based on https://github.com/tiran/certifi-system-store by Christian Heimes
+_CA_FILE_CANDIDATES = [
+    # Alpine, Arch, Fedora 34+, OpenWRT, RHEL 9+, BSD
+    "/etc/ssl/cert.pem",
+    # Fedora <= 34, RHEL <= 9, CentOS <= 9
+    "/etc/pki/tls/cert.pem",
+    # Debian, Ubuntu (requires ca-certificates)
+    "/etc/ssl/certs/ca-certificates.crt",
+    # SUSE
+    "/etc/ssl/ca-bundle.pem",
+]
+_HASHED_CERT_FILENAME_RE = re.compile(r"^[0-9a-fA-F]{8}\.[0-9]$")
 
 TLS_VERSION_1_2 = 0x0303
 TLS_VERSION_1_3 = 0x0304
@@ -199,14 +219,165 @@ def load_pem_x509_certificates(data: bytes) -> List[x509.Certificate]:
     return certificates
 
 
+def _capath_contains_certs(capath: str) -> bool:
+    """Check whether capath exists and contains certs in the expected format."""
+    if not os.path.isdir(capath):
+        return False
+    for name in os.listdir(capath):
+        if _HASHED_CERT_FILENAME_RE.match(name):
+            return True
+    return False
+
+
+def _dnsname_match(
+    dn: Any, hostname: str, max_wildcards: int = 1
+) -> Optional[Union[Match[str], bool]]:
+    """Matching according to RFC 6125, section 6.4.3
+
+    http://tools.ietf.org/html/rfc6125#section-6.4.3
+    """
+    pats = []
+    if not dn:
+        return False
+
+    # Ported from python3-syntax:
+    # leftmost, *remainder = dn.split(r'.')
+    parts = dn.split(r".")
+    leftmost = parts[0]
+    remainder = parts[1:]
+
+    wildcards = leftmost.count("*")
+    if wildcards > max_wildcards:
+        # Issue #17980: avoid denials of service by refusing more
+        # than one wildcard per fragment.  A survey of established
+        # policy among SSL implementations showed it to be a
+        # reasonable choice.
+        raise ssl.CertificateError(
+            "too many wildcards in certificate DNS name: " + repr(dn)
+        )
+
+    # speed up common case w/o wildcards
+    if not wildcards:
+        return bool(dn.lower() == hostname.lower())
+
+    # RFC 6125, section 6.4.3, subitem 1.
+    # The client SHOULD NOT attempt to match a presented identifier in which
+    # the wildcard character comprises a label other than the left-most label.
+    if leftmost == "*":
+        # When '*' is a fragment by itself, it matches a non-empty dotless
+        # fragment.
+        pats.append("[^.]+")
+    elif leftmost.startswith("xn--") or hostname.startswith("xn--"):
+        # RFC 6125, section 6.4.3, subitem 3.
+        # The client SHOULD NOT attempt to match a presented identifier
+        # where the wildcard character is embedded within an A-label or
+        # U-label of an internationalized domain name.
+        pats.append(re.escape(leftmost))
+    else:
+        # Otherwise, '*' matches any dotless string, e.g. www*
+        pats.append(re.escape(leftmost).replace(r"\*", "[^.]*"))
+
+    # add the remaining fragments, ignore any wildcards
+    for frag in remainder:
+        pats.append(re.escape(frag))
+
+    pat = re.compile(r"\A" + r"\.".join(pats) + r"\Z", re.IGNORECASE)
+    return pat.match(hostname)
+
+
+def _ipaddress_match(
+    ipname: str, host_ip: Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
+) -> bool:
+    """Exact matching of IP addresses.
+
+    RFC 9110 section 4.3.5: "A reference identity of IP-ID contains the decoded
+    bytes of the IP address. An IP version 4 address is 4 octets, and an IP
+    version 6 address is 16 octets. [...] A reference identity of type IP-ID
+    matches if the address is identical to an iPAddress value of the
+    subjectAltName extension of the certificate."
+    """
+    # OpenSSL may add a trailing newline to a subjectAltName's IP address
+    # Divergence from upstream: ipaddress can't handle byte str
+    ip = ipaddress.ip_address(ipname.rstrip())
+    return bool(ip.packed == host_ip.packed)
+
+
+def match_hostname(
+    subject: Tuple[Tuple[Tuple[str, str], ...], ...],
+    subject_alt_name: Tuple[Tuple[str, str], ...],
+    hostname: str,
+    hostname_checks_common_name: bool = False,
+) -> None:
+    """Verify that *cert* (in decoded format as returned by
+    SSLSocket.getpeercert()) matches the *hostname*.  RFC 2818 and RFC 6125
+    rules are followed, but IP addresses are not accepted for *hostname*.
+
+    CertificateError is raised on failure. On success, the function
+    returns nothing.
+    (c) urllib3 v2.0.3 - MIT licensed
+    """
+    try:
+        # Divergence from upstream: ipaddress can't handle byte str
+        #
+        # The ipaddress module shipped with Python < 3.9 does not support
+        # scoped IPv6 addresses so we unconditionally strip the Zone IDs for
+        # now. Once we drop support for Python 3.9 we can remove this branch.
+        if "%" in hostname:
+            host_ip = ipaddress.ip_address(hostname[: hostname.rfind("%")])
+        else:
+            host_ip = ipaddress.ip_address(hostname)
+
+    except ValueError:
+        # Not an IP address (common case)
+        host_ip = None
+    dnsnames = []
+    san: Tuple[Tuple[str, str], ...] = subject_alt_name
+    key: str
+    value: str
+    for key, value in san:
+        if key == "DNS":
+            if host_ip is None and _dnsname_match(value, hostname):
+                return
+            dnsnames.append(value)
+        elif key == "IP Address":
+            if host_ip is not None and _ipaddress_match(value, host_ip):
+                return
+            dnsnames.append(value)
+
+    # We only check 'commonName' if it's enabled and we're not verifying
+    # an IP address. IP addresses aren't valid within 'commonName'.
+    if hostname_checks_common_name and host_ip is None and not dnsnames:
+        for sub in subject:
+            for key, value in sub:
+                if key == "commonName":
+                    if _dnsname_match(value, hostname):
+                        return
+                    dnsnames.append(value)
+
+    if len(dnsnames) > 1:
+        raise ssl.CertificateError(
+            "hostname %r "
+            "doesn't match either of %s" % (hostname, ", ".join(map(repr, dnsnames)))
+        )
+    elif len(dnsnames) == 1:
+        raise ssl.CertificateError(
+            f"hostname {hostname!r} doesn't match {dnsnames[0]!r}"
+        )
+    else:
+        raise ssl.CertificateError("no appropriate subjectAltName fields were found")
+
+
 def verify_certificate(
     certificate: x509.Certificate,
-    chain: List[x509.Certificate] = [],
+    chain: List[x509.Certificate] = None,
     server_name: Optional[str] = None,
     cadata: Optional[bytes] = None,
     cafile: Optional[str] = None,
     capath: Optional[str] = None,
 ) -> None:
+    if chain is None:
+        chain = []
+
     # verify dates
     now = utcnow()
     if now < certificate.not_valid_before:
@@ -228,22 +399,68 @@ def verify_certificate(
                         subjectAltName.append(("DNS", name.value))
 
         try:
-            ssl.match_hostname(
-                {"subject": tuple(subject), "subjectAltName": tuple(subjectAltName)},
+            match_hostname(
+                tuple(subject),
+                tuple(subjectAltName),
                 server_name,
+                hostname_checks_common_name=not bool(subjectAltName),
             )
         except ssl.CertificateError as exc:
             raise AlertBadCertificate("\n".join(exc.args)) from exc
 
     # load CAs
     store = crypto.X509Store()
-    store.load_locations(certifi.where())
+
+    # you'll have to install certifi yourself to get moz root CAs
+    # automatically injected
+    if certifi is not None:
+        store.load_locations(certifi.where())
+
     if cadata is not None:
         for cert in load_pem_x509_certificates(cadata):
             store.add_cert(crypto.X509.from_cryptography(cert))
 
     if cafile is not None or capath is not None:
         store.load_locations(cafile, capath)
+
+    # when nothing is given to us, try to load defaults.
+    # try to mimic ssl.load_default_locations(...) linux and windows supported.
+    # borrowed from cpython and sethmlarson/truststore
+    if cadata is None and cafile is None and capath is None:
+        defaults = ssl.get_default_verify_paths()
+
+        if defaults.cafile or (
+            defaults.capath and _capath_contains_certs(defaults.capath)
+        ):
+            try:
+                store.load_locations(defaults.cafile)
+            except crypto.Error:
+                pass
+        else:
+            if hasattr(ssl, "enum_certificates"):
+                for storename in (
+                    "CA",
+                    "ROOT",
+                ):
+                    try:
+                        for cacert_raw, encoding, trust in ssl.enum_certificates(
+                            storename
+                        ):
+                            # CA certs are never PKCS#7 encoded
+                            if encoding == "x509_asn":
+                                if trust is True:
+                                    for _cert in load_pem_x509_certificates(cacert_raw):
+                                        store.add_cert(
+                                            crypto.X509.from_cryptography(_cert)
+                                        )
+                    except PermissionError:
+                        pass
+            else:
+                # Let's search other common locations instead.
+                for candidate_cafile in _CA_FILE_CANDIDATES:
+                    if os.path.isfile(candidate_cafile):
+                        store.load_locations(candidate_cafile)
+                        break
 
     # verify certificate chain
     store_ctx = crypto.X509StoreContext(
