@@ -226,6 +226,8 @@ def verify_certificate(
                 for name in ext.value:
                     if isinstance(name, x509.DNSName):
                         subjectAltName.append(("DNS", name.value))
+                    elif isinstance(name, x509.IPAddress):
+                        subjectAltName.append(("IP Address", str(name.value)))
 
         try:
             ssl.match_hostname(
