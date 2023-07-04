@@ -71,8 +71,8 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           choco install openssl --no-progress
-          echo "INCLUDE=C:\Progra~1\OpenSSL-Win64\include" >> $GITHUB_ENV
-          echo "LIB=C:\Progra~1\OpenSSL-Win64\lib" >> $GITHUB_ENV
+          echo "INCLUDE=C:\Progra~1\OpenSSL\include" >> $GITHUB_ENV
+          echo "LIB=C:\Progra~1\OpenSSL\lib" >> $GITHUB_ENV
         shell: bash
       - name: Run tests
         run: |

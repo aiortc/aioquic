@@ -109,8 +109,8 @@ You will need to set some environment variables to link against OpenSSL:
 
 .. code-block:: console
 
-  $Env:INCLUDE = "C:\Progra~1\OpenSSL-Win64\include"
-  $Env:LIB = "C:\Progra~1\OpenSSL-Win64\lib"
+  $Env:INCLUDE = "C:\Progra~1\OpenSSL\include"
+  $Env:LIB = "C:\Progra~1\OpenSSL\lib"
 
 Running the examples
 --------------------
