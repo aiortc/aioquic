@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import functools
+import ipaddress
 import logging
 import os
 
@@ -15,6 +16,15 @@ def asynctest(coro):
         asyncio.run(coro(*args, **kwargs))
 
     return wrap
+
+
+def dns_name_or_ip_address(name):
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        return x509.DNSName(name)
+    else:
+        return x509.IPAddress(ip)
 
 
 def generate_certificate(*, alternative_names, common_name, hash_algorithm, key):
@@ -34,7 +44,7 @@ def generate_certificate(*, alternative_names, common_name, hash_algorithm, key)
     if alternative_names:
         builder = builder.add_extension(
             x509.SubjectAlternativeName(
-                [x509.DNSName(name) for name in alternative_names]
+                [dns_name_or_ip_address(name) for name in alternative_names]
             ),
             critical=False,
         )

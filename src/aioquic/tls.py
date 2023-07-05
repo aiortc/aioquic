@@ -1,4 +1,5 @@
 import datetime
+import ipaddress
 import logging
 import os
 import ssl
@@ -218,9 +219,22 @@ def verify_certificate(
     # verify subject
     if server_name is not None:
         try:
-            service_identity.cryptography.verify_certificate_hostname(
-                certificate, server_name
-            )
+            ipaddress.ip_address(server_name)
+        except ValueError:
+            is_ip = False
+        else:
+            is_ip = True
+
+        try:
+            if is_ip:
+                service_identity.cryptography.verify_certificate_ip_address(
+                    certificate, server_name
+                )
+            else:
+                service_identity.cryptography.verify_certificate_hostname(
+                    certificate, server_name
+                )
+
         except service_identity.VerificationError as exc:
             patterns = service_identity.cryptography.extract_patterns(certificate)
             if len(patterns) == 0:
