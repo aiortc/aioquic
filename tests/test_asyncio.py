@@ -149,19 +149,25 @@ class HighLevelTest(TestCase):
     @asynctest
     async def test_connect_and_serve_with_ec_certificate(self):
         await self._test_connect_and_serve_with_certificate(
-            *generate_ec_certificate(common_name="localhost")
+            *generate_ec_certificate(
+                alternative_names=["localhost"], common_name="localhost"
+            )
         )
 
     @asynctest
     async def test_connect_and_serve_with_ed25519_certificate(self):
         await self._test_connect_and_serve_with_certificate(
-            *generate_ed25519_certificate(common_name="localhost")
+            *generate_ed25519_certificate(
+                alternative_names=["localhost"], common_name="localhost"
+            )
         )
 
     @asynctest
     async def test_connect_and_serve_with_ed448_certificate(self):
         await self._test_connect_and_serve_with_certificate(
-            *generate_ed448_certificate(common_name="localhost")
+            *generate_ed448_certificate(
+                alternative_names=["localhost"], common_name="localhost"
+            )
         )
 
     @asynctest

@@ -37,7 +37,6 @@ from aioquic.tls import (
 )
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 
 from .utils import (
     SERVER_CACERTFILE,
@@ -1295,7 +1294,7 @@ class VerifyCertificateTest(TestCase):
 
     def test_verify_certificate_chain_self_signed(self):
         certificate, _ = generate_ec_certificate(
-            common_name="localhost", curve=ec.SECP256R1
+            alternative_names=["localhost"], common_name="localhost"
         )
 
         with patch("aioquic.tls.utcnow") as mock_utcnow:
@@ -1321,7 +1320,7 @@ class VerifyCertificateTest(TestCase):
 
     def test_verify_dates(self):
         certificate, _ = generate_ec_certificate(
-            common_name="example.com", curve=ec.SECP256R1
+            alternative_names=["example.com"], common_name="example.com"
         )
         cadata = certificate.public_bytes(serialization.Encoding.PEM)
 
@@ -1360,45 +1359,26 @@ class VerifyCertificateTest(TestCase):
                 )
             self.assertEqual(str(cm.exception), "Certificate is no longer valid")
 
-    def test_verify_subject(self):
-        certificate, _ = generate_ec_certificate(
-            common_name="example.com", curve=ec.SECP256R1
-        )
+    def test_verify_subject_no_subjaltname(self):
+        certificate, _ = generate_ec_certificate(common_name="example.com")
         cadata = certificate.public_bytes(serialization.Encoding.PEM)
 
         with patch("aioquic.tls.utcnow") as mock_utcnow:
             mock_utcnow.return_value = certificate.not_valid_before
 
-            # valid
-            verify_certificate(
-                cadata=cadata, certificate=certificate, server_name="example.com"
-            )
-
-            # invalid
+            # certificates with no SubjectAltName are rejected
             with self.assertRaises(tls.AlertBadCertificate) as cm:
                 verify_certificate(
-                    cadata=cadata,
-                    certificate=certificate,
-                    server_name="test.example.com",
+                    cadata=cadata, certificate=certificate, server_name="example.com"
                 )
             self.assertEqual(
-                str(cm.exception),
-                "hostname 'test.example.com' doesn't match 'example.com'",
-            )
-
-            with self.assertRaises(tls.AlertBadCertificate) as cm:
-                verify_certificate(
-                    cadata=cadata, certificate=certificate, server_name="acme.com"
-                )
-            self.assertEqual(
-                str(cm.exception), "hostname 'acme.com' doesn't match 'example.com'"
+                str(cm.exception), "Certificate does not match hostname 'example.com'"
             )
 
     def test_verify_subject_with_subjaltname(self):
         certificate, _ = generate_ec_certificate(
             alternative_names=["*.example.com", "example.com"],
             common_name="example.com",
-            curve=ec.SECP256R1,
         )
         cadata = certificate.public_bytes(serialization.Encoding.PEM)
 
@@ -1419,7 +1399,5 @@ class VerifyCertificateTest(TestCase):
                     cadata=cadata, certificate=certificate, server_name="acme.com"
                 )
             self.assertEqual(
-                str(cm.exception),
-                "hostname 'acme.com' doesn't match either of '*.example.com', "
-                "'example.com'",
+                str(cm.exception), "Certificate does not match hostname 'acme.com'"
             )

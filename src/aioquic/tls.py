@@ -21,6 +21,7 @@ from typing import (
 )
 
 import certifi
+import service_identity
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.backends import default_backend
@@ -216,24 +217,14 @@ def verify_certificate(
 
     # verify subject
     if server_name is not None:
-        subject = []
-        subjectAltName: List[Tuple[str, str]] = []
-        for attr in certificate.subject:
-            if attr.oid == x509.NameOID.COMMON_NAME:
-                subject.append((("commonName", attr.value),))
-        for ext in certificate.extensions:
-            if isinstance(ext.value, x509.SubjectAlternativeName):
-                for name in ext.value:
-                    if isinstance(name, x509.DNSName):
-                        subjectAltName.append(("DNS", name.value))
-
         try:
-            ssl.match_hostname(
-                {"subject": tuple(subject), "subjectAltName": tuple(subjectAltName)},
-                server_name,
+            service_identity.cryptography.verify_certificate_hostname(
+                certificate, server_name
             )
-        except ssl.CertificateError as exc:
-            raise AlertBadCertificate("\n".join(exc.args)) from exc
+        except service_identity.VerificationError as exc:
+            raise AlertBadCertificate(
+                "Certificate does not match hostname '%s'" % server_name
+            ) from exc
 
     # load CAs
     store = crypto.X509Store()
