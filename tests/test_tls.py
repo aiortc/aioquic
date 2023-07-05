@@ -1405,3 +1405,29 @@ class VerifyCertificateTest(TestCase):
                 "DNSPattern(pattern=b'*.example.com'), "
                 "DNSPattern(pattern=b'example.com')",
             )
+
+    def test_verify_subject_with_subjaltname_ipaddress(self):
+        certificate, _ = generate_ec_certificate(
+            alternative_names=["1.2.3.4"],
+            common_name="1.2.3.4",
+        )
+        cadata = certificate.public_bytes(serialization.Encoding.PEM)
+
+        with patch("aioquic.tls.utcnow") as mock_utcnow:
+            mock_utcnow.return_value = certificate.not_valid_before
+
+            # valid
+            verify_certificate(
+                cadata=cadata, certificate=certificate, server_name="1.2.3.4"
+            )
+
+            # invalid
+            with self.assertRaises(tls.AlertBadCertificate) as cm:
+                verify_certificate(
+                    cadata=cadata, certificate=certificate, server_name="8.8.8.8"
+                )
+            self.assertEqual(
+                str(cm.exception),
+                "hostname '8.8.8.8' doesn't match "
+                "IPAddressPattern(pattern=IPv4Address('1.2.3.4'))",
+            )
