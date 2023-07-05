@@ -34,7 +34,7 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.intersphinx',
     'sphinx_autodoc_typehints',
-    'sphinxcontrib.asyncio',
+    'sphinxcontrib_trio',
 ]
 intersphinx_mapping = {
     'cryptography': ('https://cryptography.io/en/latest', None),
