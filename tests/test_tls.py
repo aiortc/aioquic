@@ -20,6 +20,7 @@ from aioquic.tls import (
     load_pem_x509_certificates,
     pull_block,
     pull_certificate,
+    pull_certificate_request,
     pull_certificate_verify,
     pull_client_hello,
     pull_encrypted_extensions,
@@ -1210,6 +1211,18 @@ class TlsTest(TestCase):
         buf = Buffer(116)
         push_encrypted_extensions(buf, extensions)
         self.assertTrue(buf.eof())
+
+    def test_pull_certificate_request(self):
+        buf = Buffer(data=load("tls_certificate_request.bin"))
+        certificate_request = pull_certificate_request(buf)
+        self.assertTrue(buf.eof())
+
+        self.assertEqual(certificate_request.request_context, b"")
+        self.assertEqual(
+            certificate_request.signature_algorithms,
+            [1027, 2052, 1025, 1283, 515, 2053, 2053, 1281, 2054, 1537, 513],
+        )
+        self.assertEqual(certificate_request.other_extensions, [])
 
     def test_pull_certificate(self):
         buf = Buffer(data=load("tls_certificate.bin"))
