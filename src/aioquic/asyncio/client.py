@@ -11,10 +11,6 @@ from .protocol import QuicConnectionProtocol, QuicStreamHandler
 
 __all__ = ["connect"]
 
-# keep compatibility for Python 3.7 on Windows
-if not hasattr(socket, "IPPROTO_IPV6"):
-    socket.IPPROTO_IPV6 = 41
-
 
 @asynccontextmanager
 async def connect(
