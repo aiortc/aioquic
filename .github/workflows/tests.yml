@@ -9,7 +9,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
-          python-version: 3.7
+          python-version: 3.8
       - name: Build documentation
         env:
           READTHEDOCS: "True"
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
-          python-version: 3.7
+          python-version: 3.8
       - name: Install packages
         run: pip install black mypy ruff types-certifi types-cryptography types-pyopenssl
       - name: Run linters
@@ -54,7 +54,6 @@ jobs:
           - "3.10"
           - "3.9"
           - "3.8"
-          - "3.7"
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
@@ -91,7 +90,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
-          python-version: 3.7
+          python-version: 3.8
       - name: Build source package
         run: |
           pip install -U build
@@ -124,7 +123,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
-          python-version: 3.7
+          python-version: 3.8
       - name: Install QEMU
         if: matrix.os == 'ubuntu-latest'
         uses: docker/setup-qemu-action@v2
@@ -135,7 +134,7 @@ jobs:
           CIBW_BEFORE_BUILD_WINDOWS: python scripts\fetch-vendor.py C:\cibw\vendor
           CIBW_ENVIRONMENT: AIOQUIC_SKIP_TESTS=ipv6,loss CFLAGS=-I/tmp/vendor/include LDFLAGS=-L/tmp/vendor/lib
           CIBW_ENVIRONMENT_WINDOWS: AIOQUIC_SKIP_TESTS=ipv6,loss INCLUDE=C:\\cibw\\vendor\\include LIB=C:\\cibw\\vendor\\lib
-          CIBW_SKIP: cp36-* pp36-* *-musllinux*
+          CIBW_SKIP: cp36-* cp37-* pp36-* pp37-* *-musllinux*
           CIBW_TEST_COMMAND: python -m unittest discover -t {project} -s {project}/tests
           # there are no wheels for cryptography on these platforms
           CIBW_TEST_SKIP: "*-{manylinux_i686,win32} pp*"
