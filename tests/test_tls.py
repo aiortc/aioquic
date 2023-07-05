@@ -1372,7 +1372,8 @@ class VerifyCertificateTest(TestCase):
                     cadata=cadata, certificate=certificate, server_name="example.com"
                 )
             self.assertEqual(
-                str(cm.exception), "Certificate does not match hostname 'example.com'"
+                str(cm.exception),
+                "subject alternative name not found in the certificate",
             )
 
     def test_verify_subject_with_subjaltname(self):
@@ -1399,5 +1400,8 @@ class VerifyCertificateTest(TestCase):
                     cadata=cadata, certificate=certificate, server_name="acme.com"
                 )
             self.assertEqual(
-                str(cm.exception), "Certificate does not match hostname 'acme.com'"
+                str(cm.exception),
+                "hostname 'acme.com' doesn't match either of "
+                "DNSPattern(pattern=b'*.example.com'), "
+                "DNSPattern(pattern=b'example.com')",
             )

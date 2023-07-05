@@ -222,9 +222,19 @@ def verify_certificate(
                 certificate, server_name
             )
         except service_identity.VerificationError as exc:
-            raise AlertBadCertificate(
-                "Certificate does not match hostname '%s'" % server_name
-            ) from exc
+            patterns = service_identity.cryptography.extract_patterns(certificate)
+            if len(patterns) == 0:
+                errmsg = "subject alternative name not found in the certificate"
+            elif len(patterns) == 1:
+                errmsg = f"hostname {server_name!r} doesn't match {patterns[0]!r}"
+            else:
+                patterns_repr = ", ".join(repr(pattern) for pattern in patterns)
+                errmsg = (
+                    f"hostname {server_name!r} doesn't match "
+                    f"either of {patterns_repr}"
+                )
+
+            raise AlertBadCertificate(errmsg) from exc
 
     # load CAs
     store = crypto.X509Store()
