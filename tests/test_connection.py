@@ -1922,6 +1922,19 @@ class QuicConnectionTest(TestCase):
                 Buffer(data=b"\x00\x11"),
             )
 
+            # check events
+            self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
+            self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
+            for i in range(7):
+                self.assertEqual(type(client.next_event()), events.ConnectionIdIssued)
+
+            event = client.next_event()
+            self.assertEqual(type(event), events.StopSendingReceived)
+            self.assertEqual(event.stream_id, 0)
+            self.assertEqual(event.error_code, 0x11)
+
+            self.assertIsNone(client.next_event())
+
     def test_handle_stop_sending_frame_receive_only(self):
         with client_and_server() as (client, server):
             # server creates unidirectional stream 3
