@@ -83,6 +83,20 @@ class ProtocolNegotiated(QuicEvent):
 
 
 @dataclass
+class StopSendingReceived(QuicEvent):
+    """
+    The StopSendingReceived event is fired when the remote peer requests
+    stopping data transmission on a stream.
+    """
+
+    error_code: int
+    "The error code that was sent from the peer."
+
+    stream_id: int
+    "The ID of the stream that the peer requested stopping data transmission."
+
+
+@dataclass
 class StreamDataReceived(QuicEvent):
     """
     The StreamDataReceived event is fired whenever data is received on a

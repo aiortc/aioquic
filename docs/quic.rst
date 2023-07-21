@@ -44,6 +44,9 @@ Events
     .. autoclass:: PingAcknowledged
         :members:
 
+    .. autoclass:: StopSendingReceived
+        :members:
+
     .. autoclass:: StreamDataReceived
         :members:
 
