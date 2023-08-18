@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from os import PathLike
 from re import split
 from typing import Any, List, Optional, TextIO, Union
+from .recovery import QuicCongestionControl
 
 from ..tls import (
     CipherSuite,
@@ -74,6 +75,8 @@ class QuicConfiguration:
     """
     The TLS session ticket which should be used for session resumption.
     """
+
+    congestion_control_algo: Optional[QuicCongestionControl] = None
 
     cadata: Optional[bytes] = None
     cafile: Optional[str] = None

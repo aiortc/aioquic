@@ -357,14 +357,26 @@ class QuicConnection:
                 odcid=self._original_destination_connection_id,
             )
 
+
         # loss recovery
-        self._loss = QuicPacketRecovery(
-            initial_rtt=configuration.initial_rtt,
-            peer_completed_address_validation=not self._is_client,
-            quic_logger=self._quic_logger,
-            send_probe=self._send_probe,
-            logger=self._logger,
-        )
+        if (configuration.congestion_control_algo):
+            self._loss = QuicPacketRecovery(
+                initial_rtt=configuration.initial_rtt,
+                peer_completed_address_validation=not self._is_client,
+                quic_logger=self._quic_logger,
+                send_probe=self._send_probe,
+                logger=self._logger,
+                congestion_control_algo=configuration.congestion_control_algo
+            )
+        else:
+        
+            self._loss = QuicPacketRecovery(
+                initial_rtt=configuration.initial_rtt,
+                peer_completed_address_validation=not self._is_client,
+                quic_logger=self._quic_logger,
+                send_probe=self._send_probe,
+                logger=self._logger,
+            )
 
         # things to send
         self._close_pending = False

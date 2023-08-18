@@ -83,6 +83,24 @@ class QuicPacketPacer:
 
 
 class QuicCongestionControl:
+    def on_packet_acked(self, packet: QuicSentPacket):
+        pass
+
+    def on_packet_sent(self, packet: QuicSentPacket) -> None:
+        pass
+
+    def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
+        pass
+
+    def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
+        pass
+
+    def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
+        pass
+
+
+
+class RenoCongestionControl(QuicCongestionControl):
     """
     New Reno congestion control.
     """
@@ -157,6 +175,7 @@ class QuicPacketRecovery:
         send_probe: Callable[[], None],
         logger: Optional[logging.LoggerAdapter] = None,
         quic_logger: Optional[QuicLoggerTrace] = None,
+        congestion_control_algo: QuicCongestionControl = RenoCongestionControl
     ) -> None:
         self.max_ack_delay = 0.025
         self.peer_completed_address_validation = peer_completed_address_validation
@@ -178,7 +197,7 @@ class QuicPacketRecovery:
         self._time_of_last_sent_ack_eliciting_packet = 0.0
 
         # congestion control
-        self._cc = QuicCongestionControl()
+        self._cc = congestion_control_algo()
         self._pacer = QuicPacketPacer()
 
     @property
