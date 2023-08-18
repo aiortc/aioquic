@@ -90,6 +90,10 @@ class QuicPacketPacer:
 
 
 class QuicCongestionControl:
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
     def on_packet_acked(self, packet: QuicSentPacket):
         pass
 
@@ -112,7 +116,7 @@ class RenoCongestionControl(QuicCongestionControl):
     New Reno congestion control.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         self.bytes_in_flight = 0
         self.congestion_window = K_INITIAL_WINDOW
         self._congestion_recovery_start_time = 0.0
@@ -176,13 +180,16 @@ class CubicCongestionControl(QuicCongestionControl):
     Cubic congestion control implementation for aioquic
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         self.bytes_in_flight = 0
         self.congestion_window = K_INITIAL_WINDOW
         self._congestion_stash = 0
         self._congestion_recovery_start_time = 0.0
         self._rtt_monitor = QuicRttMonitor()
         self.ssthresh: Optional[int] = None
+
+        self.caller : QuicPacketRecovery = kwargs["caller"]
+
         self._cwnd_prior = None
         self._cwnd_epoch = None
         self._t_epoch = None
@@ -190,6 +197,7 @@ class CubicCongestionControl(QuicCongestionControl):
         self._W_est = None
         self._first_slow_start = True
         self._starting_congestion_avoidance = True
+        
 
     def better_cube_root(self, x):
         if (x < 0):
@@ -235,7 +243,7 @@ class CubicCongestionControl(QuicCongestionControl):
             def W_cubic(t):
                 return K_CUBIC_C * (t - K)**3 + (self._W_max // K_MAX_DATAGRAM_SIZE)
 
-            rtt = self._rtt_monitor.get_smoothed_rtt()
+            rtt = self.caller._rtt_smoothed
             target = None
             if (W_cubic(t + rtt) < (self.congestion_window // K_MAX_DATAGRAM_SIZE)):
                 target = self.congestion_window
@@ -332,7 +340,7 @@ class QuicPacketRecovery:
         self._time_of_last_sent_ack_eliciting_packet = 0.0
 
         # congestion control
-        self._cc = congestion_control_algo()
+        self._cc = congestion_control_algo(caller=self)
         self._pacer = QuicPacketPacer()
 
     @property
@@ -627,11 +635,6 @@ class QuicRttMonitor:
         self._sample_min: Optional[float] = None
         self._sample_time = 0.0
         self._samples = [0.0 for i in range(self._size)]
-
-    def get_smoothed_rtt(self):
-        # let's do something simple for the moment
-        # TODO: modify to make better measurements 
-        return self._samples[self._sample_idx-1] # if idx = 0 => return the end of list
 
     def add_rtt(self, rtt: float) -> None:
         self._samples[self._sample_idx] = rtt
