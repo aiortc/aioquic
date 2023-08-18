@@ -23,7 +23,7 @@ class RenoCongestionControl(QuicCongestionControl):
         self._congestion_stash = 0
         self._rtt_monitor = QuicRttMonitor()
 
-    def on_packet_acked(self, *, packet: QuicSentPacket) -> None:
+    def on_packet_acked(self, *, now: float, packet: QuicSentPacket) -> None:
         self.bytes_in_flight -= packet.sent_bytes
 
         # don't increase window in congestion recovery

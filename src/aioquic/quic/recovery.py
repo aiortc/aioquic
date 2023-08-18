@@ -2,7 +2,7 @@ import logging
 import math
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from .congestion import reno  # noqa
+from .congestion import cubic, reno  # noqa
 from .congestion.base import K_GRANULARITY, create_congestion_control
 from .logger import QuicLoggerTrace
 from .packet_builder import QuicDeliveryState, QuicSentPacket
@@ -199,7 +199,7 @@ class QuicPacketRecovery:
                     is_ack_eliciting = True
                     space.ack_eliciting_in_flight -= 1
                 if packet.in_flight:
-                    self._cc.on_packet_acked(packet=packet)
+                    self._cc.on_packet_acked(now=now, packet=packet)
                 largest_newly_acked = packet_number
                 largest_sent_time = packet.sent_time
 

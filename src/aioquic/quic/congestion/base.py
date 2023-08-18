@@ -21,7 +21,7 @@ class QuicCongestionControl(abc.ABC):
         self.congestion_window = K_INITIAL_WINDOW * max_datagram_size
 
     @abc.abstractmethod
-    def on_packet_acked(self, *, packet: QuicSentPacket) -> None:
+    def on_packet_acked(self, *, now: float, packet: QuicSentPacket) -> None:
         ...  # pragma: no cover
 
     @abc.abstractmethod
