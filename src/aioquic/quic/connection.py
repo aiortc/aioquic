@@ -366,7 +366,8 @@ class QuicConnection:
                 quic_logger=self._quic_logger,
                 send_probe=self._send_probe,
                 logger=self._logger,
-                congestion_control_algo=configuration.congestion_control_algo
+                congestion_control_algo=configuration.congestion_control_algo,
+                congestion_options=configuration.congestion_options
             )
         else:
         

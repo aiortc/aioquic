@@ -16,15 +16,17 @@ K_SECOND = 1.0
 
 # congestion control
 K_MAX_DATAGRAM_SIZE = 1280
-K_INITIAL_WINDOW = 10 * K_MAX_DATAGRAM_SIZE
-K_MINIMUM_WINDOW = 2 * K_MAX_DATAGRAM_SIZE
+K_INITIAL_WINDOW_SEGMENTS = 10
+K_INITIAL_WINDOW = K_INITIAL_WINDOW_SEGMENTS * K_MAX_DATAGRAM_SIZE
+K_MINIMUM_WINDOW_SEGMENTS = 2
+K_MINIMUM_WINDOW = K_MINIMUM_WINDOW_SEGMENTS * K_MAX_DATAGRAM_SIZE
 K_LOSS_REDUCTION_FACTOR = 0.5
 
 # cubic specific variables (see https://www.rfc-editor.org/rfc/rfc9438.html#name-definitions)
 K_CUBIC_K = 1    
 K_CUBIC_C = 0.4
 K_CUBIC_LOSS_REDUCTION_FACTOR = 0.7
-K_CUBIC_ADDITIVE_INCREASE = 1
+K_CUBIC_ADDITIVE_INCREASE = 1  # in number of segments
 
 
 class QuicPacketSpace:
@@ -92,23 +94,36 @@ class QuicPacketPacer:
 class QuicCongestionControl:
 
     def __init__(self, *args, **kwargs) -> None:
-        pass
+        if ("callback" in kwargs):
+            self.callback = kwargs["callback"] # a callback argument that is called when an event occurs
+        else:
+            self.callback = None
 
     def on_packet_acked(self, packet: QuicSentPacket):
-        pass
+        if self.callback:
+            self.callback("ack", self)
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
-        pass
+        if self.callback:
+            self.callback("packet_sent", self)
 
     def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
-        pass
+        if self.callback:
+            self.callback("packet_expired", self)
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
-        pass
+        if self.callback:
+            self.callback("packet_lost", self)
 
     def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
+        if self.callback:
+            self.callback("rtt_measured", self)
+
+    def get_congestion_window(self) -> int:
         pass
 
+    def get_ssthresh(self) -> int: 
+        pass
 
 
 class RenoCongestionControl(QuicCongestionControl):
@@ -117,6 +132,7 @@ class RenoCongestionControl(QuicCongestionControl):
     """
 
     def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.bytes_in_flight = 0
         self.congestion_window = K_INITIAL_WINDOW
         self._congestion_recovery_start_time = 0.0
@@ -125,6 +141,7 @@ class RenoCongestionControl(QuicCongestionControl):
         self.ssthresh: Optional[int] = None
 
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
+        super().on_packet_acked(packet)
         self.bytes_in_flight -= packet.sent_bytes
 
         # don't increase window in congestion recovery
@@ -143,13 +160,16 @@ class RenoCongestionControl(QuicCongestionControl):
                 self.congestion_window += count * K_MAX_DATAGRAM_SIZE
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
+        super().on_packet_sent(packet)
         self.bytes_in_flight += packet.sent_bytes
 
     def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
+        super().on_packets_expired(packets)
         for packet in packets:
             self.bytes_in_flight -= packet.sent_bytes
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
+        super().on_packets_lost(packets, now)
         lost_largest_time = 0.0
         for packet in packets:
             self.bytes_in_flight -= packet.sent_bytes
@@ -167,11 +187,19 @@ class RenoCongestionControl(QuicCongestionControl):
         # TODO : collapse congestion window if persistent congestion
 
     def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
+        super().on_rtt_measurement(latest_rtt, now)
         # check whether we should exit slow start
         if self.ssthresh is None and self._rtt_monitor.is_rtt_increasing(
             latest_rtt, now
         ):
             self.ssthresh = self.congestion_window
+
+    def get_congestion_window(self) -> int:
+        return int(self.congestion_window)
+    
+    def get_ssthresh(self) -> int: 
+        if self.ssthresh == None: return None
+        return int(self.ssthresh)
 
 
 
@@ -181,8 +209,9 @@ class CubicCongestionControl(QuicCongestionControl):
     """
 
     def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.bytes_in_flight = 0
-        self.congestion_window = K_INITIAL_WINDOW
+        self.congestion_window = K_INITIAL_WINDOW_SEGMENTS
         self._congestion_stash = 0
         self._congestion_recovery_start_time = 0.0
         self._rtt_monitor = QuicRttMonitor()
@@ -196,84 +225,87 @@ class CubicCongestionControl(QuicCongestionControl):
         self._W_max = None
         self._W_est = None
         self._first_slow_start = True
-        self._starting_congestion_avoidance = True
+        self._starting_congestion_avoidance = False
         
 
     def better_cube_root(self, x):
         if (x < 0):
             # avoid precision errors that make the cube root returns an imaginary number
-            return -(-x)**(1./3.)
+            return -((-x)**(1./3.))
         else:
             return (x)**(1./3.)
-
+        
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
-        self.bytes_in_flight -= packet.sent_bytes
+        super().on_packet_acked(packet)
+        return self.on_packet_acked_timed(packet, datetime.timestamp(datetime.now()), self.caller._rtt_smoothed)
 
-        # don't increase window in congestion recovery
-        if packet.sent_time <= self._congestion_recovery_start_time:
-            return
+    def on_packet_acked_timed(self, packet: QuicSentPacket, now: float, rtt : float) -> None:
+        self.bytes_in_flight -= packet.sent_bytes
 
         if self.ssthresh is None or self.congestion_window < self.ssthresh:
             # slow start
-            self.congestion_window += packet.sent_bytes
+            self.congestion_window += packet.sent_bytes // K_MAX_DATAGRAM_SIZE
         else:
             # congestion avoidance
-            cwnd_segments = self.congestion_window // K_MAX_DATAGRAM_SIZE
-
-            if (self._first_slow_start):
-                self.first_slow_start = False
-                self._cwnd_prior = self.congestion_window // K_MAX_DATAGRAM_SIZE
-                self._W_max = cwnd_segments
+            if (self._first_slow_start and not self._starting_congestion_avoidance):
+                self._first_slow_start = False
+                self._cwnd_prior = self.congestion_window
+                self._W_max = self.congestion_window
+                self._t_epoch = now
+                self._cwnd_epoch = self.congestion_window
+                self._W_est = self._cwnd_epoch
 
             # initialize the variables used at start of congestion avoidance
             if self._starting_congestion_avoidance:
                 self._starting_congestion_avoidance = False
-                self._t_epoch = datetime.timestamp(datetime.now())
-                self._cwnd_epoch = cwnd_segments
-                self._W_est = cwnd_segments
+                self._first_slow_start = False
+                self._t_epoch = now
+                self._cwnd_epoch = self.congestion_window
+                self._W_est = self._cwnd_epoch
 
             seg_ack = packet.sent_bytes // K_MAX_DATAGRAM_SIZE
-            self._W_est = int(self._W_est + K_CUBIC_ADDITIVE_INCREASE * (seg_ack / cwnd_segments))
+            self._W_est = self._W_est + K_CUBIC_ADDITIVE_INCREASE*(seg_ack/self.congestion_window)
 
-            t_current = datetime.timestamp(datetime.now())
-            t = int(t_current - self._t_epoch)
+            t = int(now - self._t_epoch)
 
             # calculate K by converting W_max in term of number of segments
-            K = self.better_cube_root((self._W_max-self._cwnd_epoch)/K_CUBIC_C)
+            K = self.better_cube_root((self._W_max - self._cwnd_epoch)/K_CUBIC_C)
 
             def W_cubic(t):
                 return K_CUBIC_C * (t - K)**3 + (self._W_max)
-
-            rtt = self.caller._rtt_smoothed
+            
             target = None
-            if (W_cubic(t + rtt) < cwnd_segments):
-                target = cwnd_segments
-            elif (W_cubic(t + rtt) > 1.5*cwnd_segments):
-                target = int(1.5*cwnd_segments)
+            if (W_cubic(t + rtt) < self.congestion_window):
+                target = self.congestion_window
+            elif (W_cubic(t + rtt) > 1.5*self.congestion_window):
+                target = self.congestion_window*1.5
             else:
                 target = W_cubic(t + rtt)
 
 
             if W_cubic(t) < self._W_est:
                 # reno friendly region of cubic (https://www.rfc-editor.org/rfc/rfc9438.html#name-reno-friendly-region)
-                self.congestion_window = int(self._W_est * K_MAX_DATAGRAM_SIZE)
-            elif cwnd_segments < self._W_max:
+                # TODO: change back to normal reno handle
+                #self.congestion_window = self._W_est
+                self.congestion_window = self.congestion_window + ((target - self.congestion_window)/self.congestion_window)
+            elif self.congestion_window < self._W_max:
                 # concave region of cubic (https://www.rfc-editor.org/rfc/rfc9438.html#name-concave-region)
-                nb_segments = (target - cwnd_segments) / cwnd_segments
-                self.congestion_window +=  int(nb_segments * K_MAX_DATAGRAM_SIZE)
+                self.congestion_window = self.congestion_window + ((target - self.congestion_window)/self.congestion_window)
             else:
                 # convex region of cubic (https://www.rfc-editor.org/rfc/rfc9438.html#name-convex-region)
-                nb_segments = (target - cwnd_segments) / cwnd_segments
-                self.congestion_window +=  int(nb_segments * K_MAX_DATAGRAM_SIZE)
+                self.congestion_window = self.congestion_window + ((target - self.congestion_window)/self.congestion_window)
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
+        super().on_packet_sent(packet)
         self.bytes_in_flight += packet.sent_bytes
 
     def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
+        super().on_packets_expired(packets)
         for packet in packets:
             self.bytes_in_flight -= packet.sent_bytes
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
+        super().on_packets_lost(packets, now)
         lost_largest_time = 0.0
         for packet in packets:
             self.bytes_in_flight -= packet.sent_bytes
@@ -283,34 +315,43 @@ class CubicCongestionControl(QuicCongestionControl):
         # start of the previous congestion recovery period.
         if lost_largest_time > self._congestion_recovery_start_time:
 
-            cwnd_segments = self.congestion_window // K_MAX_DATAGRAM_SIZE
-
 
             self._congestion_recovery_start_time = now
 
             # fast convergence
-            if (self._W_max != None and cwnd_segments < self._W_max):
-                self._W_max = int(cwnd_segments * (1 + K_CUBIC_LOSS_REDUCTION_FACTOR) / 2)
-            else:
-                self._W_max = cwnd_segments
+            #if (self._W_max != None and cwnd_segments < self._W_max):
+            #    self._W_max = int(cwnd_segments * (1 + K_CUBIC_LOSS_REDUCTION_FACTOR) / 2)
+            #else:
+            #    self._W_max = cwnd_segments
+
+            self._W_max = self.congestion_window
 
             # normal congestion MD
-            self.ssthresh = int(self.bytes_in_flight*K_CUBIC_LOSS_REDUCTION_FACTOR)
-            self._cwnd_prior = cwnd_segments
-            self.congestion_window = max(self.ssthresh, K_MINIMUM_WINDOW)
-            self.ssthresh = max(self.ssthresh, K_MINIMUM_WINDOW)
+            flight_size = self.bytes_in_flight // K_MAX_DATAGRAM_SIZE
+            self.ssthresh = int(flight_size*K_CUBIC_LOSS_REDUCTION_FACTOR)
+            self._cwnd_prior = self.congestion_window
+            self.congestion_window = max(self.ssthresh, K_MINIMUM_WINDOW_SEGMENTS)
+            self.ssthresh = max(self.ssthresh, K_MINIMUM_WINDOW_SEGMENTS)
             
 
             self._starting_congestion_avoidance = True  # restart a new congestion avoidance phase
 
 
     def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
+        super().on_rtt_measurement(latest_rtt, now)
         # check whether we should exit slow start
         if self.ssthresh is None and self._rtt_monitor.is_rtt_increasing(
             latest_rtt, now
         ):
             self.ssthresh = self.congestion_window
-            self._cwnd_prior = self.congestion_window // K_MAX_DATAGRAM_SIZE
+            self._cwnd_prior = self.congestion_window
+
+    def get_congestion_window(self) -> int:
+        return int(self.congestion_window * K_MAX_DATAGRAM_SIZE)
+    
+    def get_ssthresh(self) -> int:
+        if self.ssthresh == None: return None
+        return int(self.ssthresh * K_MAX_DATAGRAM_SIZE)
 
 class QuicPacketRecovery:
     """
@@ -324,7 +365,8 @@ class QuicPacketRecovery:
         send_probe: Callable[[], None],
         logger: Optional[logging.LoggerAdapter] = None,
         quic_logger: Optional[QuicLoggerTrace] = None,
-        congestion_control_algo: QuicCongestionControl = RenoCongestionControl
+        congestion_control_algo: QuicCongestionControl = RenoCongestionControl,
+        congestion_options = {}
     ) -> None:
         self.max_ack_delay = 0.025
         self.peer_completed_address_validation = peer_completed_address_validation
@@ -346,7 +388,10 @@ class QuicPacketRecovery:
         self._time_of_last_sent_ack_eliciting_packet = 0.0
 
         # congestion control
-        self._cc = congestion_control_algo(caller=self)
+        if (congestion_options != None):
+            self._cc = congestion_control_algo(caller=self, **congestion_options)
+        else:
+            self._cc = congestion_control_algo(caller=self)
         self._pacer = QuicPacketPacer()
 
     @property
@@ -355,7 +400,7 @@ class QuicPacketRecovery:
 
     @property
     def congestion_window(self) -> int:
-        return self._cc.congestion_window
+        return self._cc.get_congestion_window()
 
     def discard_space(self, space: QuicPacketSpace) -> None:
         assert space in self.spaces
@@ -469,7 +514,7 @@ class QuicPacketRecovery:
             # inform congestion controller
             self._cc.on_rtt_measurement(latest_rtt, now=now)
             self._pacer.update_rate(
-                congestion_window=self._cc.congestion_window,
+                congestion_window=self._cc.get_congestion_window(),
                 smoothed_rtt=self._rtt_smoothed,
             )
 
@@ -565,10 +610,10 @@ class QuicPacketRecovery:
     def _log_metrics_updated(self, log_rtt=False) -> None:
         data: Dict[str, Any] = {
             "bytes_in_flight": self._cc.bytes_in_flight,
-            "cwnd": self._cc.congestion_window,
+            "cwnd": self._cc.get_congestion_window(),
         }
-        if self._cc.ssthresh is not None:
-            data["ssthresh"] = self._cc.ssthresh
+        if self._cc.get_ssthresh() is not None:
+            data["ssthresh"] = self._cc.get_ssthresh()
 
         if log_rtt:
             data.update(
@@ -616,7 +661,7 @@ class QuicPacketRecovery:
         if lost_packets_cc:
             self._cc.on_packets_lost(lost_packets_cc, now=now)
             self._pacer.update_rate(
-                congestion_window=self._cc.congestion_window,
+                congestion_window=self._cc.get_congestion_window(),
                 smoothed_rtt=self._rtt_smoothed,
             )
             if self._quic_logger is not None:

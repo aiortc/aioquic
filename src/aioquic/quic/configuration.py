@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from os import PathLike
 from re import split
-from typing import Any, List, Optional, TextIO, Union
+from typing import Any, List, Optional, TextIO, Union, Dict
 from .recovery import QuicCongestionControl
 
 from ..tls import (
@@ -77,6 +77,14 @@ class QuicConfiguration:
     """
 
     congestion_control_algo: Optional[QuicCongestionControl] = None
+    """
+    Selection for a congestion control algorithm
+    """
+
+    congestion_options: Optional[Dict[str, Any]] = None
+    """
+    Options for the congestion control algorithm
+    """
 
     cadata: Optional[bytes] = None
     cafile: Optional[str] = None
