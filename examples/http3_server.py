@@ -25,6 +25,7 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import DatagramFrameReceived, ProtocolNegotiated, QuicEvent
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import SessionTicket
+from aioquic.quic.congestion import RenoCongestionControl, CubicCongestionControl
 
 try:
     import uvloop
@@ -548,6 +549,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="increase logging verbosity"
     )
+    parser.add_argument(
+        "--congestion-control", type=str, help="which congestion control algorithm to use (reno, cubic)"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -582,6 +586,15 @@ if __name__ == "__main__":
 
     # load SSL certificate and key
     configuration.load_cert_chain(args.certificate, args.private_key)
+
+    if args.congestion_control:
+        if args.congestion_control == "cubic":
+            configuration.congestion_control_algo = CubicCongestionControl
+        elif args.congestion_control == "reno":
+            configuration.congestion_control_algo = RenoCongestionControl
+        else:
+            print("Invalid congestion control algorithm")
+            exit(127)
 
     if uvloop is not None:
         uvloop.install()

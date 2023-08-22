@@ -26,6 +26,7 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import CipherSuite, SessionTicket
+from aioquic.quic.congestion import RenoCongestionControl, CubicCongestionControl
 
 try:
     import uvloop
@@ -506,6 +507,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--zero-rtt", action="store_true", help="try to send requests using 0-RTT"
     )
+    parser.add_argument(
+        "--congestion-control", type=str, help="which congestion control algorithm to use (reno, cubic)"
+    )
 
     args = parser.parse_args()
 
@@ -537,6 +541,14 @@ if __name__ == "__main__":
         configuration.quic_logger = QuicFileLogger(args.quic_log)
     if args.secrets_log:
         configuration.secrets_log_file = open(args.secrets_log, "a")
+    if args.congestion_control:
+        if args.congestion_control == "cubic":
+            configuration.congestion_control_algo = CubicCongestionControl
+        elif args.congestion_control == "reno":
+            configuration.congestion_control_algo = RenoCongestionControl
+        else:
+            print("Invalid congestion control algorithm")
+            exit(127)
     if args.session_ticket:
         try:
             with open(args.session_ticket, "rb") as fp:
