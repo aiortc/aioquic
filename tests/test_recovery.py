@@ -8,9 +8,9 @@ from aioquic.quic.rangeset import RangeSet
 from aioquic.quic.recovery import (
     QuicPacketPacer,
     QuicPacketRecovery,
-    QuicPacketSpace,
-    QuicRttMonitor,
+    QuicPacketSpace
 )
+from aioquic.quic.congestion import QuicRttMonitor
 
 
 def send_probe():
