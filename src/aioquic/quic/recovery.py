@@ -123,7 +123,7 @@ class QuicPacketRecovery:
 
     @property
     def bytes_in_flight(self) -> int:
-        return self._cc.bytes_in_flight
+        return self._cc.get_bytes_in_flight()
 
     @property
     def congestion_window(self) -> int:
