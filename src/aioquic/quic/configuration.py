@@ -50,6 +50,13 @@ class QuicConfiguration:
     """
     Per-stream flow control limit.
     """
+    
+    congestion_control: str = "Reno"
+    """
+    Name of congestion controller
+
+    The other implemented option is "Cubic".
+    """
 
     quic_logger: Optional[QuicLogger] = None
     """

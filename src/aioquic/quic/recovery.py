@@ -95,8 +95,10 @@ class QuicCongestionControl:
         self._rtt_monitor = QuicRttMonitor()
         self.ssthresh: Optional[int] = None
 
-    def on_packet_acked(self, packet: QuicSentPacket) -> None:
+    def on_packet_acked(self, packet: QuicSentPacket, now: float, rtt: float) -> None:
         self.bytes_in_flight -= packet.sent_bytes
+        
+        self.cal_min_delay(rtt)
 
         # don't increase window in congestion recovery
         if packet.sent_time <= self._congestion_recovery_start_time:
@@ -107,11 +109,18 @@ class QuicCongestionControl:
             self.congestion_window += packet.sent_bytes
         else:
             # congestion avoidance
-            self._congestion_stash += packet.sent_bytes
-            count = self._congestion_stash // self.congestion_window
-            if count:
-                self._congestion_stash -= count * self.congestion_window
-                self.congestion_window += count * K_MAX_DATAGRAM_SIZE
+            self.cong_avoid(packet.sent_bytes, now)
+            
+    def cal_min_delay(self, rtt: float) -> None:
+        return
+
+    def cong_avoid(self, sent_bytes: int, now: float) -> None:
+        #### cwnd calculation for Reno
+        self._congestion_stash += packet.sent_bytes
+        count = self._congestion_stash // self.congestion_window
+        if count:
+            self._congestion_stash -= count * self.congestion_window
+            self.congestion_window += count * K_MAX_DATAGRAM_SIZE
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
         self.bytes_in_flight += packet.sent_bytes
@@ -138,12 +147,104 @@ class QuicCongestionControl:
         # TODO : collapse congestion window if persistent congestion
 
     def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
+        self._rtt_monitor.update_rtt(latest_rtt, now)
         # check whether we should exit slow start
-        if self.ssthresh is None and self._rtt_monitor.is_rtt_increasing(
-            latest_rtt, now
-        ):
+        if self.ssthresh is None and self._rtt_monitor.is_rtt_increasing():
             self.ssthresh = self.congestion_window
 
+class QuicCubicCongestionControl(QuicCongestionControl):
+    """
+    Cubic congestion control.
+    """
+    
+    def __init__(self) -> None:
+        super().__init__()
+        self.epoch_start = -1
+        self.last_cwnd = K_INITIAL_WINDOW
+        self.beta = 0.3
+        self._loss_reduction_factor = 1 - self.beta
+        self.ack_cnt = 0
+        self.reno_cwnd = K_INITIAL_WINDOW
+        self.last_max_cwnd = 0
+        self.bic_origin_point = K_INITIAL_WINDOW
+        self.bic_K: int = 0.0
+        #self.tcp_friendliness = 0 #TCP friendly mode is off
+        self._fast_convergence = 0
+        self.cube_factor = 0.4
+        self._target = 0.0
+        self._cnt: float = 0.0
+        self._t = 0.0
+        self._dmin = 0.0
+        
+    def cal_min_delay(self, rtt: float) -> None:
+        if self._dmin:
+            self._dmin = min(self._dmin, rtt)
+        else:
+            self._dmin = rtt
+
+    def cong_avoid(self, sent_bytes: int, now: float) -> None:
+        cnt = self.update_cubic(sent_bytes, self.congestion_window, now)
+        self.congestion_window += int(cnt)
+        
+    def update_cubic(self, sent_bytes: int, w: int, now: float) -> float:
+        self.ack_cnt += sent_bytes
+        self.last_cwnd = w
+        
+        if self.epoch_start <= 0:
+            # record beginning
+            self.epoch_start = now
+            self.ack_cnt = sent_bytes
+            self.reno_cwnd = w
+            if self.last_max_cwnd <= w:
+                self.bic_K = 0
+                self.bic_origin_point = w
+            else:
+                # Compute new K based on
+                # (wmax-cwnd) * (srtt>>3 / HZ) / c * 2^(3*bictcp_HZ)
+                self.bic_K = ((self.last_max_cwnd - w) // K_MAX_DATAGRAM_SIZE // self.cube_factor)**(1./3.)
+                self.bic_origin_point = self.last_max_cwnd
+
+        self._t = now + self._dmin - self.epoch_start
+        offs = self._t - self.bic_K
+        self._target = self.bic_origin_point + self.cube_factor * offs * offs * offs * K_MAX_DATAGRAM_SIZE
+
+        # cubic function - calc bictcp_cnt
+        if self._target > w:
+            self._cnt = (self._target - w) * sent_bytes // w
+        else:
+            self._cnt = 0.01 * w
+
+        # The initial growth of cubic function may be too conservative
+        # when the available bandwidth is still unknown.
+        # -> increase cwnd 5% per RTT */
+        if self.last_max_cwnd == 0 and self._cnt < (0.05 * w):
+            self._cnt = 0.05 * w
+        
+        # TCP-friendly region
+        # Calculate Reno equivalent window and increase at least by that amount
+        # -> not tested
+        #if self.tcp_friendliness:
+        #    scale = 3 * self.beta / (2 - self.beta)
+        #    self._cnt = scale * self.ack_cnt // w
+        #    if self._cnt:
+        #        self.ack_cnt -= self._cnt * w
+        #        self.reno_cwnd += self._cnt * K_MAX_DATAGRAM_SIZE
+
+        #    if self.reno_cwnd > w:
+        #        max_cnt = w // (self.reno_cwnd - w)
+        #        if self._cnt > max_cnt:
+        #            self._cnt = max_cnt
+
+        return min(self._cnt, 0.5*sent_bytes)
+
+    def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
+        if self.epoch_start != 0:
+            self.epoch_start = 0
+            if self.congestion_window > self.last_max_cwnd and self._fast_convergence:
+                self.last_max_cwnd = self.congestion_window * (2-self.beta) // 2
+            else:
+                self.last_max_cwnd = self.congestion_window
+        super().on_packets_lost(packets, now)
 
 class QuicPacketRecovery:
     """
@@ -153,6 +254,7 @@ class QuicPacketRecovery:
     def __init__(
         self,
         initial_rtt: float,
+        congestion_control: str,
         peer_completed_address_validation: bool,
         send_probe: Callable[[], None],
         logger: Optional[logging.LoggerAdapter] = None,
@@ -178,7 +280,14 @@ class QuicPacketRecovery:
         self._time_of_last_sent_ack_eliciting_packet = 0.0
 
         # congestion control
-        self._cc = QuicCongestionControl()
+        if congestion_control == "Cubic":
+            self._cc = QuicCubicCongestionControl();
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(category="recovery", event="cc", data="cubic")
+        else:
+            self._cc = QuicCongestionControl();
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(category="recovery", event="cc", data="reno")
         self._pacer = QuicPacketPacer()
 
     @property
@@ -260,7 +369,7 @@ class QuicPacketRecovery:
                     is_ack_eliciting = True
                     space.ack_eliciting_in_flight -= 1
                 if packet.in_flight:
-                    self._cc.on_packet_acked(packet)
+                    self._cc.on_packet_acked(packet, now, self._rtt_latest)
                 largest_newly_acked = packet_number
                 largest_sent_time = packet.sent_time
 
@@ -490,21 +599,22 @@ class QuicRttMonitor:
                     self._sample_min = sample
                 elif sample > self._sample_max:
                     self._sample_max = sample
+                    
+    def update_rtt(self, rtt: float, now: float) -> None:
+         if now > self._sample_time + K_GRANULARITY:
+             self.add_rtt(rtt)
+             self._sample_time = now
 
-    def is_rtt_increasing(self, rtt: float, now: float) -> bool:
-        if now > self._sample_time + K_GRANULARITY:
-            self.add_rtt(rtt)
-            self._sample_time = now
-
-            if self._ready:
-                if self._filtered_min is None or self._filtered_min > self._sample_max:
-                    self._filtered_min = self._sample_max
-
-                delta = self._sample_min - self._filtered_min
-                if delta * 4 >= self._filtered_min:
-                    self._increases += 1
-                    if self._increases >= self._size:
-                        return True
-                elif delta > 0:
-                    self._increases = 0
+    def is_rtt_increasing(self) -> bool:
+        if self._ready:
+            if self._filtered_min is None or self._filtered_min > self._sample_max:
+                self._filtered_min = self._sample_max
+                
+            delta = self._sample_min - self._filtered_min
+            if delta * 4 >= self._filtered_min:
+                self._increases += 1
+                if self._increases >= self._size:
+                    return True
+            elif delta > 0:
+                self._increases = 0
         return False

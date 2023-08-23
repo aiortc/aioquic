@@ -578,6 +578,7 @@ if __name__ == "__main__":
         max_datagram_frame_size=65536,
         quic_logger=quic_logger,
         secrets_log_file=secrets_log_file,
+        congestion_control="Reno", ## or "Cubic"
     )
 
     # load SSL certificate and key

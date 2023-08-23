@@ -364,6 +364,7 @@ class QuicConnection:
             quic_logger=self._quic_logger,
             send_probe=self._send_probe,
             logger=self._logger,
+            congestion_control=configuration.congestion_control,
         )
 
         # things to send
