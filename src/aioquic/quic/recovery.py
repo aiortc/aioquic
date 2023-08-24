@@ -6,7 +6,9 @@ from datetime import datetime
 from .logger import QuicLoggerTrace
 from .packet_builder import QuicDeliveryState, QuicSentPacket
 from .rangeset import RangeSet
-from .congestion import QuicCongestionControl, RenoCongestionControl, CubicCongestionControl, K_MAX_DATAGRAM_SIZE
+from .congestion.congestion import QuicCongestionControl, K_MAX_DATAGRAM_SIZE
+from .congestion.cubic import CubicCongestionControl
+from .congestion.reno import RenoCongestionControl
 
 # loss detection
 K_PACKET_THRESHOLD = 3
@@ -14,9 +16,6 @@ K_GRANULARITY = 0.001  # seconds
 K_TIME_THRESHOLD = 9 / 8
 K_MICRO_SECOND = 0.000001
 K_SECOND = 1.0
-
-
-
 
 class QuicPacketSpace:
     def __init__(self) -> None:
