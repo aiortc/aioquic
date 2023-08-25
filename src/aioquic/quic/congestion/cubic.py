@@ -1,6 +1,6 @@
 from .congestion import QuicCongestionControl, K_INITIAL_WINDOW_SEGMENTS, K_MAX_DATAGRAM_SIZE, K_MINIMUM_WINDOW_SEGMENTS, QuicRttMonitor, Now
 from ..packet_builder import QuicSentPacket
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Dict, Any
 
 # cubic specific variables (see https://www.rfc-editor.org/rfc/rfc9438.html#name-definitions)
 K_CUBIC_K = 1    
@@ -158,3 +158,13 @@ class CubicCongestionControl(QuicCongestionControl):
     
     def get_bytes_in_flight(self) -> int:
         return self.bytes_in_flight
+    
+    def log_callback(self) -> Dict[str, Any]:
+        data = super().log_callback()
+
+        if self._W_max == None:
+            data["W_max"] = None
+        else:
+            data["W_max"] = int(self._W_max * K_MAX_DATAGRAM_SIZE)
+
+        return data

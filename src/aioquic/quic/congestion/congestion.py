@@ -1,5 +1,5 @@
 from ..packet_builder import QuicSentPacket
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Dict, Any
 from datetime import datetime
 from copy import copy
 from enum import Enum
@@ -118,5 +118,18 @@ class QuicCongestionControl:
 
     def get_bytes_in_flight(self) -> int:
         pass
+
+    def log_callback(self) -> Dict[str, Any]:
+        # a callback called when a recovery happens
+        # The data object will be saved in the log file, so feel free to add
+        # any attribute you want to track
+        data: Dict[str, Any] = {
+            "bytes_in_flight": self.get_bytes_in_flight(),
+            "cwnd": self.get_congestion_window(),
+        }
+        if self.get_ssthresh() is not None:
+            data["ssthresh"] = self.get_ssthresh()
+
+        return data
   
 

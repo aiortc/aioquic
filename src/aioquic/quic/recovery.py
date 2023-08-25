@@ -334,12 +334,7 @@ class QuicPacketRecovery:
         return loss_space
 
     def _log_metrics_updated(self, log_rtt=False) -> None:
-        data: Dict[str, Any] = {
-            "bytes_in_flight": self._cc.bytes_in_flight,
-            "cwnd": self._cc.get_congestion_window(),
-        }
-        if self._cc.get_ssthresh() is not None:
-            data["ssthresh"] = self._cc.get_ssthresh()
+        data: Dict[str, Any] = self._cc.log_callback()
 
         if log_rtt:
             data.update(

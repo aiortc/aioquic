@@ -2,6 +2,7 @@ from ..congestion import K_MAX_DATAGRAM_SIZE, K_MINIMUM_WINDOW, K_INITIAL_WINDOW
 from enum import Enum
 from dataclasses import dataclass
 from typing import Optional
+from .minmax import Minmax
 
 # The static discount factor of 1% used to scale BBR.bw to produce
 # BBR.pacing_rate.
@@ -95,10 +96,10 @@ MAX_INT = 10e64
 class BBR2State(Enum):
     Startup=0
     Drain=1
-    ProbeBW_DOWN=2
-    ProbeBW_CRUISE=3
-    ProbeBW_REFILL=4
-    ProbeBW_UP=5
+    ProbeBWDOWN=2
+    ProbeBWCRUISE=3
+    ProbeBWREFILL=4
+    ProbeBWUP=5
     ProbeRTT=6
     
 class BBR2ACKPhase(Enum):
@@ -254,7 +255,7 @@ class BBR2:
     #2.11.  Estimating BBR.max_bw
     #The filter for tracking the maximum recent rs.delivery_rate sample, for
     #estimating BBR.max_bw.
-    max_bw_filter: Minmax<int>
+    max_bw_filter: Minmax = Minmax(0)
 
     #The virtual time used by the BBR.max_bw filter window.  Note that
     #BBR.cycle_count only needs to be tracked with a single bit, since the
@@ -273,7 +274,7 @@ class BBR2:
 
     #BBR.ExtraACKedFilter: the max filter tracking the recent maximum degree of
     #aggregation in the path.
-    extra_acked_filter: Minmax<int>
+    extra_acked_filter: Minmax = Minmax(0)
 
     #2.13.  Startup Parameters and State
     #A boolean that records whether BBR estimates that it has ever fully
@@ -346,3 +347,14 @@ class BBR2:
     loss_in_round: bool = False
 
     loss_events_in_round: int = 0
+
+    # the congestion window used by the recovery
+    cwnd : int = K_INITIAL_WINDOW
+
+    # The number of bytes in flight 
+    # TODO : update it when sending/receiving a packet
+    bytes_in_flight : int = 0
+
+    # The number of lost bytes
+    # TODO : update it when a packet is lost
+    bytes_lost : int = 0

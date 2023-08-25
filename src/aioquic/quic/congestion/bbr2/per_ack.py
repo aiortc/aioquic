@@ -1,785 +1,681 @@
+from ...recovery import QuicPacketRecovery
+from random import random, randint
+from ...packet_builder import QuicSentPacket
+from .values import *
+from ..congestion import K_MAX_DATAGRAM_SIZE
+from .per_loss import bbr2_update_latest_delivery_signals, bbr2_update_congestion_signals, bbr2_advance_latest_delivery_signals, \
+    bbr2_bound_bw_for_model, bbr2_is_inflight_too_high, bbr2_reset_congestion_signals, bbr2_reset_lower_bounds, \
+    bbr2_check_inflight_too_high, bbr2_reset_lower_bounds
+from .init import bbr2_enter_startup
+
+from .pacing import bbr2_set_pacing_rate
+
+# Copyright (C) 2022, Cloudflare, Inc.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#
+#     * Redistributions of source code must retain the above copyright notice,
+#       this list of conditions and the following disclaimer.
+#
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+# IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+# NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#  1.2Mbps in bytes/sec
+PACING_RATE_1_2MBPS: int = int(1200 * 1000 / 8)
+
+# The minimal cwnd value BBR2 tries to target, in bytes
+def bbr2_min_pipe_cwnd(r: QuicPacketRecovery) -> int :
+    K_BBR2_MIN_PIPE_CWND_PKTS * K_MAX_DATAGRAM_SIZE
+
+# BBR2 Functions when ACK is received.
+#
+def bbr2_update_model_and_state(
+    r: QuicPacketRecovery, packet: QuicSentPacket, now: float,
+):
+    bbr2_update_latest_delivery_signals(r)
+    bbr2_update_congestion_signals(r, packet)
+    bbr2_update_ack_aggregation(r, packet, now)
+    bbr2_check_startup_done(r)
+    bbr2_check_drain(r, now)
+    bbr2_update_probe_bw_cycle_phase(r, now)
+    bbr2_update_min_rtt(r, now)
+    bbr2_check_probe_rtt(r, now)
+    bbr2_advance_latest_delivery_signals(r)
+    bbr2_bound_bw_for_model(r)
 
 
+def bbr2_update_control_parameters(r: QuicPacketRecovery, now: float):
+    bbr2_set_pacing_rate(r)
+    bbr2_set_send_quantum(r)
 
-def is_ProbeBW(state):
-    return state == BBRStates.ProbeBW_CRUISE or state == BBRStates.ProbeBW_DOWN or state == BBRStates.ProbeBW_UP or state == BBRStates.ProbeBW_REFILL
+    # Set outgoing packet pacing rate
+    # It is called here because send_quantum may be updated too.
+    # TODO : set_pacing_rate
+    r.set_pacing_rate(r.bbr2_state.pacing_rate, now)
+
+    bbr2_set_cwnd(r)
+
+# BBR2 Functions while processing ACKs.
+#
+
+# 4.3.1.1.  Startup Dynamics
+def bbr2_check_startup_done(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    bbr2_check_startup_full_bandwidth(r)
+    bbr2_check_startup_high_loss(r)
+
+    if bbr.state == BBR2State.Startup and bbr.filled_pipe:
+        bbr2_enter_drain(r)
 
 
-class BBRCongestionControl(QuicCongestionControl):
+# 4.3.1.2.  Exiting Startup Based on Bandwidth Plateau
+def bbr2_check_startup_full_bandwidth(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    # TODO : app_limited
+    if bbr.filled_pipe or not bbr.round_start or r.delivery_rate.sample_is_app_limited():
+        # No need to check for a full pipe now.
+        return
 
-    def __init__(self, *args, **kwargs) -> None:
+    # Still growing?
+    if bbr.max_bw >= int(bbr.full_bw * K_BBR2_MAX_BW_GROWTH_THRESHOLD):
+        # Record new baseline level
+        bbr.full_bw = bbr.max_bw
+        bbr.full_bw_count = 0
+        return
 
-        super().__init__(*args, **kwargs)
+    # Another round w/o much growth
+    bbr.full_bw_count += 1
+
+    if bbr.full_bw_count >= K_BBR2_MAX_BW_COUNT:
+        bbr.filled_pipe = True
+
+# 4.3.1.3.  Exiting Startup Based on Packet Loss
+def bbr2_check_startup_high_loss(r: QuicPacketRecovery):
+    # todo: this is not implemented (not in the draft)
+    bbr = r._cc.bbr_state
+    if bbr.loss_round_start and bbr.in_recovery and bbr.loss_events_in_round >= K_BBR2_FULL_LOSS_COUNT and bbr2_is_inflight_too_high(r):
+        bbr2_handle_queue_too_high_in_startup(r)
+    if bbr.loss_round_start:
+        bbr.loss_events_in_round = 0
+
+def bbr2_handle_queue_too_high_in_startup(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    bbr.filled_pipe = True
+    bbr.inflight_hi = bbr2_inflight(r, bbr.max_bw, 1.0)
+
+
+# 4.3.2.  Drain
+def bbr2_enter_drain(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+
+    bbr.state = BBR2State.Drain
+
+    # pace slowly
+    bbr.pacing_gain = K_BBR2_PACING_GAIN / K_BBR2_STARTUP_CWND_GAIN
+
+    # maintain cwnd
+    bbr.cwnd_gain = K_BBR2_STARTUP_CWND_GAIN
+
+
+def bbr2_check_drain(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+    if bbr.state == BBR2State.Drain and bbr.bytes_in_flight <= bbr2_inflight(r, bbr.max_bw, 1.0):
+        # BBR estimates the queue was drained
+        bbr2_enter_probe_bw(r, now)
+
+
+# 4.3.3.  ProbeBW
+# 4.3.3.5.3.  Design Considerations for Choosing Constant Parameters
+def bbr2_check_time_to_probe_bw(r: QuicPacketRecovery, now: float) -> bool:
+    bbr = r._cc.bbr_state
+    # Is it time to transition from DOWN or CRUISE to REFILL?
+    if bbr2_has_elapsed_in_phase(r, bbr.bw_probe_wait, now) or bbr2_is_reno_coexistence_probe_time(r):
         
-        # BBR variables
-        # 2.1
-        self.C = BBRGlobalStats()
+        bbr2_start_probe_bw_refill(r)
+        return True
 
-        # 2.2
-        self.packet = None
-        self.packet_table = {}     # a table containing for each packet number as key the value of C when this packet was sent
-
-        # 2.3
-        self.rs = BBRRateSample()
-
-        # 2.4
-        self.cwnd = K_INITIAL_WINDOW
-        self.pacing_rate = 0
-        self.send_quantum = 0
-
-        # 2.5
-        self.pacing_gain = 0
-        self.next_departure_time = 0
-
-        # 2.6
-        self.cwnd_gain = 0
-        self.packet_conservation = False
-        
-
-        # 2.7
-        self.state = None
-        self.round_count = 0
-        self.round_start = True
-        self.next_round_delivered = 0
-        self.idle_restart = False
-
-        # 2.9.1
-        self.max_bw = 0
-        self.bw_hi = 0
-        self.bw_lo = 0
-        self.bw = 0
-
-        # 2.9.2
-        self.min_rtt = 0
-        self.bdp = 0
-        self.extra_acked = 0
-        self.offload_budget = 0
-        self.max_inflight = 0
-        self.inflight_hi = 0
-        self.inflight_lo = 0
-
-        # 2.10
-        self.bw_latest = 0
-        self.inflight_latest = 0
-
-        # 2.11
-        self.MaxBwFilter = 0
-        self.cycle_count = 0
-
-        # 2.12
-        self.extra_acked_interval_start = 0
-        self.extra_acked_delivered = 0
-        self.ExtraACKedFilter = 0
-
-        # 2.13
-        self.filled_pipe = False
-        self.full_bw = 0
-        self.full_bw_count = 0
-
-        # 2.14.1
-        self.min_rtt_stamp = 0
-
-        # 2.14.2
-        self.probe_rtt_min_delay = 0
-        self.probe_rtt_min_stamp = 0
-        self.probe_rtt_expired = False
-
-        # Others
-        self.fast_recovery_counts = 0
-        self.loss_rate = 0
-        self.sequence_ranges_lost = 0
-        self.rounds_since_probe = 0
-        self.bw_probe_samples = 0
-        self.is_cwnd_limited = False
-        self.cycle_idx = 0
+    return False
 
 
-        # BBROnInit
-        now = Now()
-        self.caller = kwargs["caller"]   # the parent, allowing to get the smoothed rtt
-        self.SRTT = self.caller._rtt_smoothed
+# Randomized decision about how long to wait until
+# probing for bandwidth, using round count and wall clock.
+def bbr2_pick_probe_wait(r: QuicPacketRecovery):
 
-        # TODO
-        #init_windowed_max_filter(filter=BBR.MaxBwFilter, value=0, time=0)
-        self.min_rtt = self.SRTT if self.SRTT else float('inf')
-        self.min_rtt_stamp = now
-        self.probe_rtt_done_stamp = 0
-        self.probe_rtt_round_done = False
-        self.prior_cwnd = 0
-        self.idle_restart = False
-        self.extra_acked_interval_start = now
-        self.extra_acked_delivered = 0
-        self.BBRResetCongestionSignals()
-        self.BBRResetLowerBounds()
-        self.BBRInitRoundCounting()
-        self.BBRInitFullPipe()
-        self.BBRInitPacingRate()
-        self.BBREnterStartup()
+    bbr = r._cc.bbr_state
 
-    def on_packet_acked(self, packet: QuicSentPacket) -> None:
-        super().on_packet_acked(packet)
-        self.packet = packet
-        self.C.delivered += packet.sent_bytes
-        self.rs.tx_in_flight -= packet.sent_bytes
-        self.C.packets_in_flight -= 1
-        self.rs.newly_acked = packet.sent_bytes
-        self.BBRUpdateModelAndState()
-        self.BBRUpdateControlParameters()
+    # Decide random round-trip bound for wait
+    bbr.rounds_since_probe = randint(0,1)
 
-        del self.packet_table[packet.packet_number]    
-        self.rs.newly_acked = 0  # resetting the number of bytes acked 
+    # Decide the random wall clock bound for wait
+    bbr.bw_probe_wait = 2.0 + random()
+
+def bbr2_is_reno_coexistence_probe_time(r: QuicPacketRecovery) -> bool:
+    bbr = r._cc.bbr_state
+    reno_rounds = bbr2_target_inflight(r)
+    rounds = min(reno_rounds, 63)
+
+    return bbr.rounds_since_probe >= rounds
+
+# How much data do we want in flight?
+# Our estimated BDP, unless congestion cut cwnd.
+def bbr2_target_inflight(r: QuicPacketRecovery) -> int:
+    bbr = r._cc.bbr_state
+    return min(bbr.bdp, bbr.cwnd)
 
 
-    def on_packet_sent(self, packet: QuicSentPacket) -> None:
-        super().on_packet_sent(packet)
-
-        self.rs.tx_in_flight += packet.sent_bytes
-        self.C.packets_in_flight += 1
-
-        self.packet_table[packet.packet_number] = copy(self.C)
-        self.packet_table[packet.packet_number].inflight = self.rs.inflight  # copy the number of bytes in flight at sending time
-        # BBROnTransmit
-        self.BBRHandleRestartFromIdle()
-
-    def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
-        super().on_packets_expired(packets)
-
-        for packet in packets:
-            self.rs.tx_in_flight -= packet.sent_bytes
-            # delete the entries for this packet number in tables
-            del self.packet_table[packet.packet_number]     
-            self.C.packets_in_flight -= 1
-
-    def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
-        super().on_packets_lost(packets, now)
-
-        for packet in packets:
-            self.C.lost += packet.sent_bytes
-            self.rs.newly_lost += packet.sent_bytes
-            self.rs.tx_in_flight -= packet.sent_bytes
-
-        self.fast_recovery_counts += 1
-
-        self.BBRHandleLostPacket(packets)
-
-        for packet in packets:
-            del self.packet_table[packet.packet_number]  
-            self.C.packets_in_flight -= 1
-        self.rs.newly_lost = 0 # reset newly lost number of bytes
+# 4.3.3.6.  ProbeBW Algorithm Details
+def bbr2_enter_probe_bw(r: QuicPacketRecovery, now: float):
+    bbr2_start_probe_bw_down(r, now)
 
 
-    def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
-        super().on_rtt_measurement(latest_rtt, now)
-        # check whether we should exit slow start
+def bbr2_start_probe_bw_down(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+    bbr2_reset_congestion_signals(r)
 
-        """
-        if self.ssthresh is None and self._rtt_monitor.is_rtt_increasing(
-            latest_rtt, now
-        ):
-            self.ssthresh = self.congestion_window
-        """
+    # not growing inflight_hi
+    bbr.probe_up_cnt = MAX_INT
 
-    def get_congestion_window(self) -> int:
-        return int(self.cwnd)
-    
-    def get_ssthresh(self) -> int: 
-        return None
-    
-    def get_bytes_in_flight(self) -> int:
-        return self.rs.inflight
-    
-    def BBRUpdateModelAndState(self):
-        self.BBRUpdateLatestDeliverySignals()
-        self.BBRUpdateCongestionSignals()
-        self.BBRUpdateACKAggregation()
-        self.BBRCheckStartupDone()
-        self.BBRCheckDrain()
-        self.BBRUpdateProbeBWCyclePhase()
-        self.BBRUpdateMinRTT()
-        self.BBRCheckProbeRTT()
-        self.BBRAdvanceLatestDeliverySignals()
-        self.BBRBoundBWForModel()
+    bbr2_pick_probe_wait(r)
 
-    def BBRUpdateControlParameters(self):
-        self.BBRSetPacingRate()
-        self.BBRSetSendQuantum()
-        self.BBRSetCwnd()
-    
-    def BBREnterStartup(self):
-        self.state = BBRStates.Startup
-        self.pacing_gain = K_BBR_STARTUP_PACING_GAIN
-        self.cwnd_gain = K_BBR_STARTUP_CWND_GAIN
+    # start wall clock
+    bbr.cycle_stamp = now
+    bbr.ack_phase = BBR2ACKPhase.ProbeStopping
 
-    def BBRInitFullPipe(self):
-        self.filled_pipe = False
-        self.full_bw = 0
-        self.full_bw_count = 0
+    bbr2_start_round(r)
 
-    def BBRCheckStartupDone(self):
-        self.BBRCheckStartupFullBandwidth()
-        self.BBRCheckStartupHighLoss()
-        if (self.state == BBRStates.Startup and self.filled_pipe):
-            self.BBREnterDrain()
+    bbr.state = BBR2State.ProbeBWDOWN
+    bbr.pacing_gain = K_BBR2_PROBE_DOWN_PACING_GAIN
+    bbr.cwnd_gain = K_BBR2_CWND_GAIN
 
-    def BBRCheckStartupFullBandwidth(self):
-        if self.filled_pipe or not self.round_start or self.rs.is_app_limited:
-            return  # no need to check for a full pipe now 
-        if (self.max_bw >= self.full_bw * 1.25):  # still growing ? 
-            self.full_bw = self.max_bw    # record new baseline level 
-            self.full_bw_count = 0
+
+def bbr2_start_probe_bw_cruise(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+
+    bbr.state = BBR2State.ProbeBWCRUISE
+    bbr.pacing_gain = K_BBR2_PACING_GAIN
+    bbr.cwnd_gain = K_BBR2_CWND_GAIN
+
+
+def bbr2_start_probe_bw_refill(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    bbr2_reset_lower_bounds(r)
+
+    bbr.bw_probe_up_rounds = 0
+    bbr.bw_probe_up_acks = 0
+    bbr.ack_phase = BBR2ACKPhase.Refilling
+
+    bbr2_start_round(r)
+
+    bbr.state = BBR2State.ProbeBWREFILL
+    bbr.pacing_gain = K_BBR2_PACING_GAIN
+    bbr.cwnd_gain = K_BBR2_CWND_GAIN
+
+def bbr2_start_probe_bw_up(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+    bbr.ack_phase = BBR2ACKPhase.ProbeStarting
+
+    bbr2_start_round(r)
+
+    # Start wall clock.
+    bbr.cycle_stamp = now
+    bbr.state = BBR2State.ProbeBWUP
+    bbr.pacing_gain = K_BBR2_PROBE_UP_PACING_GAIN
+    bbr.cwnd_gain = K_BBR2_CWND_GAIN
+
+    bbr2_raise_inflight_hi_slope(r)
+
+
+# The core state machine logic for ProbeBW
+def bbr2_update_probe_bw_cycle_phase(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+    if not bbr.filled_pipe :
+        # only handling steady-state behavior here
+        return
+
+    bbr2_adapt_upper_bounds(r, now)
+
+    if not bbr2_is_in_a_probe_bw_state(r):
+        # only handling ProbeBW states here
+        return
+
+    if (bbr.state == BBR2State.ProbeBWDOWN):
+        if bbr2_check_time_to_probe_bw(r, now):
+            # Already decided state transition.
             return
-        self.full_bw_count += 1 # another round w/o much growth 
-        if (self.full_bw_count >= 3):
-            self.filled_pipe = True
 
-    def BBRCheckStartupHighLoss(self):
-        # TODO make sure this function is working !!!!!
-        self.loss_rate = self.rs.lost / (self.rs.tx_in_flight)
-        if (self.fast_recovery_counts >= 1 and self.loss_rate >= K_BBR_LOSS_THRESHOLD): # and self.sequence_ranges_lost >= 3):
-            self.filled_pipe = True
-
-    def BBREnterDrain(self):
-        self.state = BBRStates.Drain
-        self.pacing_gain = 1/K_BBR_STARTUP_PACING_GAIN  # pace slowly 
-        self.cwnd_gain = K_BBR_STARTUP_CWND_GAIN      # maintain cwnd
-    
-    def BBRCheckDrain(self):
-        if (self.state == BBRStates.Drain and self.C.packets_in_flight <= self.BBRInflight(self.bw, 1.0)):
-            self.BBREnterProbeBW()  # BBR estimates the queue was drained 
-
-    
-    def BBRCheckTimeToProbeBW(self):
-        """ Is it time to transition from DOWN or CRUISE to REFILL? """
-        if (self.BBRHasElapsedInPhase(self.bw_probe_wait) or self.BBRIsRenoCoexistenceProbeTime()):
-            self.BBRStartProbeBW_REFILL()
-            return True
-        return False
-    
-
-    def BBRPickProbeWait(self):
-        """
-        Randomized decision about how long to wait until
-        probing for bandwidth, using round count and wall clock.
-        """
-        # Decide random round-trip bound for wait: 
-        self.rounds_since_bw_probe = random.randint(0, 1); # 0 or 1 
-        # Decide the random wall clock bound for wait: 
-        self.bw_probe_wait = 2 + random.random()     # 2 + 0..1 sec
-
-    def BBRIsRenoCoexistenceProbeTime(self):
-        reno_rounds = self.BBRTargetInflight()
-        rounds = min(reno_rounds, 63)
-        return self.rounds_since_bw_probe >= rounds
-    
-    def BBRTargetInflight(self):
-        """
-        How much data do we want in flight?
-        Our estimated BDP, unless congestion cut cwnd.
-        """
-        return min(self.bdp, self.cwnd)
-    
-    def BBREnterProbeBW(self):
-        self.BBRStartProbeBW_DOWN()
-
-    def BBRStartProbeBW_DOWN(self):
-        self.BBRResetCongestionSignals()
-        self.probe_up_cnt = float("inf")  # not growing inflight_hi
-        self.BBRPickProbeWait()
-        self.cycle_stamp = Now()  # start wall clock 
-        self.ack_phase  = ACKPhase.ACKS_PROBE_STOPPING
-        self.BBRStartRound()
-        self.state = BBRStates.ProbeBW_DOWN
-
-    def BBRStartProbeBW_CRUISE(self):
-        self.state = BBRStates.ProbeBW_CRUISE
-
-    def BBRStartProbeBW_REFILL(self):
-        self.BBRResetLowerBounds()
-        self.bw_probe_up_rounds = 0
-        self.bw_probe_up_acks = 0
-        self.ack_phase = ACKPhase.ACKS_REFILLING
-        self.cycle_idx = BBRStates.ProbeBW_REFILL
-        self.BBRStartRound()
-        self.state = BBRStates.ProbeBW_REFILL
-
-    def BBRStartProbeBW_UP(self):
-        self.ack_phase = ACKPhase.ACKS_PROBE_STARTING
-        self.BBRStartRound()
-        self.cycle_stamp = Now() # start wall clock 
-        self.state = BBRStates.ProbeBW_UP
-        self.BBRRaiseInflightHiSlope()
-
-    def BBRUpdateProbeBWCyclePhase(self):
-        """The core state machine logic for ProbeBW"""
-        if (not self.filled_pipe):
-            return  # only handling steady-state behavior here
-        self.BBRAdaptUpperBounds()
-        if (not self.IsInAProbeBWState()):
-            return # only handling ProbeBW states here: 
-
-        if self.state == BBRStates.ProbeBW_DOWN:
-
-            if (self.BBRCheckTimeToProbeBW()):
-                return # already decided state transition
-            if (self.BBRCheckTimeToCruise()):
-                self.BBRStartProbeBW_CRUISE()
-
-        if self.state == BBRStates.ProbeBW_CRUISE:        
-            if (self.BBRCheckTimeToProbeBW()):
-                return # already decided state transition
-
-        if self.state == BBRStates.ProbeBW_REFILL: 
-            # After one round of REFILL, start UP
-            if (self.round_start):
-                self.bw_probe_samples = 1
-                self.BBRStartProbeBW_UP()
-
-        if self.state == BBRStates.ProbeBW_UP: 
-            if (self.BBRHasElapsedInPhase(self.min_rtt) and self.rs.inflight > self.BBRInflight(self.max_bw, 1.25)):
-                self.BBRStartProbeBW_DOWN()
-
-    def IsInAProbeBWState(self):
-        state = self.state
-        return (state == BBRStates.ProbeBW_DOWN or
-                state == BBRStates.ProbeBW_CRUISE or
-                state == BBRStates.ProbeBW_REFILL or
-                state == BBRStates.ProbeBW_UP)
-    
-      
-    def BBRCheckTimeToCruise(self):
-        """Time to transition from DOWN to CRUISE?"""
-        if (self.rs.inflight > self.BBRInflightWithHeadroom()):
-            return False  # not enough headroom 
-        if (self.rs.inflight <= self.BBRInflight(self.max_bw, 1.0)):
-            return True   # inflight <= estimated BDP
-        
-    
-    def BBRHasElapsedInPhase(self, interval):
-        return Now() > self.cycle_stamp + interval
-    
-
-    def BBRInflightWithHeadroom(self ):
-        """
-        Return a volume of data that tries to leave free
-        headroom in the bottleneck buffer or link for
-        other flows, for fairness convergence and lower
-        RTTs and loss */
-        """
-        if (self.inflight_hi == float("inf")):
-            return float("inf")
-        headroom = max(1, K_BBR_HEADROOM * self.inflight_hi)
-        return max(self.inflight_hi - headroom,  K_BBR_MIN_PIPE_CWND)
-    
-      
-    def BBRProbeInflightHiUpward(self):
-        """
-        Increase inflight_hi if appropriate.
-        """
-        if (not self.is_cwnd_limited or self.cwnd < self.inflight_hi):
-            return  # not fully using inflight_hi, so don't grow it 
-        self.bw_probe_up_acks += self.rs.newly_acked
-        if (self.bw_probe_up_acks >= self.probe_up_cnt):
-            delta = self.bw_probe_up_acks / self.probe_up_cnt
-            self.bw_probe_up_acks -= delta * self.bw_probe_up_cnt
-            self.inflight_hi += delta
-        if (self.round_start):
-            self.BBRRaiseInflightHiSlope()
-
-
-    def BBRAdaptUpperBounds(self):
-        """
-        Track ACK state and update BBR.max_bw window and
-        BBR.inflight_hi and BBR.bw_hi. */
-        """
-        if (self.ack_phase == ACKPhase.ACKS_PROBE_STARTING and self.round_start):
-            # starting to get bw probing samples 
-            self.ack_phase = ACKPhase.ACKS_PROBE_FEEDBACK
-        if (self.ack_phase == ACKPhase.ACKS_PROBE_STOPPING and self.round_start):
-            # end of samples from bw probing phase 
-            if (self.IsInAProbeBWState() and not self.rs.is_app_limited):
-                self.BBRAdvanceMaxBwFilter()
-
-        if (not self.CheckInflightTooHigh()):
-            # Loss rate is safe. Adjust upper bounds upward.
-            if (self.inflight_hi == float("inf") or self.bw_hi == float("inf")):
-                return # no upper bounds to raise
-            if (self.rs.tx_in_flight > self.inflight_hi):
-                self.inflight_hi = self.rs.tx_in_flight
-            if (self.rs.delivery_rate > self.bw_hi):
-                self.bw_hi = self.rs.bw
-            if (self.state == BBRStates.ProbeBW_UP):
-                self.BBRProbeInflightHiUpward()
-    
-    def BBRRaiseInflightHiSlope(self):
-        # Raise inflight_hi slope if appropriate.
-        growth_this_round = K_MAX_DATAGRAM_SIZE << self.bw_probe_up_rounds
-        self.bw_probe_up_rounds = min(self.bw_probe_up_rounds + 1, 30)
-        self.probe_up_cnt = max(self.cwnd / growth_this_round, 1)
-
-    def BBRUpdateMinRTT(self):
-        self.probe_rtt_expired = Now() > self.probe_rtt_min_stamp + K_BRR_PROBE_RTT_INTERVAL
-        if (self.rs.rtt >= 0 and (self.rs.rtt < self.probe_rtt_min_delay or self.probe_rtt_expired)):
-            self.probe_rtt_min_delay = self.rs.rtt
-            self.probe_rtt_min_stamp = Now()
-
-        min_rtt_expired = Now() > self.min_rtt_stamp + K_BRR_MIN_RTT_FILTER_LEN 
-        if (self.probe_rtt_min_delay < self.min_rtt or min_rtt_expired):
-            self.min_rtt       = self.probe_rtt_min_delay
-            self.min_rtt_stamp = self.probe_rtt_min_stamp
-
-    def BBRCheckProbeRTT(self):
-        if (self.state != BBRStates.ProbeRTT and self.probe_rtt_expired and not self.idle_restart):
-            self.BBREnterProbeRTT()
-            self.prior_cwnd = self.BBRSaveCwnd()
-            self.probe_rtt_done_stamp = 0
-            self.ack_phase = ACKPhase.ACKS_PROBE_STOPPING
-            self.BBRStartRound()
-        if (self.state == BBRStates.ProbeRTT):
-            self.BBRHandleProbeRTT()
-        if (self.rs.delivered > 0):
-            self.idle_restart = False
-
-    def BBREnterProbeRTT(self):
-        self.state = BBRStates.ProbeRTT
-        self.pacing_gain = 1
-        self.cwnd_gain = K_BBR_PROBE_RTT_CWND_GAIN  # 0.5 
-
-    def BBRHandleProbeRTT(self):
-        """ Ignore low rate samples during ProbeRTT """
-        self.MarkConnectionAppLimited()
-        if (self.probe_rtt_done_stamp == 0 and self.C.packets_in_flight <= self.BBRProbeRTTCwnd()):
-            # Wait for at least ProbeRTTDuration to elapse:
-            self.probe_rtt_done_stamp = Now() + K_BBR_PROBE_RTT_DURATION
-            # Wait for at least one round to elapse:
-            self.probe_rtt_round_done = False
-            self.BBRStartRound()
-        elif (self.probe_rtt_done_stamp != 0):
-            if (self.round_start):
-                self.probe_rtt_round_done = True
-            if (self.probe_rtt_round_done):
-                self.BBRCheckProbeRTTDone()
-
-    def BBRCheckProbeRTTDone(self):
-        if (self.probe_rtt_done_stamp != 0 and Now() > self.probe_rtt_done_stamp):
-            # schedule next ProbeRTT: 
-            self.probe_rtt_min_stamp = Now()
-            self.BBRRestoreCwnd()
-            self.BBRExitProbeRTT()
-
-    def MarkConnectionAppLimited(self):
-        # TODO : not sure if it was meant to be like that
-        # self.C.app_limited = (self.C.delivered + self.C.packets_in_flight) ? : 1
-        if (self.C.delivered + self.C.packets_in_flight):
-            self.C.app_limited = (self.C.delivered + self.C.packets_in_flight)
-        else:
-            self.C.app_limited = 1
-        pass
-
-    def BBRExitProbeRTT(self):
-        self.BBRResetLowerBounds()
-        if (self.filled_pipe):
-            self.BBRStartProbeBW_DOWN()
-            self.BBRStartProbeBW_CRUISE()
-        else:
-            self.BBREnterStartup()
-
-    def BBRHandleRestartFromIdle(self):
-        if (self.C.packets_in_flight == 0 and self.C.app_limited):
-            self.idle_restart = True
-            self.extra_acked_interval_start = Now()
-            if (self.IsInAProbeBWState()):
-                self.BBRSetPacingRateWithGain(1)
-            elif (self.state == BBRStates.ProbeRTT):
-                self.BBRCheckProbeRTTDone()
-
-    def BBRInitRoundCounting(self):
-        self.next_round_delivered = 0
-        self.round_start = False
-        self.round_count = 0
-
-    def BBRUpdateRound(self):
-        if (self.packet_table[self.packet.packet_number].delivered >= self.next_round_delivered):
-            self.BBRStartRound()
-            self.round_count += 1
-            self.rounds_since_probe += 1
-            self.round_start = True
-        else:
-            self.round_start = False
-
-    def BBRStartRound(self):
-        self.next_round_delivered = self.C.delivered
-
-    def BBRUpdateMaxBw(self):
-        self.BBRUpdateRound()
-        if (self.rs.delivery_rate >= self.max_bw or not self.rs.is_app_limited):
-            # TODO
-            pass
-            """
-            self.max_bw = update_windowed_max_filter(
-                        filter=self.MaxBwFilter,
-                        value=self.rs.delivery_rate,
-                        time=self.cycle_count,
-                        window_length=K_BBR_MAX_BW_FILTER_LEN)
-            """
-            
-    def BBRAdvanceMaxBwFilter(self):
-        self.cycle_count += 1
-
-    def BBRUpdateOffloadBudget(self):
-        self.offload_budget = 3 * self.send_quantum
-
-    def BBRUpdateACKAggregation(self):
-        """ Find excess ACKed beyond expected amount over this interval """
-        interval = (Now() - self.extra_acked_interval_start)
-        expected_delivered = self.bw * interval
-        # Reset interval if ACK rate is below expected rate:
-        if (self.extra_acked_delivered <= expected_delivered):
-            self.extra_acked_delivered = 0
-            self.extra_acked_interval_start = Now()
-            expected_delivered = 0
-        self.extra_acked_delivered += self.rs.newly_acked
-        extra = self.extra_acked_delivered - expected_delivered
-        extra = min(extra, self.cwnd)
-        # TODO
-        """
-        self.extra_acked = update_windowed_max_filter(
-                            filter=self.ExtraACKedFilter,
-                            value=extra,
-                            time=self.round_count,
-                            window_length=K_BBR_EW_EXTRA_ACKED_FILTER_LEN)
-        """
+        if bbr2_check_time_to_cruise(r):
+            bbr2_start_probe_bw_cruise(r)
         
 
-    def CheckInflightTooHigh(self):
-        """
-        Do loss signals suggest inflight is too high?
-        If so, react.
-        """
-        if (self.IsInflightTooHigh()):
-            if (self.bw_probe_samples):
-                self.BBRHandleInflightTooHigh()
-            return True  # inflight too high
-        else:
-            return False # inflight not too high
-        
-    def IsInflightTooHigh(self):
-        return (self.rs.lost > self.rs.tx_in_flight * K_BBR_LOSS_THRESHOLD)
-    
-    def BBRHandleInflightTooHigh(self):
-        self.bw_probe_samples = 0;   # only react once per bw probe 
-        if (not self.rs.is_app_limited):
-            self.inflight_hi = max(self.rs.tx_in_flight, self.BBRTargetInflight() * K_BBR_BETA)
-        if (self.state == BBRStates.ProbeBW_UP):
-            self.BBRStartProbeBW_DOWN()
+    if (bbr.state == BBR2State.ProbeBWCRUISE):
+        bbr2_check_time_to_probe_bw(r, now)
 
-    def  BBRHandleLostPacket(self, packets : Iterable[QuicSentPacket]):
-        if (not self.bw_probe_samples):
-            return # not a packet sent while probing bandwidth 
-        for packet in packets:
-            self.rs.tx_in_flight = self.packet_table[packet.packet_number].inflight  # inflight at transmit
-            self.rs.lost = self.C.lost - self.packet_table[packet.packet_number].lost # data lost since transmit 
-            #self.rs.is_app_limited = packet.is_app_limited
-        if (self.IsInflightTooHigh()):
-            self.rs.tx_in_flight = self.BBRInflightHiFromLostPacket(self.rs, packets)
-            self.BBRHandleInflightTooHigh()
+    if (bbr.state == BBR2State.ProbeBWREFILL):
+        # After one round of REFILL, start UP.
+        if bbr.round_start:
+            bbr.bw_probe_samples = True
 
-    def BBRInflightHiFromLostPacket(self, rs : BBRRateSample, packets : QuicSentPacket):
-        """
-        At what prefix of packet did losses exceed BBRLossThresh?
-        """
-        size = 0
-        for packet in packets:
-            size += packet.sent_bytes
-        # What was in flight before this packet?
-        inflight_prev = rs.tx_in_flight - size
-        # What was lost before this packet? 
-        lost_prev = rs.lost - size
-        lost_prefix = (K_BBR_LOSS_THRESHOLD * inflight_prev - lost_prev) / (1 - K_BBR_LOSS_THRESHOLD)
-        # At what inflight value did losses cross BBRLossThresh? 
-        inflight = inflight_prev + lost_prefix
-        return inflight
-    
-    
-    def BBRUpdateLatestDeliverySignals(self):
-        """
-        Near start of ACK processing
-        """
-        self.loss_round_start = 0
-        self.bw_latest       = max(self.bw_latest,       self.rs.delivery_rate)
-        self.inflight_latest = max(self.inflight_latest, self.rs.delivered)
+            bbr2_start_probe_bw_up(r, now)
 
-        # TODO
-        """
-        if (self.rs.prior_delivered >= self.loss_round_delivered):
-            self.loss_round_delivered = self.C.delivered
-            self.loss_round_start = 1
-        """
-   
-    def BBRAdvanceLatestDeliverySignals(self):
-        """
-         Near end of ACK processing
-        """
-        if (self.loss_round_start):
-            self.bw_latest       = self.rs.delivery_rate
-            self.inflight_latest = self.rs.delivered
+    if (bbr.state == BBR2State.ProbeBWDOWN):
+        if bbr2_has_elapsed_in_phase(r, bbr.min_rtt, now) and bbr.bytes_in_flight > bbr2_inflight(r, bbr.max_bw, 1.25):
+            bbr2_start_probe_bw_down(r, now)
 
-    def BBRResetCongestionSignals(self):
-        self.loss_in_round = 0
-        self.bw_latest = 0
-        self.inflight_latest = 0
 
-    def BBRUpdateCongestionSignals(self):
-        """
-        Update congestion state on every ACK
-        """
-        self.BBRUpdateMaxBw()
-        # TODO verify rs.losses
-        if (self.rs.lost > 0):
-            self.loss_in_round = 1
-        if (not self.loss_round_start):
-            return  # wait until end of round trip 
-        self.BBRAdaptLowerBoundsFromCongestion()
-        self.loss_in_round = 0
+def bbr2_is_in_a_probe_bw_state(r: QuicPacketRecovery) -> bool:
+    bbr = r._cc.bbr_state
+    state = bbr.state
 
-    def BBRAdaptLowerBoundsFromCongestion(self):
-        """
-        Once per round-trip respond to congestion
-        """
-        if (self.BBRIsProbingBW()):
-            return
-        if (self.loss_in_round()):
-            self.BBRInitLowerBounds()
-            self.BBRLossLowerBounds()
+    return state == BBR2State.ProbeBWDOWN or \
+        state == BBR2State.ProbeBWCRUISE or \
+        state == BBR2State.ProbeBWREFILL or \
+        state == BBR2State.ProbeBWUP
 
-    def BBRInitLowerBounds(self):
-        """
-        Handle the first congestion episode in this cycle
-        """
-        if (self.bw_lo == float("inf")):
-            self.bw_lo = self.max_bw
-        if (self.inflight_lo == float("inf")):
-            self.inflight_lo = self.cwnd
 
-    def BBRLossLowerBounds(self):
-        """
-        Adjust model once per round based on loss
-        """
-        self.bw_lo       = max(self.bw_latest,
-                            K_BBR_BETA * self.bw_lo)
-        self.inflight_lo = max(self.inflight_latest,
-                            K_BBR_BETA * self.infligh_lo)
-
-    def BBRResetLowerBounds(self):
-        self.bw_lo       = float("inf")
-        self.inflight_lo = float("inf")
-
-    def BBRBoundBWForModel(self):
-        self.bw = min(self.max_bw, self.bw_lo, self.bw_hi)  
-
-    def BBRInitPacingRate(self):
-        nominal_bandwidth = K_MINIMUM_WINDOW / (self.SRTT if self.SRTT else 0.001)
-        self.pacing_rate =  K_BBR_STARTUP_PACING_GAIN * nominal_bandwidth
-
-    def BBRSetPacingRateWithGain(self, pacing_gain):
-        rate = pacing_gain * self.bw * (100 - K_BBR_PACING_MARGIN_PERCENT) / 100
-        if (self.filled_pipe or rate > self.pacing_rate):
-            self.pacing_rate = rate
-
-    def BBRSetPacingRate(self):
-        self.BBRSetPacingRateWithGain(self.pacing_gain)
-     
-
-    def BBRSetSendQuantum(self):
-        if (self.pacing_rate < 1.2e6):  # less than 1.2 Mbps
-            floor = 1 * K_MAX_DATAGRAM_SIZE
-        else:
-            floor = 2 * K_MAX_DATAGRAM_SIZE
-        self.send_quantum = min(self.pacing_rate * 0.001, 64e3)  # 1ms, 64 KBytes
-        self.send_quantum = max(self.send_quantum, floor)
-
-    def BBRBDPMultiple(self, bw, gain):
-        if (self.min_rtt == float("inf")):
-            return K_MINIMUM_WINDOW  # no valid RTT samples yet */
-        self.bdp = bw * self.min_rtt
-        return gain * self.bdp
-
-    def BBRQuantizationBudget(self, inflight):
-        self.BBRUpdateOffloadBudget()
-        inflight = max(inflight, self.offload_budget)
-        inflight = max(inflight, K_BBR_MIN_PIPE_CWND)
-        if (is_ProbeBW(self.state) and self.cycle_idx == BBRStates.ProbeBW_UP):
-            inflight += 2
-        return inflight
-
-    def BBRInflight(self, bw, gain):
-        inflight = self.BBRBDPMultiple(bw, gain)
-        return self.BBRQuantizationBudget(inflight)
-
-    def BBRUpdateMaxInflight(self):
-        # TODO
-        # self.BBRUpdateAggregationBudget()
-        inflight = self.BBRBDPMultiple(self.bw, self.cwnd_gain)
-        inflight += self.extra_acked
-        self.max_inflight = self.BBRQuantizationBudget(inflight)
-
-    def BBROnEnterRTO(self):
-        self.prior_cwnd = self.BBRSaveCwnd()
-        self.cwnd = self.C.packets_in_flight + 1
-
-    def BBROnEnterFastRecovery(self):
-        self.prior_cwnd = self.BBRSaveCwnd()
-        self.cwnd = self.C.packets_in_flight + max(self.rs.newly_acked, 1)
-        self.packet_conservation = True
-
-    def BBRModulateCwndForRecovery(self):
-        if (self.rs.newly_lost > 0):
-            self.cwnd = max(self.cwnd - self.rs.newly_lost, 1)
-        if (self.packet_conservation):
-            self.cwnd = max(self.cwnd, self.C.packets_in_flight + self.rs.newly_acked)
-
-    def BBRSaveCwnd(self):
-        if (not self.InLossRecovery() and self.state != BBRStates.ProbeRTT):
-            return self.cwnd
-        else:
-            return max(self.prior_cwnd, self.cwnd)
-        
-    def InLossRecovery(self):
-        # TODO
+def bbr2_check_time_to_cruise(r: QuicPacketRecovery) -> bool:
+    bbr = r._cc.bbr_state
+    if bbr.bytes_in_flight > bbr2_inflight_with_headroom(r):
+        # Not enough headroom.
         return False
 
-    def BBRRestoreCwnd(self):
-        self.cwnd = max(self.cwnd, self.prior_cwnd)
+    if bbr.bytes_in_flight <= bbr2_inflight(r, r.bbr2_state.max_bw, 1.0):
+        # inflight <= estimated BDP
+        return True
 
-    def BBRProbeRTTCwnd(self):
-        probe_rtt_cwnd = self.BBRBDPMultiple(self.bw, K_BBR_PROBE_RTT_CWND_GAIN)
-        probe_rtt_cwnd = max(probe_rtt_cwnd, K_BBR_MIN_PIPE_CWND)
-        return probe_rtt_cwnd
+    return False
 
-    def BBRBoundCwndForProbeRTT(self):
-        if (self.state == BBRStates.ProbeRTT):
-            self.cwnd = min(self.cwnd, self.BBRProbeRTTCwnd())
 
-    def BBRSetCwnd(self):
-        self.BBRUpdateMaxInflight()
-        self.BBRModulateCwndForRecovery()
-        if (not self.packet_conservation):
-            print(F"Max inflight = {self.max_inflight}")
-            if (self.filled_pipe):
-                self.cwnd = min(self.cwnd + self.rs.newly_acked, self.max_inflight)
-            elif (self.cwnd < self.max_inflight or self.C.delivered < K_MINIMUM_WINDOW):
-                self.cwnd = self.cwnd + self.rs.newly_acked
-            self.cwnd = max(self.cwnd, K_BBR_MIN_PIPE_CWND)
-        self.BBRBoundCwndForProbeRTT()
-        self.BBRBoundCwndForModel()
+def bbr2_has_elapsed_in_phase(
+    r: QuicPacketRecovery, interval: float, now: float,
+) -> bool:
+    bbr = r._cc.bbr_state
+    return now > bbr.cycle_stamp + interval
 
-    def BBRBoundCwndForModel(self):
-        cap = float("inf")
-        if (self.IsInAProbeBWState() and self.state != BBRStates.ProbeBW_CRUISE):
-            cap = self.inflight_hi
-        elif (self.state == BBRStates.ProbeRTT or self.state == BBRStates.ProbeBW_CRUISE):
-            cap = self.BBRInflightWithHeadroom()
 
-        # apply inflight_lo (possibly infinite):
-        cap = min(cap, self.inflight_lo)
-        cap = max(cap, K_BBR_MIN_PIPE_CWND)
-        self.cwnd = min(self.cwnd, cap)
+# Return a volume of data that tries to leave free
+# headroom in the bottleneck buffer or link for
+# other flows, for fairness convergence and lower
+# RTTs and loss
+def bbr2_inflight_with_headroom(r: QuicPacketRecovery) -> int:
+    bbr = r._cc.bbr_state
+
+    if bbr.inflight_hi == MAX_INT:
+        return MAX_INT
+
+
+    headroom = max(int(K_BBR2_HEADROOM * bbr.inflight_hi), 1)
+
+    bbr.inflight_hi = max(max(bbr.inflight_hi - headroom, 0), bbr2_min_pipe_cwnd(r))
+
+# Raise inflight_hi slope if appropriate.
+def bbr2_raise_inflight_hi_slope(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+
+    growth_this_round = (1 << bbr.bw_probe_up_rounds) * K_MAX_DATAGRAM_SIZE
+
+    bbr.bw_probe_up_rounds = min(bbr.bw_probe_up_rounds + 1, 30)
+    bbr.probe_up_cnt = max(bbr.congestion_window / growth_this_round, 1)
+
+# Increase inflight_hi if appropriate.
+def bbr2_probe_inflight_hi_upward(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    # TODO app_limited
+    if r.app_limited() or bbr.congestion_window < bbr.inflight_hi:
+        # Not fully using inflight_hi, so don't grow it.
+        return
+
+    # bw_probe_up_acks is a packet count.
+    bbr.bw_probe_up_acks += 1
+
+    if bbr.bw_probe_up_acks >= bbr.probe_up_cnt:
+        delta = bbr.bw_probe_up_acks / bbr.probe_up_cnt
+
+        bbr.bw_probe_up_acks -= delta * bbr.probe_up_cnt
+
+        bbr.inflight_hi += delta * K_MAX_DATAGRAM_SIZE
+
+    if bbr.round_start:
+        bbr2_raise_inflight_hi_slope(r)
+
+
+# Track ACK state and update bbr.max_bw window and
+# bbr.inflight_hi and bbr.bw_hi.
+def bbr2_adapt_upper_bounds(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+    if bbr.ack_phase == BBR2ACKPhase.ProbeStarting and bbr.round_start:
+        # Starting to get bw probing samples.
+        bbr.ack_phase = BBR2ACKPhase.ProbeFeedback
+
+    if bbr.ack_phase == BBR2ACKPhase.ProbeStopping and bbr.round_start:
+        bbr.bw_probe_samples = False
+        bbr.ack_phase = BBR2ACKPhase.Init
+
+        # End of samples from bw probing phase.
+        # TODO app_limited
+        if bbr2_is_in_a_probe_bw_state(r) and not r.delivery_rate.sample_is_app_limited():
+            bbr2_advance_max_bw_filter(r)
+
+    if not bbr2_check_inflight_too_high(r, now):
+        # Loss rate is safe. Adjust upper bounds upward.
+        if bbr.inflight_hi == MAX_INT or bbr.bw_hi == MAX_INT:
+            # No upper bounds to raise.
+            return
+
+        if bbr.tx_in_flight > bbr.inflight_hi:
+            bbr.inflight_hi = bbr.tx_in_flight
+
+        # TODO delivery_rate
+        if r.delivery_rate() > bbr.bw_hi:
+            bbr.bw_hi = r.delivery_rate()
+
+        if bbr.state == BBR2State.ProbeBWUP:
+            bbr2_probe_inflight_hi_upward(r)
+
+
+# 4.3.4. ProbeRTT
+# 4.3.4.4.  ProbeRTT Logic
+def bbr2_update_min_rtt(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+
+    bbr.probe_rtt_expired = now > bbr.probe_rtt_min_stamp + K_BBR2_PROBE_RTT_INTERVAL
+
+    # TODO sample rtt
+    rs_rtt = r.delivery_rate.sample_rtt()
+
+    if not rs_rtt == 0 and (rs_rtt < bbr.probe_rtt_min_delay or bbr.probe_rtt_expired):
+        bbr.probe_rtt_min_delay = rs_rtt
+        bbr.probe_rtt_min_stamp = now
+
+    min_rtt_expired = now > bbr.min_rtt_stamp + rs_rtt * K_BBR2_MIN_RTT_FILTER_LEN
+
+    # To do: Figure out Probe RTT logic
+    # if bbr.probe_rtt_min_delay < bbr.min_rtt ||  bbr.min_rtt == INITIAL_RTT ||
+    # min_rtt_expired {
+    if bbr.min_rtt == K_BBR2_INITIAL_RTT or min_rtt_expired:
+        # bbr.min_rtt = bbr.probe_rtt_min_delay;
+        # bbr.min_rtt_stamp = bbr.probe_rtt_min_stamp;
+        bbr.min_rtt = rs_rtt
+        bbr.min_rtt_stamp = now
+
+def bbr2_check_probe_rtt(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+    if bbr.state != BBR2State.ProbeRTT and bbr.probe_rtt_expired and not bbr.idle_restart:
+        bbr2_enter_probe_rtt(r)
+
+        bbr.prior_cwnd = bbr2_save_cwnd(r)
+        bbr.probe_rtt_done_stamp = None
+        bbr.ack_phase = BBR2ACKPhase.ProbeStopping
+
+        bbr2_start_round(r)
+
+    if bbr.state ==  BBR2State.ProbeRTT:
+        bbr2_handle_probe_rtt(r, now)
+
+    # TODO : sample delivered
+    if r.delivery_rate.sample_delivered() > 0:
+        r.bbr2_state.idle_restart = False
+
+def bbr2_enter_probe_rtt(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+
+    bbr.state = BBR2State.ProbeRTT
+    bbr.pacing_gain = K_BBR2_PACING_GAIN
+    bbr.cwnd_gain = K_BBR2_PROBE_RTT_CWND_GAIN
+
+def bbr2_handle_probe_rtt(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+    # TODO update app limited
+    # Ignore low rate samples during ProbeRTT.
+    r.delivery_rate.update_app_limited(True)
+
+    if bbr.probe_rtt_done_stamp != None:
+        if bbr.round_start:
+            bbr.probe_rtt_round_done = True
+
+        if bbr.probe_rtt_round_done:
+            bbr2_check_probe_rtt_done(r, now)
+        
+    elif bbr.bytes_in_flight <= bbr2_probe_rtt_cwnd(r):
+        # Wait for at least ProbeRTTDuration to elapse.
+        bbr.probe_rtt_done_stamp = now + K_BBR2_PROBE_RTT_DURATION
+
+        # Wait for at lease one round to elapse.
+        bbr.probe_rtt_round_done = False
+
+        bbr2_start_round(r)
+
+
+def bbr2_check_probe_rtt_done(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+
+    if bbr.probe_rtt_done_stamp != None:
+        if now > bbr.probe_rtt_done_stamp:
+            # Schedule next ProbeRTT.
+            bbr.probe_rtt_min_stamp = now
+
+            bbr2_restore_cwnd(r)
+            bbr2_exit_probe_rtt(r, now)
+
+# 4.3.4.5.  Exiting ProbeRTT
+def bbr2_exit_probe_rtt(r: QuicPacketRecovery, now: float):
+    bbr = r._cc.bbr_state
+    bbr2_reset_lower_bounds(r)
+
+    if bbr.filled_pipe:
+        bbr2_start_probe_bw_down(r, now)
+        bbr2_start_probe_bw_cruise(r)
+    else:
+        bbr2_enter_startup(r)
+
+# 4.5.1.  BBR.round_count: Tracking Packet-Timed Round Trips
+def bbr2_update_round(r: QuicPacketRecovery, packet: QuicSentPacket):
+    bbr = r._cc.bbr_state
+    # TODO : packet.delivered
+    if packet.delivered >= bbr.next_round_delivered:
+        bbr2_start_round(r)
+
+        bbr.round_count += 1
+        bbr.rounds_since_probe += 1
+        bbr.round_start = True
+    else:
+        bbr.round_start = False
+
+
+def bbr2_start_round(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    # TODO : delivered
+    bbr.next_round_delivered = r.delivery_rate.delivered()
+
+# 4.5.2.4.  Updating the BBR.max_bw Max Filter
+def bbr2_update_max_bw(r: QuicPacketRecovery, packet: QuicSentPacket):
+    bbr = r._cc.bbr_state
+    bbr2_update_round(r, packet)
+
+    # TODO : delivery rate + app_limited
+    if r.delivery_rate() >= bbr.max_bw or not r.delivery_rate.sample_is_app_limited():
+        # TODO : understant what this does...
+        max_bw_filter_len = r.delivery_rate.sample_rtt().saturating_mul(K_BBR2_MIN_RTT_FILTER_LEN)
+
+        bbr.max_bw = bbr.max_bw_filter.running_max(max_bw_filter_len, bbr.start_time + bbr.cycle_count, r.delivery_rate())
+
+# 4.5.2.5.  Tracking Time for the BBR.max_bw Max Filter
+def bbr2_advance_max_bw_filter(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    bbr.cycle_count += 1
+
+# 4.5.4.  BBR.offload_budget
+def bbr2_update_offload_budget(r: QuicPacketRecovery):
+    # TODO : send_quantum
+    bbr = r._cc.bbr_state
+    bbr.offload_budget = 3 * r.send_quantum
+
+# 4.5.5.  BBR.extra_acked
+def bbr2_update_ack_aggregation(r: QuicPacketRecovery, packet: QuicSentPacket, now: float):
+    bbr = r._cc.bbr_state
+
+    # Find excess ACKed beyond expected amount over this interval.
+    interval = now - bbr.extra_acked_interval_start
+    expected_delivered = int(bbr.bw * interval)
+
+    # Reset interval if ACK rate is below expected rate.
+    if bbr.extra_acked_delivered <= expected_delivered:
+        bbr.extra_acked_delivered = 0
+        bbr.extra_acked_interval_start = now
+        expected_delivered = 0
+
+    bbr.extra_acked_delivered += packet.sent_bytes
+
+    extra = max(bbr.extra_acked_delivered - expected_delivered, 0)
+    extra = min(extra, bbr.congestion_window)
+
+    # TODO : understand what this does...
+    extra_acked_filter_len = r.delivery_rate.sample_rtt().saturating_mul(K_BBR2_MIN_RTT_FILTER_LEN)
+
+    bbr.extra_acked = bbr.extra_acked_filter.running_max(extra_acked_filter_len, bbr.start_time + bbr.round_count, extra)
+
+
+# 4.6.3.  Send Quantum: BBR.send_quantum
+def bbr2_set_send_quantum(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+
+    rate = bbr.pacing_rate
+    floor = K_MAX_DATAGRAM_SIZE if rate < PACING_RATE_1_2MBPS else 2 * K_MAX_DATAGRAM_SIZE
+
+    # TODO : send_quantum
+    r.send_quantum = min(int(rate / 1000), 64 * 1024); # Assumes send buffer is limited to 64KB
+    r.send_quantum = max(r.send_quantum, floor)
+
+
+# 4.6.4.1.  Initial cwnd
+# 4.6.4.2.  Computing BBR.max_inflight
+def bbr2_bdp_multiple(r: QuicPacketRecovery, bw: int, gain: float) -> int: 
+    bbr = r._cc.bbr_state
+
+    if bbr.min_rtt == float("inf"):
+        # No valid RTT samples yet.
+        return  K_INITIAL_WINDOW
+
+    bbr.bdp = int(bw * bbr.min_rtt)
+
+    return int(gain * bbr.bdp)
+
+
+def bbr2_quantization_budget(r: QuicPacketRecovery, inflight: int) -> int:
+    bbr = r._cc.bbr_state
+    bbr2_update_offload_budget(r)
+
+    inflight = max(inflight, bbr.offload_budget)
+    inflight = max(inflight, bbr2_min_pipe_cwnd(r))
+
+    # TODO: cycle_idx is unused
+    if bbr.state == BBR2State.ProbeBWUP:
+        return inflight + 2 * K_MAX_DATAGRAM_SIZE
+
+    return inflight
+
+def bbr2_inflight(r: QuicPacketRecovery, bw: int, gain: float) -> int:
+    inflight = bbr2_bdp_multiple(r, bw, gain)
+
+    return bbr2_quantization_budget(r, inflight)
+
+def bbr2_update_max_inflight(r: QuicPacketRecovery):
+    # TODO: not implemented (not in the draft)
+    # bbr2_update_aggregation_budget(r);
+
+    bbr = r._cc.bbr_state
+
+    inflight = bbr2_bdp_multiple(r, bbr.max_bw, bbr.cwnd_gain)
+    inflight = inflight + bbr.extra_acked
+
+    bbr.max_inflight = bbr2_quantization_budget(r, inflight)
+
+
+# 4.6.4.4.  Modulating cwnd in Loss Recovery
+def bbr2_save_cwnd(r: QuicPacketRecovery) -> int:
+    bbr = r._cc.bbr_state
+
+    if not bbr.in_recovery and bbr.state != BBR2State.ProbeRTT:
+        return bbr.cwnd
+    else:
+        max(bbr.cwnd, bbr.prior_cwnd)
+
+def bbr2_restore_cwnd(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    bbr.cwnd = max(bbr.cwnd, bbr.prior_cwnd)
+
+def bbr2_modulate_cwnd_for_recovery(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    acked_bytes = bbr.newly_acked_bytes
+    lost_bytes = bbr.newly_lost_bytes
+
+    if lost_bytes > 0:
+        # QUIC mininum cwnd is 2 x MSS.
+        bbr.cwnd = max(r.cwnd - lost_bytes, K_MINIMUM_WINDOW)
+
+    if bbr.packet_conservation:
+        bbr.cwnd = max(bbr.cwnd, bbr.bytes_in_flight + acked_bytes)
+
+
+# 4.6.4.5.  Modulating cwnd in ProbeRTT
+def bbr2_probe_rtt_cwnd(r: QuicPacketRecovery) -> int:
+    bbr = r._cc.bbr_state
+    probe_rtt_cwnd = bbr2_bdp_multiple(r, bbr.bw, K_BBR2_PROBE_RTT_CWND_GAIN)
+
+    return max(probe_rtt_cwnd, bbr2_min_pipe_cwnd(r))
+
+
+def bbr2_bound_cwnd_for_probe_rtt(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    if bbr.state == BBR2State.ProbeRTT:
+        bbr.cwnd = min(bbr.cwnd, bbr2_probe_rtt_cwnd(r))
+
+# 4.6.4.6.  Core cwnd Adjustment Mechanism
+def bbr2_set_cwnd(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    acked_bytes = bbr.newly_acked_bytes
+
+    bbr2_update_max_inflight(r)
+    bbr2_modulate_cwnd_for_recovery(r)
+
+    if not bbr.packet_conservation:
+        if bbr.filled_pipe:
+            bbr.cwnd = min(bbr.cwnd + acked_bytes, bbr.max_inflight)
+        # TODO delivery rate
+        elif bbr.cwnd < bbr.max_inflight or r.delivery_rate.delivered() < K_INITIAL_WINDOW:
+            bbr.cwnd += acked_bytes
+        bbr.cwnd = max(bbr.cwnd, bbr2_min_pipe_cwnd(r))
+
+    bbr2_bound_cwnd_for_probe_rtt(r)
+    bbr2_bound_cwnd_for_model(r)
+
+# 4.6.4.7.  Bounding cwnd Based on Recent Congestion
+def bbr2_bound_cwnd_for_model(r: QuicPacketRecovery):
+    bbr = r._cc.bbr_state
+    cap = MAX_INT
+
+    if bbr2_is_in_a_probe_bw_state(r) and bbr.state != BBR2State.ProbeBWCRUISE:
+        cap = bbr.inflight_hi
+    elif bbr.state == BBR2State.ProbeRTT or bbr.state == BBR2State.ProbeBWCRUISE:
+        cap = bbr2_inflight_with_headroom(r)
+
+    # Apply inflight_lo (possibly infinite).
+    cap = min(cap, bbr.inflight_lo)
+    cap = max(cap, bbr2_min_pipe_cwnd(r))
+
+    bbr.cwnd = min(bbr.cwnd, cap)

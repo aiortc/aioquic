@@ -1,6 +1,6 @@
 from .congestion import QuicCongestionControl, K_LOSS_REDUCTION_FACTOR, K_INITIAL_WINDOW, K_MAX_DATAGRAM_SIZE, K_MINIMUM_WINDOW, QuicRttMonitor
 from ..packet_builder import QuicSentPacket
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Dict, Any
 
 class RenoCongestionControl(QuicCongestionControl):
     """
@@ -79,3 +79,6 @@ class RenoCongestionControl(QuicCongestionControl):
     
     def get_bytes_in_flight(self) -> int:
         return self.bytes_in_flight
+    
+    def log_callback(self) -> Dict[str, Any]:
+        return super().log_callback()
