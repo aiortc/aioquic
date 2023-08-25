@@ -4,7 +4,7 @@ from functools import partial
 from typing import Callable, Dict, Optional, Text, Union, cast
 
 from ..buffer import Buffer
-from ..quic.configuration import QuicConfiguration
+from ..quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
 from ..quic.connection import NetworkAddress, QuicConnection
 from ..quic.packet import (
     PACKET_TYPE_INITIAL,
@@ -85,7 +85,7 @@ class QuicServer(asyncio.DatagramProtocol):
         retry_source_connection_id: Optional[bytes] = None
         if (
             protocol is None
-            and len(data) >= 1200
+            and len(data) >= SMALLEST_MAX_DATAGRAM_SIZE
             and header.packet_type == PACKET_TYPE_INITIAL
         ):
             # retry

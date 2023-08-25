@@ -14,9 +14,8 @@ K_MICRO_SECOND = 0.000001
 K_SECOND = 1.0
 
 # congestion control
-K_MAX_DATAGRAM_SIZE = 1280
-K_INITIAL_WINDOW = 10 * K_MAX_DATAGRAM_SIZE
-K_MINIMUM_WINDOW = 2 * K_MAX_DATAGRAM_SIZE
+K_INITIAL_WINDOW = 10
+K_MINIMUM_WINDOW = 2
 K_LOSS_REDUCTION_FACTOR = 0.5
 
 
@@ -37,7 +36,8 @@ class QuicPacketSpace:
 
 
 class QuicPacketPacer:
-    def __init__(self) -> None:
+    def __init__(self, *, max_datagram_size: int) -> None:
+        self._max_datagram_size = max_datagram_size
         self.bucket_max: float = 0.0
         self.bucket_time: float = 0.0
         self.evaluation_time: float = 0.0
@@ -68,13 +68,13 @@ class QuicPacketPacer:
     def update_rate(self, congestion_window: int, smoothed_rtt: float) -> None:
         pacing_rate = congestion_window / max(smoothed_rtt, K_MICRO_SECOND)
         self.packet_time = max(
-            K_MICRO_SECOND, min(K_MAX_DATAGRAM_SIZE / pacing_rate, K_SECOND)
+            K_MICRO_SECOND, min(self._max_datagram_size / pacing_rate, K_SECOND)
         )
 
         self.bucket_max = (
             max(
-                2 * K_MAX_DATAGRAM_SIZE,
-                min(congestion_window // 4, 16 * K_MAX_DATAGRAM_SIZE),
+                2 * self._max_datagram_size,
+                min(congestion_window // 4, 16 * self._max_datagram_size),
             )
             / pacing_rate
         )
@@ -87,9 +87,10 @@ class QuicCongestionControl:
     New Reno congestion control.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_datagram_size: int) -> None:
+        self._max_datagram_size = max_datagram_size
         self.bytes_in_flight = 0
-        self.congestion_window = K_INITIAL_WINDOW
+        self.congestion_window = K_INITIAL_WINDOW * self._max_datagram_size
         self._congestion_recovery_start_time = 0.0
         self._congestion_stash = 0
         self._rtt_monitor = QuicRttMonitor()
@@ -111,7 +112,7 @@ class QuicCongestionControl:
             count = self._congestion_stash // self.congestion_window
             if count:
                 self._congestion_stash -= count * self.congestion_window
-                self.congestion_window += count * K_MAX_DATAGRAM_SIZE
+                self.congestion_window += count * self._max_datagram_size
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
         self.bytes_in_flight += packet.sent_bytes
@@ -131,7 +132,8 @@ class QuicCongestionControl:
         if lost_largest_time > self._congestion_recovery_start_time:
             self._congestion_recovery_start_time = now
             self.congestion_window = max(
-                int(self.congestion_window * K_LOSS_REDUCTION_FACTOR), K_MINIMUM_WINDOW
+                int(self.congestion_window * K_LOSS_REDUCTION_FACTOR),
+                K_MINIMUM_WINDOW * self._max_datagram_size,
             )
             self.ssthresh = self.congestion_window
 
@@ -153,6 +155,7 @@ class QuicPacketRecovery:
     def __init__(
         self,
         initial_rtt: float,
+        max_datagram_size: int,
         peer_completed_address_validation: bool,
         send_probe: Callable[[], None],
         logger: Optional[logging.LoggerAdapter] = None,
@@ -178,8 +181,8 @@ class QuicPacketRecovery:
         self._time_of_last_sent_ack_eliciting_packet = 0.0
 
         # congestion control
-        self._cc = QuicCongestionControl()
-        self._pacer = QuicPacketPacer()
+        self._cc = QuicCongestionControl(max_datagram_size=max_datagram_size)
+        self._pacer = QuicPacketPacer(max_datagram_size=max_datagram_size)
 
     @property
     def bytes_in_flight(self) -> int:
