@@ -495,6 +495,8 @@ async def main(
 
 
 if __name__ == "__main__":
+    defaults = QuicConfiguration(is_client=False)
+
     parser = argparse.ArgumentParser(description="QUIC server")
     parser.add_argument(
         "app",
@@ -533,6 +535,12 @@ if __name__ == "__main__":
         "--secrets-log",
         type=str,
         help="log secrets to a file, for use with Wireshark",
+    )
+    parser.add_argument(
+        "--max-datagram-size",
+        type=int,
+        default=defaults.max_datagram_size,
+        help="maximum datagram size to send, excluding UDP or IP overhead",
     )
     parser.add_argument(
         "-q",
@@ -576,6 +584,7 @@ if __name__ == "__main__":
         alpn_protocols=H3_ALPN + H0_ALPN + ["siduck"],
         is_client=False,
         max_datagram_frame_size=65536,
+        max_datagram_size=args.max_datagram_size,
         quic_logger=quic_logger,
         secrets_log_file=secrets_log_file,
     )

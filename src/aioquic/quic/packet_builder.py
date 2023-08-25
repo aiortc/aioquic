@@ -17,7 +17,6 @@ from .packet import (
     is_long_header,
 )
 
-PACKET_MAX_SIZE = 1280
 PACKET_LENGTH_SEND_SIZE = 2
 PACKET_NUMBER_SEND_SIZE = 2
 
@@ -64,6 +63,7 @@ class QuicPacketBuilder:
         peer_cid: bytes,
         version: int,
         is_client: bool,
+        max_datagram_size: int,
         packet_number: int = 0,
         peer_token: bytes = b"",
         quic_logger: Optional[QuicLoggerTrace] = None,
@@ -98,9 +98,9 @@ class QuicPacketBuilder:
         self._packet_start = 0
         self._packet_type = 0
 
-        self._buffer = Buffer(PACKET_MAX_SIZE)
-        self._buffer_capacity = PACKET_MAX_SIZE
-        self._flight_capacity = PACKET_MAX_SIZE
+        self._buffer = Buffer(max_datagram_size)
+        self._buffer_capacity = max_datagram_size
+        self._flight_capacity = max_datagram_size
 
     @property
     def packet_is_empty(self) -> bool:
