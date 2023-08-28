@@ -90,6 +90,9 @@ class QuicCongestionControl:
         else:
             self.callback = None
 
+    def on_init(self, *args, **kwargs):
+        pass
+
     def on_packet_acked(self, packet: QuicSentPacket):
         if self.callback:
             self.callback(CongestionEvent.ACK, self)

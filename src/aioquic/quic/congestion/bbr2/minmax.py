@@ -84,14 +84,14 @@ class Minmax:
         delta_time = Now() - self.estimates[2].time
 
         # Reset if there's nothing in the window or a new min value is found.
-        if val.value <= self.estimate[0].value or delta_time > win:
+        if val.value <= self.estimates[0].value or delta_time > win:
             return self.reset(time, meas)
 
-        if val.value <= self.estimate[1].value:
-            self.estimate[2] = val
-            self.estimate[1] = val
-        elif val.value <= self.estimate[2].value:
-            self.estimate[2] = val
+        if val.value <= self.estimates[1].value:
+            self.estimates[2] = val
+            self.estimates[1] = val
+        elif val.value <= self.estimates[2].value:
+            self.estimates[2] = val
 
         return self.subwin_update(win, time, meas)
     
@@ -102,14 +102,14 @@ class Minmax:
         delta_time = Now() - self.estimates[2].time
 
         # Reset if there's nothing in the window or a new max value is found.
-        if val.value >= self.estimate[0].value or delta_time > win:
+        if val.value >= self.estimates[0].value or delta_time > win:
             return self.reset(time, meas)
 
-        if val.value >= self.estimate[1].value:
-            self.estimate[2] = val
-            self.estimate[1] = val
-        elif val.value >= self.estimate[2].value:
-            self.estimate[2] = val
+        if val.value >= self.estimates[1].value:
+            self.estimates[2] = val
+            self.estimates[1] = val
+        elif val.value >= self.estimates[2].value:
+            self.estimates[2] = val
 
         return self.subwin_update(win, time, meas)
     
@@ -124,27 +124,27 @@ class Minmax:
             # new val & 3rd estimate the new 2nd choice. we may have to iterate
             # this since our 2nd estimate may also be outside the window (we
             # checked on entry that the third estimate was in the window).
-            self.estimate[0] = self.estimate[1]
-            self.estimate[1] = self.estimate[2]
-            self.estimate[2] = val
+            self.estimates[0] = self.estimates[1]
+            self.estimates[1] = self.estimates[2]
+            self.estimates[2] = val
 
-            if Now() - self.estimate[0].time > win:
-                self.estimate[0] = self.estimate[1]
-                self.estimate[1] = self.estimate[2]
-                self.estimate[2] = val
+            if Now() - self.estimates[0].time > win:
+                self.estimates[0] = self.estimates[1]
+                self.estimates[1] = self.estimates[2]
+                self.estimates[2] = val
 
-        elif self.estimate[1].time == self.estimate[0].time and delta_time > win / 4.0:
+        elif self.estimates[1].time == self.estimates[0].time and delta_time > win / 4.0:
 
             # We've passed a quarter of the window without a new val so take a
             # 2nd estimate from the 2nd quarter of the window.
-            self.estimate[2] = val
-            self.estimate[1] = val
-        elif self.estimate[2].time == self.estimate[1].time and delta_time > win / 2.0:
+            self.estimates[2] = val
+            self.estimates[1] = val
+        elif self.estimates[2].time == self.estimates[1].time and delta_time > win / 2.0:
         
             # We've passed half the window without finding a new val so take a
             # 3rd estimate from the last half of the window.
-            self.estimate[2] = val
+            self.estimates[2] = val
         
 
-        return self.estimate[0].value
+        return self.estimates[0].value
     

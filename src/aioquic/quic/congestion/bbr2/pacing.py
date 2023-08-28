@@ -1,4 +1,4 @@
-from ...recovery import QuicPacketRecovery
+from ...recovery import QuicPacketRecovery, K_GRANULARITY
 from .values import BBR2, K_BBR2_STARTUP_PACING_GAIN, K_BBR2_PACING_MARGIN_PERCENT
 
 # Copyright (C) 2022, Cloudflare, Inc.
@@ -34,7 +34,7 @@ from .values import BBR2, K_BBR2_STARTUP_PACING_GAIN, K_BBR2_PACING_MARGIN_PERCE
 def bbr2_init_pacing_rate(r: QuicPacketRecovery):
     bbr : BBR2 = r._cc.bbr_state
 
-    srtt = r._rtt_smoothed
+    srtt = max(r._rtt_smoothed, K_GRANULARITY)
 
     # At init, cwnd is initcwnd.
     nominal_bandwidth = bbr.cwnd / srtt

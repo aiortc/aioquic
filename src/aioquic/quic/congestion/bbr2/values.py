@@ -38,7 +38,7 @@ K_BBR2_CWND_GAIN = 2.0
 K_BBR2_LOSS_THRESH = 0.02
 
 # Exit startup if the number of loss marking events is >=FULL_LOSS_COUNT
-K_BBR2_FULL_LOSS_COUNT = 8
+K_BBR2_FULL_LOSS_COUNT = 3
 
 # The default multiplicative decrease to make upon each round
 # trip during which the connection detects packet loss (the value is
@@ -105,11 +105,11 @@ class BBR2State(Enum):
     ProbeRTT=6
     
 class BBR2ACKPhase(Enum):
-    INIT=0
-    ACKS_PROBE_FEEDBACK=1
-    ACKS_PROBE_STARTING=2
-    ACKS_PROBE_STOPPING=3
-    ACKS_REFILLING=4
+    Init=0
+    ProbeFeedback=1
+    ProbeStarting=2
+    ProbeStopping=3
+    Refilling=4
     
 
 @dataclass
@@ -336,7 +336,7 @@ class BBR2:
 
     cycle_stamp: float = Now()
 
-    ack_phase: BBR2ACKPhase = BBR2ACKPhase.INIT
+    ack_phase: BBR2ACKPhase = BBR2ACKPhase.Init
 
     bw_probe_up_rounds: int = 0
 
@@ -352,11 +352,3 @@ class BBR2:
 
     # the congestion window used by the recovery
     cwnd : int = K_INITIAL_WINDOW
-
-    # The number of bytes in flight 
-    # TODO : update it when sending/receiving a packet
-    bytes_in_flight : int = 0
-
-    # The number of lost bytes
-    # TODO : update it when a packet is lost
-    bytes_lost : int = 0

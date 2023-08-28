@@ -39,6 +39,7 @@ class QuicPacketPacer:
         self.bucket_time: float = 0.0
         self.evaluation_time: float = 0.0
         self.packet_time: Optional[float] = None
+        self.pacing_rate = None
 
     def next_send_time(self, now: float) -> float:
         if self.packet_time is not None:
@@ -63,7 +64,10 @@ class QuicPacketPacer:
             self.evaluation_time = now
 
     def update_rate(self, congestion_window: int, smoothed_rtt: float) -> None:
-        pacing_rate = congestion_window / max(smoothed_rtt, K_MICRO_SECOND)
+        if self.pacing_rate == None or self.pacing_rate == 0:
+            pacing_rate = congestion_window / max(smoothed_rtt, K_MICRO_SECOND)
+        else:
+            pacing_rate = self.pacing_rate
         self.packet_time = max(
             K_MICRO_SECOND, min(K_MAX_DATAGRAM_SIZE / pacing_rate, K_SECOND)
         )
@@ -77,6 +81,9 @@ class QuicPacketPacer:
         )
         if self.bucket_time > self.bucket_max:
             self.bucket_time = self.bucket_max
+
+    def set_pacing_rate(self, rate):
+        self.pacing_rate = rate
 
 
 class QuicPacketRecovery:
@@ -118,6 +125,8 @@ class QuicPacketRecovery:
             self._cc = congestion_control_algo(caller=self, **congestion_options)
         else:
             self._cc = congestion_control_algo(caller=self)
+        self._cc.on_init()
+        
         self._pacer = QuicPacketPacer()
 
     @property

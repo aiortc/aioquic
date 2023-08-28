@@ -42,7 +42,7 @@ def bbr2_on_transmit(r: QuicPacketRecovery, now: float):
 def bbr2_handle_restart_from_idle(r: QuicPacketRecovery, now: float):
     bbr = r._cc.bbr_state
     # TODO r.delivery_rate.app_limited()
-    if bbr.bytes_in_flight == 0 and r.delivery_rate.app_limited():
+    if r._cc.rs.inflight == 0 and r._cc.rs.app_limited:
         bbr.idle_restart = True
         bbr.extra_acked_interval_start = now
 
