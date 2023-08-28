@@ -31,6 +31,10 @@ class CubicCongestionControl(QuicCongestionControl):
         self._W_est = None
         self._first_slow_start = True
         self._starting_congestion_avoidance = False
+        self.K = 0
+        self._W_est = 0
+        self._cwnd_epoch = 0
+        self._t_epoch = 0
         
 
     def better_cube_root(self, x):
@@ -40,6 +44,21 @@ class CubicCongestionControl(QuicCongestionControl):
         else:
             return (x)**(1./3.)
         
+    def W_cubic(self, t):
+        return K_CUBIC_C * (t - self.K)**3 + (self._W_max)
+        
+    def is_slow_start(self) -> bool:
+        return self.ssthresh is None or self.congestion_window < self.ssthresh
+    
+    def is_reno_friendly(self, t) -> bool:
+        return self.W_cubic(t) < self._W_est
+    
+    def is_concave(self):
+        return self.congestion_window < self._W_max
+    
+    def is_convex(self):
+        return self.congestion_window >= self._W_max
+        
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
         self.on_packet_acked_timed(packet, Now(), self.caller._rtt_smoothed)
         super().on_packet_acked(packet)
@@ -47,18 +66,21 @@ class CubicCongestionControl(QuicCongestionControl):
     def on_packet_acked_timed(self, packet: QuicSentPacket, now: float, rtt : float) -> None:
         self.bytes_in_flight -= packet.sent_bytes
 
-        if self.ssthresh is None or self.congestion_window < self.ssthresh:
+        if self.is_slow_start():
             # slow start
             self.congestion_window += packet.sent_bytes // K_MAX_DATAGRAM_SIZE
         else:
             # congestion avoidance
             if (self._first_slow_start and not self._starting_congestion_avoidance):
+                # exiting slow start without having a loss
                 self._first_slow_start = False
                 self._cwnd_prior = self.congestion_window
                 self._W_max = self.congestion_window
                 self._t_epoch = now
                 self._cwnd_epoch = self.congestion_window
                 self._W_est = self._cwnd_epoch
+                # calculate K
+                self.K = self.better_cube_root((self._W_max - self._cwnd_epoch)/K_CUBIC_C)
 
             # initialize the variables used at start of congestion avoidance
             if self._starting_congestion_avoidance:
@@ -67,31 +89,27 @@ class CubicCongestionControl(QuicCongestionControl):
                 self._t_epoch = now
                 self._cwnd_epoch = self.congestion_window
                 self._W_est = self._cwnd_epoch
+                # calculate K
+                self.K = self.better_cube_root((self._W_max - self._cwnd_epoch)/K_CUBIC_C)
 
             seg_ack = packet.sent_bytes // K_MAX_DATAGRAM_SIZE
             self._W_est = self._W_est + K_CUBIC_ADDITIVE_INCREASE*(seg_ack/self.congestion_window)
 
             t = now - self._t_epoch
-
-            # calculate K by converting W_max in term of number of segments
-            K = self.better_cube_root((self._W_max - self._cwnd_epoch)/K_CUBIC_C)
-
-            def W_cubic(t):
-                return K_CUBIC_C * (t - K)**3 + (self._W_max)
             
             target = None
-            if (W_cubic(t + rtt) < self.congestion_window):
+            if (self.W_cubic(t + rtt) < self.congestion_window):
                 target = self.congestion_window
-            elif (W_cubic(t + rtt) > 1.5*self.congestion_window):
+            elif (self.W_cubic(t + rtt) > 1.5*self.congestion_window):
                 target = self.congestion_window*1.5
             else:
-                target = W_cubic(t + rtt)
+                target = self.W_cubic(t + rtt)
 
 
-            if W_cubic(t) < self._W_est:
+            if self.is_reno_friendly(t):
                 # reno friendly region of cubic (https://www.rfc-editor.org/rfc/rfc9438.html#name-reno-friendly-region)
                 self.congestion_window = self._W_est
-            elif self.congestion_window < self._W_max:
+            elif self.is_concave():
                 # concave region of cubic (https://www.rfc-editor.org/rfc/rfc9438.html#name-concave-region)
                 self.congestion_window = self.congestion_window + ((target - self.congestion_window)/self.congestion_window)
             else:
@@ -166,5 +184,17 @@ class CubicCongestionControl(QuicCongestionControl):
             data["W_max"] = None
         else:
             data["W_max"] = int(self._W_max * K_MAX_DATAGRAM_SIZE)
+
+        # saving the phase
+        if not self.is_slow_start():
+            now = Now()
+            t = now - self._t_epoch
+        
+        if (self.is_slow_start()):
+            data["Phase"] = "slow-start"
+        elif (self.is_reno_friendly(t)):
+            data["Phase"] = "reno-friendly region"
+        else:
+            data["Phase"] = "cubic-growth"
 
         return data

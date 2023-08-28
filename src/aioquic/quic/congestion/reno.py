@@ -16,6 +16,9 @@ class RenoCongestionControl(QuicCongestionControl):
         self._rtt_monitor = QuicRttMonitor()
         self.ssthresh: Optional[int] = None
 
+    def is_slow_start(self) -> bool:
+        return self.ssthresh is None or self.congestion_window < self.ssthresh
+
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
         super().on_packet_acked(packet)
         self.bytes_in_flight -= packet.sent_bytes
@@ -24,7 +27,7 @@ class RenoCongestionControl(QuicCongestionControl):
         if packet.sent_time <= self._congestion_recovery_start_time:
             return
 
-        if self.ssthresh is None or self.congestion_window < self.ssthresh:
+        if self.is_slow_start():
             # slow start
             self.congestion_window += packet.sent_bytes
         else:
@@ -81,4 +84,9 @@ class RenoCongestionControl(QuicCongestionControl):
         return self.bytes_in_flight
     
     def log_callback(self) -> Dict[str, Any]:
-        return super().log_callback()
+        data = super().log_callback()
+        if (self.is_slow_start()):
+            data["Phase"] = "slow-start"
+        else:
+            data["Phase"] = "congestion-avoidance"
+        return data

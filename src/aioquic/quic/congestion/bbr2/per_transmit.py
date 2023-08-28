@@ -1,6 +1,6 @@
 from ...recovery import QuicPacketRecovery
 from ..congestion import Now
-from .per_ack import bbr2_is_in_a_probe_bw_state, bbr2_check_probe_rtt_done
+from .bbr2_methods import bbr2_is_in_a_probe_bw_state, bbr2_check_probe_rtt_done
 from .pacing import bbr2_set_pacing_rate_with_gain
 from .values import BBR2State
 
@@ -42,7 +42,7 @@ def bbr2_on_transmit(r: QuicPacketRecovery, now: float):
 def bbr2_handle_restart_from_idle(r: QuicPacketRecovery, now: float):
     bbr = r._cc.bbr_state
     # TODO r.delivery_rate.app_limited()
-    if bbr.bytes_in_flight == 0: #and r.delivery_rate.app_limited():
+    if bbr.bytes_in_flight == 0 and r.delivery_rate.app_limited():
         bbr.idle_restart = True
         bbr.extra_acked_interval_start = now
 

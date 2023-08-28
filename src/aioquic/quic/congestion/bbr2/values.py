@@ -93,6 +93,8 @@ K_BBR2_MAX_BW_COUNT = 3
 # Some unatteignable value representing MaxInt
 MAX_INT = 10e64  
 
+K_BBR2_INITIAL_RTT = 0.333
+
 class BBR2State(Enum):
     Startup=0
     Drain=1
@@ -311,7 +313,7 @@ class BBR2:
     in_recovery: bool = False
 
     #Start time of the connection.
-    start_time: float
+    start_time: float = Now()
 
     #Saved cwnd before loss recovery.
     prior_cwnd: int = 0

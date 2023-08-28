@@ -1,8 +1,8 @@
 from ..congestion import QuicCongestionControl, Now
 from ...packet_builder import QuicSentPacket
 from typing import Iterable, Optional, Dict, Any
-from .values import BBR2
-from .init import bbr2_init
+from .values import BBR2, BBR2State
+from .bbr2_methods import bbr2_init
 from .per_transmit import bbr2_on_transmit
 
 # this implementation is heavily based on the one done on the quiche implementation 
@@ -44,4 +44,22 @@ class BBR2CongestionControl(QuicCongestionControl):
         pass
 
     def log_callback(self) -> Dict[str, Any]:
-        return super().log_callback()
+        data = super().log_callback()
+
+        if (data.bbr_state.state == BBR2State.Startup):
+            data["Phase"] = "Startup"
+        if (data.bbr_state.state == BBR2State.Drain):
+            data["Phase"] = "Drain"
+        if (data.bbr_state.state == BBR2State.ProbeBWUP):
+            data["Phase"] = "ProbeBWUP"
+        if (data.bbr_state.state == BBR2State.ProbeBWDOWN):
+            data["Phase"] = "ProbeBWDOWN"
+        if (data.bbr_state.state == BBR2State.ProbeBWREFILL):
+            data["Phase"] = "ProbeBWREFILL"
+        if (data.bbr_state.state == BBR2State.ProbeBWCRUISE):
+            data["Phase"] = "ProbeBWCRUISE"
+        if (data.bbr_state.state == BBR2State.ProbeRTT):
+            data["Phase"] = "ProbeRTT"
+        
+
+        return data
