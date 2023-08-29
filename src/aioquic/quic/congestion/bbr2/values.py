@@ -68,7 +68,7 @@ K_BBR2_MIN_PIPE_CWND_PKTS = 4
 
 # A constant specifying the length of the BBR.min_rtt min filter window,
 # MinRTTFilterLen is 10 secs.
-K_BBR2_MIN_RTT_FILTER_LEN = 1
+K_BBR2_MIN_RTT_FILTER_LEN = 10
 
 # A constant specifying the gain value for calculating the cwnd during
 # ProbeRTT: 0.5 (meaning that ProbeRTT attempts to reduce in-flight data to

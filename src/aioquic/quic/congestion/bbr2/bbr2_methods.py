@@ -1,4 +1,4 @@
-from ...recovery import QuicPacketRecovery, K_GRANULARITY
+from ...recovery import QuicPacketRecovery, K_GRANULARITY, K_MICRO_SECOND
 from random import random, randint
 from ...packet_builder import QuicSentPacket
 from .values import *
@@ -63,7 +63,7 @@ def bbr2_update_control_parameters(r: QuicPacketRecovery, now: float):
 
     # Set outgoing packet pacing rate
     # It is called here because send_quantum may be updated too.
-    r._pacer.set_pacing_rate(bbr.pacing_rate)
+    # r._pacer.set_pacing_rate(bbr.pacing_rate)
 
     bbr2_set_cwnd(r)
 
@@ -350,7 +350,7 @@ def bbr2_adapt_upper_bounds(r: QuicPacketRecovery, now: float):
             bbr.inflight_hi = bbr.tx_in_flight
 
         if r._cc.rs.delivery_rate > bbr.bw_hi:
-            bbr.bw_hi = r.delivery_rate()
+            bbr.bw_hi = r._cc.rs.delivery_rate
 
         if bbr.state == BBR2State.ProbeBWUP:
             bbr2_probe_inflight_hi_upward(r)
@@ -556,6 +556,8 @@ def bbr2_update_max_inflight(r: QuicPacketRecovery):
 
     bbr.max_inflight = bbr2_quantization_budget(r, inflight)
 
+    return bbr.max_inflight
+
 
 # 4.6.4.4.  Modulating cwnd in Loss Recovery
 def bbr2_save_cwnd(r: QuicPacketRecovery) -> int:
@@ -689,7 +691,7 @@ def bbr2_inflight_hi_from_lost_packet(r: QuicPacketRecovery, packet: QuicSentPac
     size = packet.sent_bytes
     inflight_prev = bbr.tx_in_flight - size
     lost_prev = r._cc.rs.lost - size
-    lost_prefix = (K_BBR2_LOSS_THRESH * inflight_prev - lost_prev) / (1.0 - K_BBR2_LOSS_THRESH)
+    lost_prefix = ((K_BBR2_LOSS_THRESH * inflight_prev) - lost_prev) / (1.0 - K_BBR2_LOSS_THRESH)
 
     return int(inflight_prev + lost_prefix)
 
@@ -700,9 +702,9 @@ def bbr2_update_latest_delivery_signals(r: QuicPacketRecovery):
     # Near start of ACK processing.
     bbr.loss_round_start = False
     bbr.bw_latest = max(bbr.bw_latest, r._cc.rs.delivery_rate)
-    bbr.inflight_latest = max(bbr.inflight_latest, r._cc.rs.delivery_rate)
+    bbr.inflight_latest = max(bbr.inflight_latest, r._cc.rs.inflight)
 
-    if r._cc.rs.delivered >= bbr.loss_round_delivered:
+    if r._cc.rs.prior_delivered >= bbr.loss_round_delivered:
         
         bbr.loss_round_delivered = r._cc.rs.delivered
         bbr.loss_round_start = True
@@ -729,6 +731,7 @@ def bbr2_update_congestion_signals(r: QuicPacketRecovery, packet: QuicSentPacket
 
     # Update congestion state on every ACK.
     bbr2_update_max_bw(r, packet)
+
 
     if bbr.lost > 0:
         bbr.loss_in_round = True
@@ -824,7 +827,10 @@ def bbr2_update_max_bw(r: QuicPacketRecovery, packet: QuicSentPacket):
     bbr = r._cc.bbr_state
     bbr2_update_round(r, packet)
 
-    if r._cc.rs.delivery_rate >= bbr.max_bw or not r._cc.rs.app_limited:
+
+    rate = r._cc.rs.delivery_rate
+    if rate >= bbr.max_bw or not r._cc.rs.app_limited:
+        
         max_bw_filter_len = r._rtt_smoothed * (K_BBR2_MIN_RTT_FILTER_LEN)
 
         bbr.max_bw = bbr.max_bw_filter.running_max(max_bw_filter_len, bbr.start_time + bbr.cycle_count, r._cc.rs.delivery_rate)

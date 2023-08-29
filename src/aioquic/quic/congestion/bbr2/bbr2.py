@@ -1,5 +1,5 @@
 from ..congestion import QuicCongestionControl, Now, K_MAX_DATAGRAM_SIZE
-from ...recovery import QuicPacketRecovery
+from ...recovery import QuicPacketRecovery, K_MICRO_SECOND
 from ...packet_builder import QuicSentPacket
 from typing import Iterable, Optional, Dict, Any
 from .values import BBR2, BBR2State
@@ -18,8 +18,7 @@ class BBR2CongestionControl(QuicCongestionControl):
         super().__init__(*args, **kwargs)
         self.bbr_state = BBR2()
         self.recovery = kwargs["caller"]
-        self.rs = RateSample()
-        self.in_congestion_recovery = False
+        self.rs = RateSample(self.recovery)
 
     def on_init(self, *args, **kwargs):
         bbr2_init(self.recovery)
@@ -27,27 +26,27 @@ class BBR2CongestionControl(QuicCongestionControl):
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
         super().on_packet_acked(packet)
 
+        if self.bbr_state.state == BBR2State.Drain:
+            print("Drain")
+
         now = Now()
-        
 
-        self.bbr_state.newly_acked_bytes = 0
-
-        time_sent = packet.sent_time
+        self.bbr_state.newly_acked_bytes = packet.sent_bytes
+        self.rs.on_ack(packet)
 
         self.bbr_state.prior_bytes_in_flight = self.rs.inflight
 
         bbr2_update_model_and_state(self.recovery, packet, now)
 
-        self.rs.on_ack(packet)
-        self.bbr_state.newly_acked_bytes += packet.sent_bytes
-
-        if not self.rs.in_congestion_recovery(time_sent):
+        if not self.rs.in_congestion_recovery(packet) and self.bbr_state.in_recovery:
             # Upon exiting loss recovery.
             bbr2_exit_recovery(self.recovery)
 
         bbr2_update_control_parameters(self.recovery, now)
 
         self.bbr_state.newly_lost_bytes = 0
+
+        self.rs.rm_packet_info(packet)
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
         super().on_packet_sent(packet)
@@ -74,7 +73,7 @@ class BBR2CongestionControl(QuicCongestionControl):
         self.bbr_state.newly_lost_bytes = lost_bytes
 
         bbr2_update_on_loss(self.recovery, largest_packet, now)
-        if not self.rs.in_congestion_recovery(largest_packet.sent_time):
+        if not self.rs.in_congestion_recovery(largest_packet):
             #Upon entering Fast Recovery.
             bbr2_enter_recovery(self.recovery, now)
 
@@ -86,13 +85,13 @@ class BBR2CongestionControl(QuicCongestionControl):
         super().on_rtt_measurement(latest_rtt, now)
 
     def get_congestion_window(self) -> int:
-        return self.bbr_state.cwnd
+        return int(self.bbr_state.cwnd)
     
     def get_ssthresh(self) -> int: 
         return None
     
     def get_bytes_in_flight(self) -> int:
-        return self.rs.inflight
+        return int(self.rs.inflight)
 
     def log_callback(self) -> Dict[str, Any]:
         data = super().log_callback()
@@ -112,6 +111,7 @@ class BBR2CongestionControl(QuicCongestionControl):
         if (self.bbr_state.state == BBR2State.ProbeRTT):
             data["Phase"] = "ProbeRTT"
         
+        data["pacing_rate"] = self.recovery._pacer.pacing_rate
 
         return data
     

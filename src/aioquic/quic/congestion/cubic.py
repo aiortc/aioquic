@@ -35,7 +35,7 @@ class CubicCongestionControl(QuicCongestionControl):
         self._W_est = 0
         self._cwnd_epoch = 0
         self._t_epoch = 0
-        
+        self._W_max = self.congestion_window
 
     def better_cube_root(self, x):
         if (x < 0):

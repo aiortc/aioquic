@@ -1,9 +1,10 @@
 from ..congestion import Now
+from ...recovery import QuicPacketRecovery
 from ...packet_builder import QuicSentPacket
 
 # a class to collect information about the rate sample
 class RateSample:
-    def __init__(self) -> None:
+    def __init__(self, recovery) -> None:
         self.packet_info = {} # store the informations about Transport controler when packet was sent
         self.delivered = 0
         self.lost = 0
@@ -12,10 +13,12 @@ class RateSample:
         self.app_limited = False
         self.lost_timestamp = None
         self.interval = 0
+        self.start_time = None
+        self.recovery : QuicPacketRecovery = recovery
 
-    def in_congestion_recovery(self, t):
-        # check if we were in congestion recovery at time t
-        return self.lost_timestamp != None and t > self.lost_timestamp
+    def in_congestion_recovery(self, packet):
+        # check if we were in congestion recovery at time when packet was sent
+        return self.lost_timestamp != None and packet.sent_time <= self.lost_timestamp
 
     def update_app_limited(self):
         # consider for the moment that there's no application limitation
@@ -32,7 +35,8 @@ class RateSample:
         self.packet_info[packet.packet_number] = {
             "delivered" : self.delivered,
             "lost" : self.lost,
-            "inflight" : self.inflight
+            "inflight" : self.inflight,
+            "delivery_rate" : self.delivery_rate
         }
 
     def rm_packet_info(self, packet : QuicSentPacket):
@@ -40,30 +44,29 @@ class RateSample:
             del self.packet_info[packet.packet_number]
         except:
             pass
-
-    def time_elapsed(self, packet):
-        # get the time elapsed since the sending of a packet (in seconds)
-        return Now() + packet.sent_time - self.start_time
     
     def update_delivery_rate(self, packet):
         # update delivery rate
-        self.delivery_rate = (self.delivered) / self.interval
+        self.delivery_rate = (self.delivered - self.prior_delivered) / max(self.recovery._rtt_smoothed, 0.1)
 
     def on_ack(self, packet : QuicSentPacket):
-        self.inflight -= max(packet.sent_bytes, 0)
+        self.inflight = max(self.inflight - packet.sent_bytes, 0)
         self.delivered += packet.sent_bytes
+
+        self.prior_delivered = self.get_packet_info(packet)['delivered']
         
         self.update_delivery_rate(packet)
-        self.rm_packet_info(packet)
         
     
     def on_sent(self, packet : QuicSentPacket):
-        self.interval += 1
         self.inflight += packet.sent_bytes
         self.add_packet_info(packet)
+        if (self.start_time == None):
+            self.start_time = Now()
+            self.start_time_packet = packet.sent_time
 
     def on_expired(self, packet : QuicSentPacket):
-        self.inflight - packet.sent_bytes
+        self.inflight -= packet.sent_bytes
         self.rm_packet_info(packet)
 
     def on_lost(self, packet : QuicSentPacket):
