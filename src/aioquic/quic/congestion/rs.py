@@ -1,6 +1,6 @@
-from ..congestion import Now
-from ...recovery import QuicPacketRecovery
-from ...packet_builder import QuicSentPacket
+from .congestion import Now
+from ..recovery import QuicPacketRecovery
+from ..packet_builder import QuicSentPacket
 
 # a class to collect information about the rate sample
 class RateSample:
@@ -20,7 +20,7 @@ class RateSample:
         # check if we were in congestion recovery at time when packet was sent
         return self.lost_timestamp != None and packet.sent_time <= self.lost_timestamp
 
-    def update_app_limited(self):
+    def update_app_limited(self, value):
         # consider for the moment that there's no application limitation
         pass
 
@@ -47,7 +47,8 @@ class RateSample:
     
     def update_delivery_rate(self, packet):
         # update delivery rate
-        self.delivery_rate = (self.delivered - self.prior_delivered) / max(self.recovery._rtt_smoothed, 0.1)
+        # use a minimum rtt of 1ms
+        self.delivery_rate = (self.delivered - self.prior_delivered) / max(self.recovery._rtt_smoothed, 0.001)
 
     def on_ack(self, packet : QuicSentPacket):
         self.inflight = max(self.inflight - packet.sent_bytes, 0)

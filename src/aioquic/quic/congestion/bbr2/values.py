@@ -2,7 +2,7 @@ from ..congestion import K_MAX_DATAGRAM_SIZE, K_MINIMUM_WINDOW, K_INITIAL_WINDOW
 from enum import Enum
 from dataclasses import dataclass
 from typing import Optional
-from .minmax import Minmax
+from ..minmax import Minmax
 
 # The static discount factor of 1% used to scale BBR.bw to produce
 # BBR.pacing_rate.
