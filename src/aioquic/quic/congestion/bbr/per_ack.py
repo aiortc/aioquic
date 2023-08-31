@@ -1,5 +1,5 @@
 import random
-from ...recovery import QuicPacketRecovery
+from ...recovery import QuicPacketRecovery, K_MIN_RTT
 from ..congestion import K_MINIMUM_WINDOW
 from ...packet_builder import QuicSentPacket
 from .pacing import bbr_set_pacing_rate
@@ -101,7 +101,7 @@ def bbr_update_round(r: QuicPacketRecovery, packet: QuicSentPacket):
 # 4.1.2.3. Updating the BBR.RTprop Min Filter
 def bbr_update_rtprop(r: QuicPacketRecovery, now: float):
     bbr = r._cc.bbr_state
-    rs_rtt = max(r._rtt_smoothed, 0.001)  # at least 1ms
+    rs_rtt = r._rtt_smoothed if r._rtt_smoothed >= 0.001 else float("inf")
 
     bbr.rtprop_expired = now > bbr.rtprop_stamp + RTPROP_FILTER_LEN
 
@@ -272,7 +272,7 @@ def bbr_is_next_cycle_phase(r: QuicPacketRecovery, now: float) -> bool:
     is_full_length = (now - bbr.cycle_stamp) > bbr.rtprop
 
     # pacing_gain == 1.0
-    if abs(pacing_gain - 1.0) < 10e-6:
+    if abs(pacing_gain - 1.0) < 10e-12:
         return is_full_length
 
     if pacing_gain > 1.0:

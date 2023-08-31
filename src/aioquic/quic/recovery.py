@@ -16,6 +16,7 @@ K_GRANULARITY = 0.001  # seconds
 K_TIME_THRESHOLD = 9 / 8
 K_MICRO_SECOND = 0.000001
 K_SECOND = 1.0
+K_MIN_RTT = 0.001  # 1ms
 
 class QuicPacketSpace:
     def __init__(self) -> None:

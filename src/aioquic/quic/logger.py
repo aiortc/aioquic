@@ -32,6 +32,20 @@ QLOG_VERSION = "0.3"
 def hexdump(data: bytes) -> str:
     return binascii.hexlify(data).decode("ascii")
 
+def is_builtin_class(Object):
+    return Object.__class__.__module__ == 'builtins'
+
+def get_dataclass_attr(Object) -> dict:
+    ret = {}
+
+    basic_attr = dir(object) + ["__annotations__","__dataclass_fields__","__dict__","__match_args__","__module__","__weakref__"]
+
+    for attr in dir(Object):
+        if not attr in basic_attr and is_builtin_class(getattr(Object, attr)):
+            ret[attr] =  getattr(Object, attr)
+
+    return ret
+
 
 class QuicLoggerTrace:
     """

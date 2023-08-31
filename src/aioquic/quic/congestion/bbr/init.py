@@ -34,11 +34,10 @@ from .values import *
 
 # 4.3.1.  Initialization Steps
 def bbr_init(r: QuicPacketRecovery):
-    rtt = max(r._rtt_smoothed, K_MICRO_SECOND)
     now = Now()
 
     bbr = r._cc.bbr_state
-    bbr.rtprop = rtt
+    bbr.rtprop = float("inf")
     bbr.rtprop_stamp = now
     bbr.next_round_delivered = r._cc.rs.delivered
 

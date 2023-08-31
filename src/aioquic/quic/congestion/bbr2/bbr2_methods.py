@@ -1,4 +1,4 @@
-from ...recovery import QuicPacketRecovery, K_GRANULARITY, K_MICRO_SECOND
+from ...recovery import QuicPacketRecovery, K_MIN_RTT
 from random import random, randint
 from ...packet_builder import QuicSentPacket
 from .values import *
@@ -64,7 +64,7 @@ def bbr2_update_control_parameters(r: QuicPacketRecovery, now: float):
 
     # Set outgoing packet pacing rate
     # It is called here because send_quantum may be updated too.
-    r._pacer.set_pacing_rate(bbr.pacing_rate)
+    # r._pacer.set_pacing_rate(bbr.pacing_rate)
 
     bbr2_set_cwnd(r)
 
@@ -208,21 +208,6 @@ def bbr2_start_probe_bw_down(r: QuicPacketRecovery, now: float):
     bbr.state = BBR2State.ProbeBWDOWN
     bbr.pacing_gain = K_BBR2_PROBE_DOWN_PACING_GAIN
     bbr.cwnd_gain = K_BBR2_CWND_GAIN
-
-# 4.5.2.4.  Updating the BBR.max_bw Max Filter
-# OK (delivery_rate + app_limited)
-def bbr2_update_max_bw(r: QuicPacketRecovery, packet: QuicSentPacket):
-    bbr = r._cc.bbr_state
-    bbr2_update_round(r, packet)
-
-
-    rate = r._cc.rs.delivery_rate
-    if rate >= bbr.max_bw or not r._cc.rs.app_limited:
-        
-        max_bw_filter_len = max(r._rtt_smoothed, 0.001) * (K_BBR2_MIN_RTT_FILTER_LEN)
-
-        bbr.max_bw = bbr.max_bw_filter.running_max(max_bw_filter_len, bbr.start_time + bbr.cycle_count, r._cc.rs.delivery_rate)
-
 
 # OK
 def bbr2_start_probe_bw_cruise(r: QuicPacketRecovery):
@@ -420,7 +405,7 @@ def bbr2_update_min_rtt(r: QuicPacketRecovery, now: float):
 
     bbr.probe_rtt_expired = now > (bbr.probe_rtt_min_stamp + K_BBR2_PROBE_RTT_INTERVAL)
 
-    rs_rtt = max(r._rtt_smoothed, 0.001)
+    rs_rtt = max(r._rtt_smoothed, K_MIN_RTT)
 
     if rs_rtt != 0 and (rs_rtt < bbr.probe_rtt_min_delay or bbr.probe_rtt_expired):
         bbr.probe_rtt_min_delay = rs_rtt
@@ -452,7 +437,7 @@ def bbr2_check_probe_rtt(r: QuicPacketRecovery, now: float):
     if bbr.state ==  BBR2State.ProbeRTT:
         bbr2_handle_probe_rtt(r, now)
 
-    if r._cc.rs.delivered > 0:
+    if r._cc.rs.sample_delivered() > 0:
         bbr.idle_restart = False
 
 # OK
@@ -498,6 +483,7 @@ def bbr2_check_probe_rtt_done(r: QuicPacketRecovery, now: float):
             bbr2_exit_probe_rtt(r, now)
 
 # 4.3.4.5.  Exiting ProbeRTT
+# OK
 def bbr2_exit_probe_rtt(r: QuicPacketRecovery, now: float):
     bbr = r._cc.bbr_state
     bbr2_reset_lower_bounds(r)
@@ -509,6 +495,7 @@ def bbr2_exit_probe_rtt(r: QuicPacketRecovery, now: float):
         bbr2_enter_startup(r)
 
 # 4.5.1.  BBR.round_count: Tracking Packet-Timed Round Trips
+# OK (packet_info["delivered"])
 def bbr2_update_round(r: QuicPacketRecovery, packet: QuicSentPacket):
     bbr = r._cc.bbr_state
     if r._cc.rs.get_packet_info(packet)["delivered"] >= bbr.next_round_delivered:
@@ -520,24 +507,40 @@ def bbr2_update_round(r: QuicPacketRecovery, packet: QuicSentPacket):
     else:
         bbr.round_start = False
 
-
+# VERIF (+cwnd)
 def bbr2_start_round(r: QuicPacketRecovery):
     bbr = r._cc.bbr_state
     bbr.next_round_delivered = r._cc.rs.delivered + bbr.cwnd
 
+# 4.5.2.4.  Updating the BBR.max_bw Max Filter
+# OK (delivery_rate + app_limited)
+def bbr2_update_max_bw(r: QuicPacketRecovery, packet: QuicSentPacket):
+    bbr = r._cc.bbr_state
+    bbr2_update_round(r, packet)
+
+
+    rate = r._cc.rs.delivery_rate
+    if rate >= bbr.max_bw or not r._cc.rs.app_limited:
+        
+        max_bw_filter_len = max(r._rtt_smoothed, K_MIN_RTT) * (K_BBR2_MIN_RTT_FILTER_LEN)
+
+        bbr.max_bw = bbr.max_bw_filter.running_max(max_bw_filter_len, bbr.start_time + bbr.cycle_count, r._cc.rs.delivery_rate)
+
 
 # 4.5.2.5.  Tracking Time for the BBR.max_bw Max Filter
+# OK
 def bbr2_advance_max_bw_filter(r: QuicPacketRecovery):
     bbr = r._cc.bbr_state
     bbr.cycle_count += 1
 
 # 4.5.4.  BBR.offload_budget
+# OK (send_quantum)
 def bbr2_update_offload_budget(r: QuicPacketRecovery):
-    # TODO : send_quantum
     bbr = r._cc.bbr_state
     bbr.offload_budget = 3 * r.send_quantum
 
 # 4.5.5.  BBR.extra_acked
+# OK 
 def bbr2_update_ack_aggregation(r: QuicPacketRecovery, packet: QuicSentPacket, now: float):
     bbr = r._cc.bbr_state
 
@@ -556,25 +559,26 @@ def bbr2_update_ack_aggregation(r: QuicPacketRecovery, packet: QuicSentPacket, n
     extra = max(bbr.extra_acked_delivered - expected_delivered, 0)
     extra = min(extra, bbr.cwnd)
 
-    extra_acked_filter_len = r._rtt_smoothed * K_BBR2_MIN_RTT_FILTER_LEN
+    extra_acked_filter_len = max(r._rtt_smoothed, K_MIN_RTT) * K_BBR2_MIN_RTT_FILTER_LEN
 
     bbr.extra_acked = bbr.extra_acked_filter.running_max(extra_acked_filter_len, bbr.start_time + bbr.round_count, extra)
 
 
 # 4.6.3.  Send Quantum: BBR.send_quantum
+# OK (send_quantum)
 def bbr2_set_send_quantum(r: QuicPacketRecovery):
     bbr = r._cc.bbr_state
 
     rate = bbr.pacing_rate
     floor = K_MAX_DATAGRAM_SIZE if rate < PACING_RATE_1_2MBPS else 2 * K_MAX_DATAGRAM_SIZE
 
-    # TODO : send_quantum
     r.send_quantum = min(int(rate / 1000), 64 * 1024); # Assumes send buffer is limited to 64KB
     r.send_quantum = max(r.send_quantum, floor)
 
 
 # 4.6.4.1.  Initial cwnd
 # 4.6.4.2.  Computing BBR.max_inflight
+# OK
 def bbr2_bdp_multiple(r: QuicPacketRecovery, bw: int, gain: float) -> int: 
     bbr = r._cc.bbr_state
 
@@ -586,7 +590,7 @@ def bbr2_bdp_multiple(r: QuicPacketRecovery, bw: int, gain: float) -> int:
 
     return int(gain * bbr.bdp)
 
-
+# OK
 def bbr2_quantization_budget(r: QuicPacketRecovery, inflight: int) -> int:
     bbr = r._cc.bbr_state
     bbr2_update_offload_budget(r)
@@ -595,15 +599,17 @@ def bbr2_quantization_budget(r: QuicPacketRecovery, inflight: int) -> int:
     inflight = max(inflight, bbr2_min_pipe_cwnd(r))
 
     if bbr.state == BBR2State.ProbeBWUP:
-        return inflight + 2 * K_MAX_DATAGRAM_SIZE
+        return inflight + (2 * K_MAX_DATAGRAM_SIZE)
 
     return inflight
 
+# OK
 def bbr2_inflight(r: QuicPacketRecovery, bw: int, gain: float) -> int:
     inflight = bbr2_bdp_multiple(r, bw, gain)
 
     return bbr2_quantization_budget(r, inflight)
 
+# OK
 def bbr2_update_max_inflight(r: QuicPacketRecovery):
     # TODO: not implemented (not in the draft)
     # bbr2_update_aggregation_budget(r);
@@ -615,10 +621,9 @@ def bbr2_update_max_inflight(r: QuicPacketRecovery):
 
     bbr.max_inflight = bbr2_quantization_budget(r, inflight)
 
-    return bbr.max_inflight
-
 
 # 4.6.4.4.  Modulating cwnd in Loss Recovery
+# OK
 def bbr2_save_cwnd(r: QuicPacketRecovery) -> int:
     bbr = r._cc.bbr_state
 
@@ -627,10 +632,12 @@ def bbr2_save_cwnd(r: QuicPacketRecovery) -> int:
     else:
         return max(bbr.cwnd, bbr.prior_cwnd)
 
+# OK
 def bbr2_restore_cwnd(r: QuicPacketRecovery):
     bbr = r._cc.bbr_state
     bbr.cwnd = max(bbr.cwnd, bbr.prior_cwnd)
 
+# OK (inflight)
 def bbr2_modulate_cwnd_for_recovery(r: QuicPacketRecovery):
     bbr = r._cc.bbr_state
     acked_bytes = bbr.newly_acked_bytes
@@ -645,19 +652,21 @@ def bbr2_modulate_cwnd_for_recovery(r: QuicPacketRecovery):
 
 
 # 4.6.4.5.  Modulating cwnd in ProbeRTT
+# OK
 def bbr2_probe_rtt_cwnd(r: QuicPacketRecovery) -> int:
     bbr = r._cc.bbr_state
     probe_rtt_cwnd = bbr2_bdp_multiple(r, bbr.bw, K_BBR2_PROBE_RTT_CWND_GAIN)
 
     return max(probe_rtt_cwnd, bbr2_min_pipe_cwnd(r))
 
-
+# OK
 def bbr2_bound_cwnd_for_probe_rtt(r: QuicPacketRecovery):
     bbr = r._cc.bbr_state
     if bbr.state == BBR2State.ProbeRTT:
         bbr.cwnd = min(bbr.cwnd, bbr2_probe_rtt_cwnd(r))
 
 # 4.6.4.6.  Core cwnd Adjustment Mechanism
+# OK (delivered)
 def bbr2_set_cwnd(r: QuicPacketRecovery):
     bbr = r._cc.bbr_state
     acked_bytes = bbr.newly_acked_bytes
@@ -668,7 +677,7 @@ def bbr2_set_cwnd(r: QuicPacketRecovery):
     if not bbr.packet_conservation:
         if bbr.filled_pipe:
             bbr.cwnd = min(bbr.cwnd + acked_bytes, bbr.max_inflight)
-        elif bbr.cwnd < bbr.max_inflight or r._cc.rs.delivery_rate < K_INITIAL_WINDOW:
+        elif bbr.cwnd < bbr.max_inflight or r._cc.rs.delivered < K_INITIAL_WINDOW:
             bbr.cwnd += acked_bytes
         bbr.cwnd = max(bbr.cwnd, bbr2_min_pipe_cwnd(r))
 
@@ -676,6 +685,7 @@ def bbr2_set_cwnd(r: QuicPacketRecovery):
     bbr2_bound_cwnd_for_model(r)
 
 # 4.6.4.7.  Bounding cwnd Based on Recent Congestion
+# OK
 def bbr2_bound_cwnd_for_model(r: QuicPacketRecovery):
     bbr = r._cc.bbr_state
     cap = MAX_INT
@@ -871,11 +881,10 @@ def bbr2_is_probing_bw(r: QuicPacketRecovery) -> bool:
 
 # OK
 def bbr2_init(r: QuicPacketRecovery):
-    rtt = max(r._rtt_smoothed, K_BBR2_INITIAL_RTT)
     now = Now()
 
     bbr = r._cc.bbr_state # get the bbr state from BBR2CongestionControl
-    bbr.min_rtt = rtt
+    bbr.min_rtt = float("inf")
     bbr.min_rtt_stamp = now
     bbr.probe_rtt_done_stamp = None
     bbr.probe_rtt_round_done = False

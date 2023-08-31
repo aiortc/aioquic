@@ -67,7 +67,8 @@ class MinmaxSample:
 
 class Minmax:
     def __init__(self, value):
-        self.estimates = [MinmaxSample(Now(), value) for i in range(3)]
+        now = Now()
+        self.estimates = [MinmaxSample(now, value) for i in range(3)]
 
 
     # Resets the estimates to the given value.
