@@ -82,7 +82,7 @@ K_BBR2_PROBE_RTT_DURATION = 0.2 # in seconds
 # ProbeRTTInterval: A constant specifying the minimum time interval between
 # ProbeRTT states. To do: investigate probe duration. Set arbirarily high for
 # now.
-K_BBR2_PROBE_RTT_INTERVAL = 86400
+K_BBR2_PROBE_RTT_INTERVAL = 5
 
 # Threshold for checking a full bandwidth growth during Startup.
 K_BBR2_MAX_BW_GROWTH_THRESHOLD = 1.25

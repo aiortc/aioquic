@@ -99,6 +99,9 @@ class BBRCongestionControl(QuicCongestionControl):
         for attr, value in get_dataclass_attr(self.bbr_state).items():
             data[attr] = value
 
+        if "min_rtt" in data:
+            data["min_rtt"] = data["min_rtt"] * 1000 # convert to ms to respect the format of recovery.py
+
         if (self.bbr_state.state == BBRState.Startup):
             data["Phase"] = "Startup"
         if (self.bbr_state.state == BBRState.Drain):

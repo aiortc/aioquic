@@ -35,9 +35,6 @@ class BBR2CongestionControl(QuicCongestionControl):
 
         now = Now()
 
-        if (self.bbr_state.state == BBR2State.ProbeRTT):
-            print("Probe")
-
         self.bbr_state.newly_acked_bytes = packet.sent_bytes
         self.bbr_state.prior_bytes_in_flight = self.rs.inflight
 
@@ -102,6 +99,9 @@ class BBR2CongestionControl(QuicCongestionControl):
         for attr, value in get_dataclass_attr(self.bbr_state).items():
             data[attr] = value
 
+        if "min_rtt" in data:
+            data["min_rtt"] = data["min_rtt"] * 1000 # convert to ms to respect the format of recovery.py
+
         if (self.bbr_state.state == BBR2State.Startup):
             data["Phase"] = "Startup"
         if (self.bbr_state.state == BBR2State.Drain):
@@ -116,8 +116,6 @@ class BBR2CongestionControl(QuicCongestionControl):
             data["Phase"] = "ProbeBWCRUISE"
         if (self.bbr_state.state == BBR2State.ProbeRTT):
             data["Phase"] = "ProbeRTT"
-        
-        data["pacing_rate"] = self.recovery._pacer.pacing_rate
 
         return data
     

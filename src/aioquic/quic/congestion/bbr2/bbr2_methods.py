@@ -64,7 +64,7 @@ def bbr2_update_control_parameters(r: QuicPacketRecovery, now: float):
 
     # Set outgoing packet pacing rate
     # It is called here because send_quantum may be updated too.
-    # r._pacer.set_pacing_rate(bbr.pacing_rate)
+    r._pacer.set_pacing_rate(bbr.pacing_rate)
 
     bbr2_set_cwnd(r)
 

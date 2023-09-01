@@ -2,7 +2,7 @@ from .congestion import Now
 from ..recovery import QuicPacketRecovery, K_MIN_RTT
 from ..packet_builder import QuicSentPacket
 
-BETA_DELIVERY_RATE = 0.75
+BETA_DELIVERY_RATE = 7/8
 
 # a class to collect information about the rate sample
 class RateSample:
@@ -54,9 +54,8 @@ class RateSample:
     def update_delivery_rate(self):
         # update delivery rate
         self.delivery_rate = BETA_DELIVERY_RATE * self.delivery_rate + (1-BETA_DELIVERY_RATE)*((self.delivered - self.prior_delivered) / self.interval)
-        # self.delivery_rate = (self.delivered - self.prior_delivered) / self.interval
+        #self.delivery_rate = (self.delivered - self.prior_delivered) / self.interval
         self.delivery_rate = max(self.delivery_rate, 1000*8)
-
 
     def on_ack(self, packet : QuicSentPacket, now : float):
         self.delivered += packet.sent_bytes

@@ -269,7 +269,7 @@ def bbr_is_next_cycle_phase(r: QuicPacketRecovery, now: float) -> bool:
     pacing_gain = bbr.pacing_gain
     prior_in_flight = bbr.prior_bytes_in_flight
 
-    is_full_length = (now - bbr.cycle_stamp) > bbr.rtprop
+    is_full_length = (now - bbr.cycle_stamp) > bbr.rtprop + K_BBR_MIN_CYCLE_DURATION
 
     # pacing_gain == 1.0
     if abs(pacing_gain - 1.0) < 10e-12:

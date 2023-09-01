@@ -39,6 +39,9 @@ BTLBW_GROWTH_TARGET: float = 1.25
 # Some unatteignable value representing MaxInt
 MAX_INT = 10e64  
 
+# The minimum time added to the rtt to spend in each pacing cycle
+K_BBR_MIN_CYCLE_DURATION : float = 0
+
 class BBRState(Enum):
     Startup=0
     Drain=1

@@ -34,13 +34,13 @@ from .values import BBR2, K_BBR2_STARTUP_PACING_GAIN, K_BBR2_PACING_MARGIN_PERCE
 def bbr2_init_pacing_rate(r: QuicPacketRecovery):
     bbr : BBR2 = r._cc.bbr_state
 
-    srtt = max(r._rtt_smoothed, K_GRANULARITY)
+    srtt = r._rtt_smoothed if r._rtt_smoothed > 0.001 else 0.001
 
     # At init, cwnd is initcwnd.
     nominal_bandwidth = bbr.cwnd / srtt
 
     bbr.pacing_rate = int(K_BBR2_STARTUP_PACING_GAIN * nominal_bandwidth)
-    bbr.init_pacing_rate = int(K_BBR2_STARTUP_PACING_GAIN * nominal_bandwidth)
+    bbr.init_pacing_rate = bbr.pacing_rate
 
 
 def bbr2_set_pacing_rate_with_gain(r: QuicPacketRecovery, pacing_gain: float):
