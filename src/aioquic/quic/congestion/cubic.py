@@ -7,6 +7,7 @@ K_CUBIC_K = 1
 K_CUBIC_C = 0.4
 K_CUBIC_LOSS_REDUCTION_FACTOR = 0.7
 K_CUBIC_ADDITIVE_INCREASE = 1  # in number of segments 
+K_CUBIC_MAX_IDLE_TIME = 2   # reset the cwnd after 2 seconds of inactivity
 
 class CubicCongestionControl(QuicCongestionControl):
     """
@@ -17,25 +18,15 @@ class CubicCongestionControl(QuicCongestionControl):
         super().__init__(*args, **kwargs)
         self.bytes_in_flight = 0
         self.congestion_window = K_INITIAL_WINDOW_SEGMENTS
-        self._congestion_stash = 0
         self._congestion_recovery_start_time = 0.0
         self._rtt_monitor = QuicRttMonitor()
         self.ssthresh: Optional[int] = None
 
         self.caller = kwargs["caller"]   # the parent, allowing to get the smoothed rtt
 
-        self._cwnd_prior = None
-        self._cwnd_epoch = None
-        self._t_epoch = None
-        self._W_max = None
-        self._W_est = None
-        self._first_slow_start = True
-        self._starting_congestion_avoidance = False
-        self.K = 0
-        self._W_est = 0
-        self._cwnd_epoch = 0
-        self._t_epoch = 0
-        self._W_max = self.congestion_window
+        self.reset()
+
+        self.last_ack = None
 
     def better_cube_root(self, x):
         if (x < 0):
@@ -58,6 +49,23 @@ class CubicCongestionControl(QuicCongestionControl):
     
     def is_convex(self):
         return self.congestion_window >= self._W_max
+    
+    def reset(self):
+        self.congestion_window = K_INITIAL_WINDOW_SEGMENTS
+        self.ssthresh = None
+
+        self._cwnd_prior = None
+        self._cwnd_epoch = None
+        self._t_epoch = None
+        self._W_max = None
+        self._W_est = None
+        self._first_slow_start = True
+        self._starting_congestion_avoidance = False
+        self.K = 0
+        self._W_est = 0
+        self._cwnd_epoch = 0
+        self._t_epoch = 0
+        self._W_max = self.congestion_window
         
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
         self.on_packet_acked_timed(packet, Now(), self.caller._rtt_smoothed)
@@ -65,6 +73,7 @@ class CubicCongestionControl(QuicCongestionControl):
 
     def on_packet_acked_timed(self, packet: QuicSentPacket, now: float, rtt : float) -> None:
         self.bytes_in_flight -= packet.sent_bytes
+        self.last_ack = now
 
         if self.is_slow_start():
             # slow start
@@ -119,6 +128,11 @@ class CubicCongestionControl(QuicCongestionControl):
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
         super().on_packet_sent(packet)
         self.bytes_in_flight += packet.sent_bytes
+        if self.last_ack == None:
+            return
+        elapsed_idle = Now() - self.last_ack
+        if (elapsed_idle >= K_CUBIC_MAX_IDLE_TIME):
+            self.reset()
 
     def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
         super().on_packets_expired(packets)

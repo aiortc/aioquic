@@ -114,13 +114,13 @@ class QuicCongestionControl:
             self.callback(CongestionEvent.RTT_MEASURED, self)
 
     def get_congestion_window(self) -> int:
-        pass
+        return 10 * 1024 * 1024   # 10 GB window (shouldn't by used in real network !, use a real CCA instead)
 
     def get_ssthresh(self) -> Optional[int]: 
         pass
 
     def get_bytes_in_flight(self) -> int:
-        pass
+        return 0
 
     def log_callback(self) -> Dict[str, Any]:
         # a callback called when a recovery happens
