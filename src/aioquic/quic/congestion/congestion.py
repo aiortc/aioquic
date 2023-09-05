@@ -89,6 +89,8 @@ class QuicCongestionControl:
             self.callback = kwargs["callback"] # a callback argument that is called when an event occurs
         else:
             self.callback = None
+        # 10 GB window or custom fixed size window (shouldn't be used in real network !, use a real CCA instead)
+        self.cwnd = kwargs["fixed_cwnd"] if "fixed_cwnd" in kwargs else 10 * 1024 * 1024
 
     def on_init(self, *args, **kwargs):
         pass
@@ -114,7 +116,7 @@ class QuicCongestionControl:
             self.callback(CongestionEvent.RTT_MEASURED, self)
 
     def get_congestion_window(self) -> int:
-        return 10 * 1024 * 1024   # 10 GB window (shouldn't by used in real network !, use a real CCA instead)
+        return self.cwnd   
 
     def get_ssthresh(self) -> Optional[int]: 
         pass
