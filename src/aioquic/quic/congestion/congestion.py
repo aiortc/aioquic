@@ -91,6 +91,7 @@ class QuicCongestionControl:
             self.callback = None
         # 10 GB window or custom fixed size window (shouldn't be used in real network !, use a real CCA instead)
         self.cwnd = kwargs["fixed_cwnd"] if "fixed_cwnd" in kwargs else 10 * 1024 * 1024
+        self.data_in_flight = 0
 
     def on_init(self, *args, **kwargs):
         pass
@@ -98,18 +99,24 @@ class QuicCongestionControl:
     def on_packet_acked(self, packet: QuicSentPacket):
         if self.callback:
             self.callback(CongestionEvent.ACK, self)
+        self.data_in_flight -= packet.sent_bytes
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
         if self.callback:
             self.callback(CongestionEvent.PACKET_SENT, self)
+        self.data_in_flight += packet.sent_bytes
 
     def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
         if self.callback:
             self.callback(CongestionEvent.PACKET_EXPIRED, self)
+        for packet in packets:
+            self.data_in_flight -= packet.sent_bytes
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
         if self.callback:
             self.callback(CongestionEvent.PACKET_LOST, self)
+        for packet in packets:
+            self.data_in_flight -= packet.sent_bytes
 
     def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
         if self.callback:
@@ -122,7 +129,7 @@ class QuicCongestionControl:
         pass
 
     def get_bytes_in_flight(self) -> int:
-        return 0
+        return self.data_in_flight
 
     def log_callback(self) -> Dict[str, Any]:
         # a callback called when a recovery happens
