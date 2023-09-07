@@ -37,7 +37,6 @@ class StandardSlowStart(SlowStart):
             latest_rtt, now
         ):
             # enter congestion avoidance
-            print("RTT = ", latest_rtt)
             self.ssthresh = self.cwnd()   
             return True
         return False
