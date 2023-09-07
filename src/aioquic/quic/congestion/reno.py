@@ -1,7 +1,7 @@
 from .congestion import QuicCongestionControl, K_LOSS_REDUCTION_FACTOR, K_INITIAL_WINDOW, K_MAX_DATAGRAM_SIZE, K_MINIMUM_WINDOW, QuicRttMonitor
 from ..packet_builder import QuicSentPacket
-from .standard_slow_start import StandardSlowStart
-from .slow_start import SlowStart
+from .slow_starts.standard_slow_start import StandardSlowStart
+from .slow_starts.slow_start import SlowStart
 from typing import Iterable, Optional, Dict, Any
 
 class RenoCongestionControl(QuicCongestionControl):
@@ -15,8 +15,6 @@ class RenoCongestionControl(QuicCongestionControl):
         self.congestion_window = K_INITIAL_WINDOW
         self._congestion_recovery_start_time = 0.0
         self._congestion_stash = 0
-        self._rtt_monitor = QuicRttMonitor()
-        self.ssthresh: Optional[int] = None
         self.slow_start = slow_start
         self.slow_start.set_cc(self)
 
@@ -30,7 +28,7 @@ class RenoCongestionControl(QuicCongestionControl):
 
         if self.slow_start.is_slow_start():
             # slow start
-            self.congestion_window = self.slow_start.get_new_cwnd(packet)
+            self.slow_start.on_ack(packet)
         else:
             # congestion avoidance
             self._congestion_stash += packet.sent_bytes
@@ -41,12 +39,14 @@ class RenoCongestionControl(QuicCongestionControl):
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
         super().on_packet_sent(packet)
+        self.slow_start.on_sent(packet)
         self.bytes_in_flight += packet.sent_bytes
 
     def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
         super().on_packets_expired(packets)
         for packet in packets:
             self.bytes_in_flight -= packet.sent_bytes
+            self.slow_start.on_expired(packet)
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
         super().on_packets_lost(packets, now)
@@ -54,6 +54,7 @@ class RenoCongestionControl(QuicCongestionControl):
         for packet in packets:
             self.bytes_in_flight -= packet.sent_bytes
             lost_largest_time = packet.sent_time
+            self.slow_start.on_lost(packet)
 
         # start a new congestion event if packet was sent after the
         # start of the previous congestion recovery period.
@@ -62,25 +63,24 @@ class RenoCongestionControl(QuicCongestionControl):
             self.congestion_window = max(
                 int(self.congestion_window * K_LOSS_REDUCTION_FACTOR), K_MINIMUM_WINDOW
             )
-            self.ssthresh = self.congestion_window
+            self.slow_start.set_ssthresh(self.congestion_window)
+            
 
         # TODO : collapse congestion window if persistent congestion
 
     def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
         super().on_rtt_measurement(latest_rtt, now)
         # check whether we should exit slow start
-        if self.ssthresh is None and self._rtt_monitor.is_rtt_increasing(
-            latest_rtt, now
-        ):
-            self.ssthresh = self.congestion_window
-            self.slow_start.on_rtt_increased()
+        self.slow_start.on_rtt_measured(latest_rtt, now)
 
     def get_congestion_window(self) -> int:
         return int(self.congestion_window)
     
+    def _set_congestion_window(self, value):
+        self.congestion_window = value
+    
     def get_ssthresh(self) -> int: 
-        if self.ssthresh == None: return None
-        return int(self.ssthresh)
+        return self.slow_start.get_ssthresh()
     
     def get_bytes_in_flight(self) -> int:
         return self.bytes_in_flight

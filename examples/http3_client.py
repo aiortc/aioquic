@@ -26,7 +26,8 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import CipherSuite, SessionTicket
-from aioquic.quic.congestion import RenoCongestionControl, CubicCongestionControl
+from aioquic.quic.congestion.reno import RenoCongestionControl
+from aioquic.quic.congestion.cubic import CubicCongestionControl
 
 try:
     import uvloop
@@ -543,9 +544,9 @@ if __name__ == "__main__":
         configuration.secrets_log_file = open(args.secrets_log, "a")
     if args.congestion_control:
         if args.congestion_control == "cubic":
-            configuration.congestion_control_algo = CubicCongestionControl
+            configuration.congestion_control = CubicCongestionControl()
         elif args.congestion_control == "reno":
-            configuration.congestion_control_algo = RenoCongestionControl
+            configuration.congestion_control = RenoCongestionControl()
         else:
             print("Invalid congestion control algorithm")
             exit(127)

@@ -124,7 +124,11 @@ class QuicCongestionControl:
             self.callback(CongestionEvent.RTT_MEASURED, self)
 
     def get_congestion_window(self) -> int:
+        # return the cwnd in number of bytes
         return self.cwnd   
+    
+    def _set_congestion_window(self, value):
+        self.cwnd = value
 
     def get_ssthresh(self) -> Optional[int]: 
         pass
