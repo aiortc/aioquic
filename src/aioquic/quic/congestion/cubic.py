@@ -3,6 +3,7 @@ from ..packet_builder import QuicSentPacket
 from typing import Iterable, Optional, Dict, Any
 from .slow_starts.standard_slow_start import StandardSlowStart
 from .slow_starts.slow_start import SlowStart
+from .rs import RateSample
 
 # cubic specific variables (see https://www.rfc-editor.org/rfc/rfc9438.html#name-definitions)
 K_CUBIC_K = 1    
@@ -29,6 +30,7 @@ class CubicCongestionControl(QuicCongestionControl):
         self.reset()
 
         self.last_ack = None
+        self.rs = RateSample()
 
     def better_cube_root(self, x):
         if (x < 0):
@@ -75,6 +77,7 @@ class CubicCongestionControl(QuicCongestionControl):
     def on_packet_acked_timed(self, packet: QuicSentPacket, now: float, rtt : float) -> None:
         self.bytes_in_flight -= packet.sent_bytes
         self.last_ack = now
+        self.rs.on_ack(packet, Now())
 
         if self.slow_start.is_slow_start():
             # slow start
@@ -132,6 +135,7 @@ class CubicCongestionControl(QuicCongestionControl):
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
         super().on_packet_sent(packet)
+        self.rs.on_sent(packet, Now())
         self.slow_start.on_sent(packet)
         self.bytes_in_flight += packet.sent_bytes
         if self.last_ack == None:
@@ -145,6 +149,7 @@ class CubicCongestionControl(QuicCongestionControl):
         for packet in packets:
             self.bytes_in_flight -= packet.sent_bytes
             self.slow_start.on_expired(packet)
+            self.rs.on_expired(packet, Now())
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
         super().on_packets_lost(packets, now)
@@ -153,6 +158,8 @@ class CubicCongestionControl(QuicCongestionControl):
             self.bytes_in_flight -= packet.sent_bytes
             lost_largest_time = packet.sent_time
             self.slow_start.on_lost(packet)
+            self.rs.on_lost(packet, Now())
+            self.rs.rm_packet_info(packet)
 
         # start a new congestion event if packet was sent after the
         # start of the previous congestion recovery period.
@@ -221,4 +228,5 @@ class CubicCongestionControl(QuicCongestionControl):
         else:
             data["Phase"] = "cubic-growth"
 
+        data["delivery_rate"] = self.rs.delivery_rate
         return data

@@ -20,7 +20,7 @@ class BBR2CongestionControl(QuicCongestionControl):
         self.bbr_state = BBR2()
 
     def on_init(self, *args, **kwargs):
-        self.rs = RateSample(self.recovery)
+        self.rs = RateSample()
         bbr2_init(self.recovery)
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:

@@ -5,6 +5,7 @@ from copy import copy
 from enum import Enum
 import random
 from dataclasses import dataclass
+from .rs import RateSample
 
 K_GRANULARITY = 0.001  # seconds
 
@@ -89,6 +90,7 @@ class QuicCongestionControl:
         # 10 GB window or custom fixed size window (shouldn't be used in real network !, use a real CCA instead)
         self.cwnd = fixed_cwnd
         self.data_in_flight = 0
+        self.rs = RateSample()
 
     def set_recovery(self, recovery):
         # recovery is a QuicPacketRecovery instance
@@ -101,23 +103,29 @@ class QuicCongestionControl:
         if self.callback:
             self.callback(CongestionEvent.ACK, self)
         self.data_in_flight -= packet.sent_bytes
+        self.rs.on_ack(packet, Now())
+        self.rs.rm_packet_info(packet)
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
         if self.callback:
             self.callback(CongestionEvent.PACKET_SENT, self)
         self.data_in_flight += packet.sent_bytes
+        self.rs.on_sent(packet, Now())
 
     def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
         if self.callback:
             self.callback(CongestionEvent.PACKET_EXPIRED, self)
         for packet in packets:
             self.data_in_flight -= packet.sent_bytes
+            self.rs.on_expired(packet, Now())
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
         if self.callback:
             self.callback(CongestionEvent.PACKET_LOST, self)
         for packet in packets:
             self.data_in_flight -= packet.sent_bytes
+            self.rs.on_lost(packet, Now())
+            self.rs.rm_packet_info(packet)
 
     def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
         if self.callback:
@@ -146,6 +154,8 @@ class QuicCongestionControl:
         }
         if self.get_ssthresh() is not None:
             data["ssthresh"] = self.get_ssthresh()
+
+        data["delivery_rate"] = self.rs.delivery_rate
 
         return data
   

@@ -1,7 +1,8 @@
-from .congestion import QuicCongestionControl, K_LOSS_REDUCTION_FACTOR, K_INITIAL_WINDOW, K_MAX_DATAGRAM_SIZE, K_MINIMUM_WINDOW, QuicRttMonitor
+from .congestion import QuicCongestionControl, K_LOSS_REDUCTION_FACTOR, K_INITIAL_WINDOW, K_MAX_DATAGRAM_SIZE, K_MINIMUM_WINDOW, Now
 from ..packet_builder import QuicSentPacket
 from .slow_starts.standard_slow_start import StandardSlowStart
 from .slow_starts.slow_start import SlowStart
+from .rs import RateSample
 from typing import Iterable, Optional, Dict, Any
 
 class RenoCongestionControl(QuicCongestionControl):
@@ -18,8 +19,12 @@ class RenoCongestionControl(QuicCongestionControl):
         self.slow_start = slow_start
         self.slow_start.set_cc(self)
 
+        self.rs : RateSample = RateSample()
+
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
         super().on_packet_acked(packet)
+        self.rs.on_ack(packet, Now())
+        self.rs.rm_packet_info(packet)
         self.bytes_in_flight -= packet.sent_bytes
 
         # don't increase window in congestion recovery
@@ -41,12 +46,14 @@ class RenoCongestionControl(QuicCongestionControl):
         super().on_packet_sent(packet)
         self.slow_start.on_sent(packet)
         self.bytes_in_flight += packet.sent_bytes
+        self.rs.on_sent(packet, Now())
 
     def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
         super().on_packets_expired(packets)
         for packet in packets:
             self.bytes_in_flight -= packet.sent_bytes
             self.slow_start.on_expired(packet)
+            self.rs.on_expired(packet)
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
         super().on_packets_lost(packets, now)
@@ -55,6 +62,8 @@ class RenoCongestionControl(QuicCongestionControl):
             self.bytes_in_flight -= packet.sent_bytes
             lost_largest_time = packet.sent_time
             self.slow_start.on_lost(packet)
+            self.rs.on_lost(packet, Now())
+            self.rs.rm_packet_info(packet)
 
         # start a new congestion event if packet was sent after the
         # start of the previous congestion recovery period.
@@ -91,4 +100,5 @@ class RenoCongestionControl(QuicCongestionControl):
             data["Phase"] = "slow-start"
         else:
             data["Phase"] = "congestion-avoidance"
+        data["delivery_rate"] = self.rs.delivery_rate
         return data

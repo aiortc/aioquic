@@ -1,12 +1,10 @@
-from .congestion import Now
-from ..recovery import QuicPacketRecovery, K_MIN_RTT
 from ..packet_builder import QuicSentPacket
 
 BETA_DELIVERY_RATE = 7/8
 
 # a class to collect information about the rate sample
 class RateSample:
-    def __init__(self, recovery) -> None:
+    def __init__(self) -> None:
         self.packet_info = {} # store the informations about Transport controler when packet was sent
         self.delivered = 0
         self.prior_delivered = 0
@@ -17,7 +15,7 @@ class RateSample:
         self.lost_timestamp = None
         self.interval = 0
         self.start_time = None
-        self.recovery : QuicPacketRecovery = recovery
+        self.number_ack = 0
 
     def in_congestion_recovery(self, packet):
         # check if we were in congestion recovery at time when packet was sent
@@ -53,9 +51,13 @@ class RateSample:
     
     def update_delivery_rate(self):
         # update delivery rate
-        self.delivery_rate = BETA_DELIVERY_RATE * self.delivery_rate + (1-BETA_DELIVERY_RATE)*((self.delivered - self.prior_delivered) / self.interval)
-        #self.delivery_rate = (self.delivered - self.prior_delivered) / self.interval
-        self.delivery_rate = max(self.delivery_rate, 1000*8)
+        if self.number_ack >= 20:
+            # delivery_rate should be more stable, use a beta increase
+            self.delivery_rate = BETA_DELIVERY_RATE * self.delivery_rate + (1-BETA_DELIVERY_RATE)*((self.delivered - self.prior_delivered) / self.interval)
+        else:
+            self.delivery_rate = (self.delivered - self.prior_delivered) / self.interval
+
+        self.delivery_rate = max(self.delivery_rate, 1000)  # at least 1kBps
 
     def on_ack(self, packet : QuicSentPacket, now : float):
         self.delivered += packet.sent_bytes
@@ -65,6 +67,7 @@ class RateSample:
         if (self.prior_delivered == None or self.prior_delivered < self.get_packet_info(packet)['delivered']):
             self.prior_delivered = self.get_packet_info(packet)['delivered']
         
+        self.number_ack += 1
         self.update_delivery_rate()
         
     

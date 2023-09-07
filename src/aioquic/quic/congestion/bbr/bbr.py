@@ -21,7 +21,7 @@ class BBRCongestionControl(QuicCongestionControl):
         self.bbr_state = BBR(start_time=now, cycle_stamp=now, rtprop_stamp=now)
 
     def on_init(self, *args, **kwargs):
-        self.rs = RateSample(self.recovery)
+        self.rs = RateSample()
         bbr_init(self.recovery)
 
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
