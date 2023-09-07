@@ -89,5 +89,7 @@ class RateSample:
         self.inflight -= packet.sent_bytes
         self.lost += packet.sent_bytes
         self.lost_timestamp = packet.sent_time
+        if self.get_packet_info(packet) == None:
+            return
         self.interval = now - self.get_packet_info(packet)["time"]
         self.update_delivery_rate()
