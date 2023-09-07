@@ -117,7 +117,7 @@ class QuicCongestionControl:
             self.callback(CongestionEvent.PACKET_EXPIRED, self)
         for packet in packets:
             self.data_in_flight -= packet.sent_bytes
-            self.rs.on_expired(packet, Now())
+            self.rs.on_expired(packet)
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
         if self.callback:

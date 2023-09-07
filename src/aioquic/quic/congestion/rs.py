@@ -32,7 +32,7 @@ class RateSample:
         return self.delivered - self.prior_delivered
 
     def get_packet_info(self, packet: QuicSentPacket):
-        return self.packet_info[packet.packet_number]
+        return self.packet_info.get(packet.packet_number, None)
     
     def add_packet_info(self, packet: QuicSentPacket, now : float):
         self.packet_info[packet.packet_number] = {
@@ -61,13 +61,17 @@ class RateSample:
 
     def on_ack(self, packet : QuicSentPacket, now : float):
         self.delivered += packet.sent_bytes
+        self.number_ack += 1
+
+        if self.get_packet_info(packet) == None:
+            return
 
         self.interval = now - self.get_packet_info(packet)["time"]
 
         if (self.prior_delivered == None or self.prior_delivered < self.get_packet_info(packet)['delivered']):
             self.prior_delivered = self.get_packet_info(packet)['delivered']
         
-        self.number_ack += 1
+       
         self.update_delivery_rate()
         
     

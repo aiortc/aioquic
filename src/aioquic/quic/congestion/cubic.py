@@ -149,7 +149,7 @@ class CubicCongestionControl(QuicCongestionControl):
         for packet in packets:
             self.bytes_in_flight -= packet.sent_bytes
             self.slow_start.on_expired(packet)
-            self.rs.on_expired(packet, Now())
+            self.rs.on_expired(packet)
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
         super().on_packets_lost(packets, now)
