@@ -99,8 +99,7 @@ class QuicPacketRecovery:
         send_probe: Callable[[], None],
         logger: Optional[logging.LoggerAdapter] = None,
         quic_logger: Optional[QuicLoggerTrace] = None,
-        congestion_control_algo: QuicCongestionControl = RenoCongestionControl,
-        congestion_options = {}
+        congestion_control: QuicCongestionControl = RenoCongestionControl()
     ) -> None:
         self.max_ack_delay = 0.025
         self.peer_completed_address_validation = peer_completed_address_validation
@@ -122,10 +121,8 @@ class QuicPacketRecovery:
         self._time_of_last_sent_ack_eliciting_packet = 0.0
 
         # congestion control
-        if (congestion_options != None):
-            self._cc = congestion_control_algo(caller=self, **congestion_options)
-        else:
-            self._cc = congestion_control_algo(caller=self)
+        self._cc = congestion_control
+        self._cc.set_recovery(self)
         self._cc.on_init()
         
         self._pacer = QuicPacketPacer()

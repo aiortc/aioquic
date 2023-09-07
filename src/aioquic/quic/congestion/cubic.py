@@ -1,6 +1,8 @@
 from .congestion import QuicCongestionControl, K_INITIAL_WINDOW_SEGMENTS, K_MAX_DATAGRAM_SIZE, K_MINIMUM_WINDOW_SEGMENTS, QuicRttMonitor, Now
 from ..packet_builder import QuicSentPacket
 from typing import Iterable, Optional, Dict, Any
+from .standard_slow_start import StandardSlowStart
+from .slow_start import SlowStart
 
 # cubic specific variables (see https://www.rfc-editor.org/rfc/rfc9438.html#name-definitions)
 K_CUBIC_K = 1    
@@ -14,15 +16,15 @@ class CubicCongestionControl(QuicCongestionControl):
     Cubic congestion control implementation for aioquic
     """
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, callback=None, slow_start : SlowStart = StandardSlowStart()) -> None:
+        super().__init__(callback=callback)
         self.bytes_in_flight = 0
         self.congestion_window = K_INITIAL_WINDOW_SEGMENTS
         self._congestion_recovery_start_time = 0.0
         self._rtt_monitor = QuicRttMonitor()
         self.ssthresh: Optional[int] = None
-
-        self.caller = kwargs["caller"]   # the parent, allowing to get the smoothed rtt
+        self.slow_start = slow_start
+        self.slow_start.set_cc(self)
 
         self.reset()
 
@@ -37,9 +39,6 @@ class CubicCongestionControl(QuicCongestionControl):
         
     def W_cubic(self, t):
         return K_CUBIC_C * (t - self.K)**3 + (self._W_max)
-        
-    def is_slow_start(self) -> bool:
-        return self.ssthresh is None or self.congestion_window < self.ssthresh
     
     def is_reno_friendly(self, t) -> bool:
         return self.W_cubic(t) < self._W_est
@@ -68,16 +67,16 @@ class CubicCongestionControl(QuicCongestionControl):
         self._W_max = self.congestion_window
         
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
-        self.on_packet_acked_timed(packet, Now(), self.caller._rtt_smoothed)
+        self.on_packet_acked_timed(packet, Now(), self.recovery._rtt_smoothed)
         super().on_packet_acked(packet)
 
     def on_packet_acked_timed(self, packet: QuicSentPacket, now: float, rtt : float) -> None:
         self.bytes_in_flight -= packet.sent_bytes
         self.last_ack = now
 
-        if self.is_slow_start():
+        if self.slow_start.is_slow_start():
             # slow start
-            self.congestion_window += packet.sent_bytes // K_MAX_DATAGRAM_SIZE
+            self.congestion_window = self.slow_start.get_new_cwnd_segments(packet)
         else:
             # congestion avoidance
             if (self._first_slow_start and not self._starting_congestion_avoidance):
@@ -180,6 +179,7 @@ class CubicCongestionControl(QuicCongestionControl):
         ):
             self.ssthresh = self.congestion_window
             self._cwnd_prior = self.congestion_window
+            self.slow_start.on_rtt_increased()
 
     def get_congestion_window(self) -> int:
         return int(self.congestion_window * K_MAX_DATAGRAM_SIZE)
@@ -200,11 +200,11 @@ class CubicCongestionControl(QuicCongestionControl):
             data["W_max"] = int(self._W_max * K_MAX_DATAGRAM_SIZE)
 
         # saving the phase
-        if not self.is_slow_start():
+        if not self.slow_start.is_slow_start():
             now = Now()
             t = now - self._t_epoch
         
-        if (self.is_slow_start()):
+        if (self.slow_start.is_slow_start()):
             data["Phase"] = "slow-start"
         elif (self.is_reno_friendly(t)):
             data["Phase"] = "reno-friendly region"

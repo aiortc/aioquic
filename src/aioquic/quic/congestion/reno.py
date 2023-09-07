@@ -1,5 +1,7 @@
 from .congestion import QuicCongestionControl, K_LOSS_REDUCTION_FACTOR, K_INITIAL_WINDOW, K_MAX_DATAGRAM_SIZE, K_MINIMUM_WINDOW, QuicRttMonitor
 from ..packet_builder import QuicSentPacket
+from .standard_slow_start import StandardSlowStart
+from .slow_start import SlowStart
 from typing import Iterable, Optional, Dict, Any
 
 class RenoCongestionControl(QuicCongestionControl):
@@ -7,17 +9,16 @@ class RenoCongestionControl(QuicCongestionControl):
     New Reno congestion control.
     """
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, callback=None, slow_start : SlowStart = StandardSlowStart()) -> None:
+        super().__init__(callback=callback)
         self.bytes_in_flight = 0
         self.congestion_window = K_INITIAL_WINDOW
         self._congestion_recovery_start_time = 0.0
         self._congestion_stash = 0
         self._rtt_monitor = QuicRttMonitor()
         self.ssthresh: Optional[int] = None
-
-    def is_slow_start(self) -> bool:
-        return self.ssthresh is None or self.congestion_window < self.ssthresh
+        self.slow_start = slow_start
+        self.slow_start.set_cc(self)
 
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
         super().on_packet_acked(packet)
@@ -27,9 +28,9 @@ class RenoCongestionControl(QuicCongestionControl):
         if packet.sent_time <= self._congestion_recovery_start_time:
             return
 
-        if self.is_slow_start():
+        if self.slow_start.is_slow_start():
             # slow start
-            self.congestion_window += packet.sent_bytes
+            self.congestion_window = self.slow_start.get_new_cwnd(packet)
         else:
             # congestion avoidance
             self._congestion_stash += packet.sent_bytes
@@ -72,6 +73,7 @@ class RenoCongestionControl(QuicCongestionControl):
             latest_rtt, now
         ):
             self.ssthresh = self.congestion_window
+            self.slow_start.on_rtt_increased()
 
     def get_congestion_window(self) -> int:
         return int(self.congestion_window)
@@ -85,7 +87,7 @@ class RenoCongestionControl(QuicCongestionControl):
     
     def log_callback(self) -> Dict[str, Any]:
         data = super().log_callback()
-        if (self.is_slow_start()):
+        if (self.slow_start.is_slow_start()):
             data["Phase"] = "slow-start"
         else:
             data["Phase"] = "congestion-avoidance"

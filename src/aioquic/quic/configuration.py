@@ -76,14 +76,9 @@ class QuicConfiguration:
     The TLS session ticket which should be used for session resumption.
     """
 
-    congestion_control_algo: Optional[QuicCongestionControl] = None
+    congestion_control: Optional[QuicCongestionControl] = None
     """
     Selection for a congestion control algorithm
-    """
-
-    congestion_options: Optional[Dict[str, Any]] = None
-    """
-    Options for the congestion control algorithm
     """
 
     cadata: Optional[bytes] = None

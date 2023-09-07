@@ -359,15 +359,14 @@ class QuicConnection:
 
 
         # loss recovery
-        if (configuration.congestion_control_algo):
+        if (configuration.congestion_control):
             self._loss = QuicPacketRecovery(
                 initial_rtt=configuration.initial_rtt,
                 peer_completed_address_validation=not self._is_client,
                 quic_logger=self._quic_logger,
                 send_probe=self._send_probe,
                 logger=self._logger,
-                congestion_control_algo=configuration.congestion_control_algo,
-                congestion_options=configuration.congestion_options
+                congestion_control=configuration.congestion_control
             )
         else:
         

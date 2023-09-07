@@ -84,14 +84,15 @@ def Now():
 
 class QuicCongestionControl:
 
-    def __init__(self, *args, **kwargs) -> None:
-        if ("callback" in kwargs):
-            self.callback = kwargs["callback"] # a callback argument that is called when an event occurs
-        else:
-            self.callback = None
+    def __init__(self, callback=None, fixed_cwnd = 10*1024*1024) -> None:
+        self.callback = callback # a callback argument that is called when an event occurs
         # 10 GB window or custom fixed size window (shouldn't be used in real network !, use a real CCA instead)
-        self.cwnd = kwargs["fixed_cwnd"] if "fixed_cwnd" in kwargs else 10 * 1024 * 1024
+        self.cwnd = fixed_cwnd
         self.data_in_flight = 0
+
+    def set_recovery(self, recovery):
+        # recovery is a QuicPacketRecovery instance
+        self.recovery = recovery
 
     def on_init(self, *args, **kwargs):
         pass

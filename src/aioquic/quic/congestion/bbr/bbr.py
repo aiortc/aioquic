@@ -15,14 +15,13 @@ from .per_transmit import bbr_on_transmit
 
 class BBRCongestionControl(QuicCongestionControl):
     
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, callback=None) -> None:
+        super().__init__(callback=callback)
         now = Now()
         self.bbr_state = BBR(start_time=now, cycle_stamp=now, rtprop_stamp=now)
-        self.recovery = kwargs["caller"]
-        self.rs = RateSample(self.recovery)
 
     def on_init(self, *args, **kwargs):
+        self.rs = RateSample(self.recovery)
         bbr_init(self.recovery)
 
     def on_packet_acked(self, packet: QuicSentPacket) -> None:
