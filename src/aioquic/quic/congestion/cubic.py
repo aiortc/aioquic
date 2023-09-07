@@ -16,7 +16,7 @@ class CubicCongestionControl(QuicCongestionControl):
     Cubic congestion control implementation for aioquic
     """
 
-    def __init__(self, callback=None, slow_start : SlowStart = StandardSlowStart()) -> None:
+    def __init__(self, callback=None, slow_start : SlowStart = StandardSlowStart(), reno_friendly_activated = True) -> None:
         super().__init__(callback=callback)
         self.bytes_in_flight = 0
         self.congestion_window = K_INITIAL_WINDOW
@@ -24,6 +24,7 @@ class CubicCongestionControl(QuicCongestionControl):
         self.ssthresh: Optional[int] = None
         self.slow_start = slow_start
         self.slow_start.set_cc(self)
+        self.reno_friendly_activated = reno_friendly_activated
 
         self.reset()
 
@@ -42,7 +43,7 @@ class CubicCongestionControl(QuicCongestionControl):
         return target_segments * K_MAX_DATAGRAM_SIZE
     
     def is_reno_friendly(self, t) -> bool:
-        return self.W_cubic(t) < self._W_est
+        return self.reno_friendly_activated and self.W_cubic(t) < self._W_est
     
     def is_concave(self):
         return self.congestion_window < self._W_max
