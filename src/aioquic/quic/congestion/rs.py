@@ -1,6 +1,6 @@
 from ..packet_builder import QuicSentPacket
 
-BETA_DELIVERY_RATE = 3/4
+BETA_DELIVERY_RATE = 9/10 
 
 # a class to collect information about the rate sample
 class RateSample:
