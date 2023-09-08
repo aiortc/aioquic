@@ -102,30 +102,38 @@ class QuicCongestionControl:
     def on_packet_acked(self, packet: QuicSentPacket):
         if self.callback:
             self.callback(CongestionEvent.ACK, self)
-        self.data_in_flight -= packet.sent_bytes
-        self.rs.on_ack(packet, Now())
-        self.rs.rm_packet_info(packet)
+        if type(self) == QuicCongestionControl:
+            # don't call this if it is a superclass that runs
+            self.data_in_flight -= packet.sent_bytes
+            self.rs.on_ack(packet, Now())
+            self.rs.rm_packet_info(packet)
 
     def on_packet_sent(self, packet: QuicSentPacket) -> None:
         if self.callback:
             self.callback(CongestionEvent.PACKET_SENT, self)
-        self.data_in_flight += packet.sent_bytes
-        self.rs.on_sent(packet, Now())
+        if type(self) == QuicCongestionControl:
+            # don't call this if it is a superclass that runs
+            self.data_in_flight += packet.sent_bytes
+            self.rs.on_sent(packet, Now())
 
     def on_packets_expired(self, packets: Iterable[QuicSentPacket]) -> None:
         if self.callback:
             self.callback(CongestionEvent.PACKET_EXPIRED, self)
-        for packet in packets:
-            self.data_in_flight -= packet.sent_bytes
-            self.rs.on_expired(packet)
+        if type(self) == QuicCongestionControl:
+            for packet in packets:
+                # don't call this if it is a superclass that runs
+                self.data_in_flight -= packet.sent_bytes
+                self.rs.on_expired(packet)
 
     def on_packets_lost(self, packets: Iterable[QuicSentPacket], now: float) -> None:
         if self.callback:
             self.callback(CongestionEvent.PACKET_LOST, self)
-        for packet in packets:
-            self.data_in_flight -= packet.sent_bytes
-            self.rs.on_lost(packet, Now())
-            self.rs.rm_packet_info(packet)
+        if type(self) == QuicCongestionControl:
+            for packet in packets:
+                # don't call this if it is a superclass that runs
+                self.data_in_flight -= packet.sent_bytes
+                self.rs.on_lost(packet, Now())
+                self.rs.rm_packet_info(packet)
 
     def on_rtt_measurement(self, latest_rtt: float, now: float) -> None:
         if self.callback:
@@ -155,7 +163,8 @@ class QuicCongestionControl:
         if self.get_ssthresh() is not None:
             data["ssthresh"] = self.get_ssthresh()
 
-        data["delivery_rate"] = self.rs.delivery_rate
+        if type(self) == QuicCongestionControl:
+            data = self.rs.add_attributes(data)
 
         return data
   

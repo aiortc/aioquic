@@ -112,6 +112,8 @@ class BBRCongestionControl(QuicCongestionControl):
         
         data["pacing_rate"] = self.recovery._pacer.pacing_rate
 
+        data = self.rs.add_attributes(data)
+
         return data
     
 

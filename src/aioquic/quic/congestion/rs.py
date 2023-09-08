@@ -1,6 +1,6 @@
 from ..packet_builder import QuicSentPacket
 
-BETA_DELIVERY_RATE = 7/8
+BETA_DELIVERY_RATE = 3/4
 
 # a class to collect information about the rate sample
 class RateSample:
@@ -32,7 +32,8 @@ class RateSample:
         return self.delivered - self.prior_delivered
 
     def get_packet_info(self, packet: QuicSentPacket):
-        return self.packet_info.get(packet.packet_number, None)
+        res = self.packet_info.get(packet.packet_number, None)
+        return res
     
     def add_packet_info(self, packet: QuicSentPacket, now : float):
         self.packet_info[packet.packet_number] = {
@@ -49,13 +50,13 @@ class RateSample:
         except:
             pass
     
-    def update_delivery_rate(self):
+    def update_delivery_rate(self, packet):
         # update delivery rate
         if self.number_ack >= 20:
             # delivery_rate should be more stable, use a beta increase
-            self.delivery_rate = BETA_DELIVERY_RATE * self.delivery_rate + (1-BETA_DELIVERY_RATE)*((self.delivered - self.prior_delivered) / self.interval)
+            self.delivery_rate = BETA_DELIVERY_RATE * self.delivery_rate + (1-BETA_DELIVERY_RATE)*((self.delivered - self.get_packet_info(packet)["delivered"]) / self.interval)
         else:
-            self.delivery_rate = (self.delivered - self.prior_delivered) / self.interval
+            self.delivery_rate = (self.delivered - self.get_packet_info(packet)["delivered"]) / self.interval
 
         self.delivery_rate = max(self.delivery_rate, 1000)  # at least 1kBps
 
@@ -72,7 +73,7 @@ class RateSample:
             self.prior_delivered = self.get_packet_info(packet)['delivered']
         
        
-        self.update_delivery_rate()
+        self.update_delivery_rate(packet)
         
     
     def on_sent(self, packet : QuicSentPacket, now : float):
@@ -92,4 +93,11 @@ class RateSample:
         if self.get_packet_info(packet) == None:
             return
         self.interval = now - self.get_packet_info(packet)["time"]
-        self.update_delivery_rate()
+        self.update_delivery_rate(packet)
+
+    def add_attributes(self, dict):
+        dict["delivered"] = self.delivered
+        dict["rs_interval"] = self.interval
+        dict["rs_lost"] = self.lost
+        dict["delivery_rate"] = self.delivery_rate
+        return dict

@@ -228,5 +228,5 @@ class CubicCongestionControl(QuicCongestionControl):
         else:
             data["Phase"] = "cubic-growth"
 
-        data["delivery_rate"] = self.rs.delivery_rate
+        data = self.rs.add_attributes(data)
         return data

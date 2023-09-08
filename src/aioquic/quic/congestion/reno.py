@@ -100,5 +100,5 @@ class RenoCongestionControl(QuicCongestionControl):
             data["Phase"] = "slow-start"
         else:
             data["Phase"] = "congestion-avoidance"
-        data["delivery_rate"] = self.rs.delivery_rate
+        data = self.rs.add_attributes(data)
         return data

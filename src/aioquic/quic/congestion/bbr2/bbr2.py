@@ -116,6 +116,8 @@ class BBR2CongestionControl(QuicCongestionControl):
         if (self.bbr_state.state == BBR2State.ProbeRTT):
             data["Phase"] = "ProbeRTT"
 
+        data = self.rs.add_attributes(data)
+
         return data
     
 
