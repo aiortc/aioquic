@@ -15,7 +15,7 @@ def encode_address(addr: NetworkAddress) -> bytes:
 
 class QuicRetryTokenHandler:
     def __init__(self) -> None:
-        self._key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+        self._key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
     def create_token(
         self,

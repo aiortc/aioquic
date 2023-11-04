@@ -16,6 +16,7 @@ class QuicRetryTokenHandlerTest(TestCase):
             addr, original_destination_connection_id, retry_source_connection_id
         )
         self.assertIsNotNone(token)
+        self.assertEqual(len(token), 256)
 
         # validate token - ok
         self.assertEqual(
