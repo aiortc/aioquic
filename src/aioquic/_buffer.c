@@ -416,11 +416,7 @@ PyInit__buffer(void)
     BufferType = PyType_FromSpec(&BufferType_spec);
     if (BufferType == NULL)
         return NULL;
-
-    PyObject *o = PyType_FromSpec(&BufferType_spec);
-    if (o == NULL)
-        return NULL;
-    PyModule_AddObject(m, "Buffer", o);
+    PyModule_AddObject(m, "Buffer", BufferType);
 
     return m;
 }
