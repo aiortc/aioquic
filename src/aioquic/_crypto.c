@@ -387,7 +387,6 @@ PyMODINIT_FUNC
 PyInit__crypto(void)
 {
     PyObject* m;
-    PyObject *o;
 
     m = PyModule_Create(&moduledef);
     if (m == NULL)
@@ -400,20 +399,12 @@ PyInit__crypto(void)
     AEADType = PyType_FromSpec(&AEADType_spec);
     if (AEADType == NULL)
         return NULL;
-
-    o = PyType_FromSpec(&AEADType_spec);
-    if (o == NULL)
-        return NULL;
-    PyModule_AddObject(m, "AEAD", o);
+    PyModule_AddObject(m, "AEAD", AEADType);
 
     HeaderProtectionType = PyType_FromSpec(&HeaderProtectionType_spec);
     if (HeaderProtectionType == NULL)
         return NULL;
-
-    o = PyType_FromSpec(&HeaderProtectionType_spec);
-    if (o == NULL)
-        return NULL;
-    PyModule_AddObject(m, "HeaderProtection", o);
+    PyModule_AddObject(m, "HeaderProtection", HeaderProtectionType);
 
     // ensure required ciphers are initialised
     EVP_add_cipher(EVP_aes_128_ecb());
