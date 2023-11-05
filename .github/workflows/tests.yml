@@ -113,6 +113,8 @@ jobs:
           - os: macos-latest
             arch: x86_64
           - os: ubuntu-latest
+            arch: aarch64
+          - os: ubuntu-latest
             arch: i686
           - os: ubuntu-latest
             arch: x86_64
