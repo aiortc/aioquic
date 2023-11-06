@@ -758,7 +758,9 @@ class QuicConnection:
                 if header.destination_cid == connection_id.cid:
                     destination_cid_seq = connection_id.sequence_number
                     break
-            if self._is_client and destination_cid_seq is None:
+            if (
+                self._is_client or header.packet_type == PACKET_TYPE_HANDSHAKE
+            ) and destination_cid_seq is None:
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
                         category="transport",
