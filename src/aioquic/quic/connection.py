@@ -2292,19 +2292,27 @@ class QuicConnection:
         is_ack_eliciting = False
         is_probing = None
         while not buf.eof():
-            frame_type = buf.pull_uint_var()
+            # get frame type
+            try:
+                frame_type = buf.pull_uint_var()
+            except BufferReadError:
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                    frame_type=None,
+                    reason_phrase="Malformed frame type",
+                )
 
             # check frame type is known
             try:
                 frame_handler, frame_epochs = self.__frame_handlers[frame_type]
             except KeyError:
                 raise QuicConnectionError(
-                    error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                    error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
                     frame_type=frame_type,
                     reason_phrase="Unknown frame type",
                 )
 
-            # check frame is allowed for the epoch
+            # check frame type is allowed for the epoch
             if context.epoch not in frame_epochs:
                 raise QuicConnectionError(
                     error_code=QuicErrorCode.PROTOCOL_VIOLATION,

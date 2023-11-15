@@ -2325,16 +2325,29 @@ class QuicConnectionTest(TestCase):
             self.assertFalse(is_ack_eliciting)
             self.assertTrue(is_probing)
 
-    def test_payload_received_unknown_frame(self):
+    def test_payload_received_malformed_frame_type(self):
         with client_and_server() as (client, server):
-            # client receives unknown frame
+            # client receives a malformed frame type
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._payload_received(client_receive_context(client), b"\xff")
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.FRAME_ENCODING_ERROR
+            )
+            self.assertEqual(cm.exception.frame_type, None)
+            self.assertEqual(cm.exception.reason_phrase, "Malformed frame type")
+
+    def test_payload_received_unknown_frame_type(self):
+        with client_and_server() as (client, server):
+            # client receives unknown frame type
             with self.assertRaises(QuicConnectionError) as cm:
                 client._payload_received(client_receive_context(client), b"\x1f")
-            self.assertEqual(cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION)
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.FRAME_ENCODING_ERROR
+            )
             self.assertEqual(cm.exception.frame_type, 0x1F)
             self.assertEqual(cm.exception.reason_phrase, "Unknown frame type")
 
-    def test_payload_received_unexpected_frame(self):
+    def test_payload_received_unexpected_frame_type(self):
         with client_and_server() as (client, server):
             # client receives CRYPTO frame in 0-RTT
             with self.assertRaises(QuicConnectionError) as cm:
