@@ -23,6 +23,7 @@ from .utils import (
     generate_ec_certificate,
     generate_ed448_certificate,
     generate_ed25519_certificate,
+    generate_rsa_certificate,
 )
 
 real_sendto = socket.socket.sendto
@@ -120,15 +121,45 @@ class HighLevelTest(TestCase):
 
     @asynctest
     async def test_connect_and_serve_ipv4(self):
-        async with self.run_server(host="0.0.0.0") as server_port:
-            response = await self.run_client(host="127.0.0.1", port=server_port)
+        certificate, private_key = generate_rsa_certificate(
+            alternative_names=["localhost", "127.0.0.1"], common_name="localhost"
+        )
+        async with self.run_server(
+            configuration=QuicConfiguration(
+                certificate=certificate,
+                private_key=private_key,
+                is_client=False,
+            ),
+            host="0.0.0.0",
+        ) as server_port:
+            response = await self.run_client(
+                cadata=certificate.public_bytes(serialization.Encoding.PEM),
+                cafile=None,
+                host="127.0.0.1",
+                port=server_port,
+            )
             self.assertEqual(response, b"gnip")
 
     @skipIf("ipv6" in SKIP_TESTS, "Skipping IPv6 tests")
     @asynctest
     async def test_connect_and_serve_ipv6(self):
-        async with self.run_server(host="::") as server_port:
-            response = await self.run_client(host="::1", port=server_port)
+        certificate, private_key = generate_rsa_certificate(
+            alternative_names=["localhost", "::1"], common_name="localhost"
+        )
+        async with self.run_server(
+            configuration=QuicConfiguration(
+                certificate=certificate,
+                private_key=private_key,
+                is_client=False,
+            ),
+            host="::",
+        ) as server_port:
+            response = await self.run_client(
+                cadata=certificate.public_bytes(serialization.Encoding.PEM),
+                cafile=None,
+                host="::1",
+                port=server_port,
+            )
             self.assertEqual(response, b"gnip")
 
     async def _test_connect_and_serve_with_certificate(self, certificate, private_key):
@@ -166,6 +197,14 @@ class HighLevelTest(TestCase):
     async def test_connect_and_serve_with_ed448_certificate(self):
         await self._test_connect_and_serve_with_certificate(
             *generate_ed448_certificate(
+                alternative_names=["localhost"], common_name="localhost"
+            )
+        )
+
+    @asynctest
+    async def test_connect_and_serve_with_rsa_certificate(self):
+        await self._test_connect_and_serve_with_certificate(
+            *generate_rsa_certificate(
                 alternative_names=["localhost"], common_name="localhost"
             )
         )

@@ -72,7 +72,11 @@ class QuicConfiguration:
 
     server_name: Optional[str] = None
     """
-    The server name to send during the TLS handshake the Server Name Indication.
+    The server name to use when verifying the server's TLS certificate, which
+    can either be a DNS name or an IP address.
+
+    If it is a DNS name, it is also sent during the TLS handshake in the
+    Server Name Indication (SNI) extension.
 
     .. note:: This is only used by clients.
     """
