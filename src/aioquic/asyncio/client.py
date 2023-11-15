@@ -1,5 +1,4 @@
 import asyncio
-import ipaddress
 import socket
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Callable, Optional, cast
@@ -49,13 +48,6 @@ async def connect(
     loop = asyncio.get_event_loop()
     local_host = "::"
 
-    # if host is not an IP address, pass it to enable SNI
-    try:
-        ipaddress.ip_address(host)
-        server_name = None
-    except ValueError:
-        server_name = host
-
     # lookup remote address
     infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
     addr = infos[0][4]
@@ -66,7 +58,7 @@ async def connect(
     if configuration is None:
         configuration = QuicConfiguration(is_client=True)
     if configuration.server_name is None:
-        configuration.server_name = server_name
+        configuration.server_name = host
     connection = QuicConnection(
         configuration=configuration, session_ticket_handler=session_ticket_handler
     )

@@ -1350,6 +1350,15 @@ class Context:
 
         assert len(key_share), "no key share entries"
 
+        # Literal IPv4 and IPv6 addresses are not permitted in
+        # Server Name Indication (SNI) hostname.
+        try:
+            ipaddress.ip_address(self._server_name)
+        except ValueError:
+            server_name = self._server_name
+        else:
+            server_name = None
+
         hello = ClientHello(
             random=self.client_random,
             legacy_session_id=self.legacy_session_id,
@@ -1360,7 +1369,7 @@ class Context:
             psk_key_exchange_modes=self._psk_key_exchange_modes
             if (self.session_ticket or self.new_session_ticket_cb is not None)
             else None,
-            server_name=self._server_name,
+            server_name=server_name,
             signature_algorithms=self._signature_algorithms,
             supported_groups=supported_groups,
             supported_versions=self._supported_versions,
