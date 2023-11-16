@@ -48,6 +48,7 @@ from .utils import (
     generate_ec_certificate,
     generate_ed448_certificate,
     generate_ed25519_certificate,
+    generate_rsa_certificate,
     load,
 )
 
@@ -159,6 +160,10 @@ class ContextTest(TestCase):
         with self.assertRaises(tls.AlertUnexpectedMessage):
             client.handle_message(b"\x00\x00\x00\x00", create_buffers())
 
+        client.state = State.CLIENT_EXPECT_CERTIFICATE
+        with self.assertRaises(tls.AlertUnexpectedMessage):
+            client.handle_message(b"\x00\x00\x00\x00", create_buffers())
+
         client.state = State.CLIENT_EXPECT_CERTIFICATE_VERIFY
         with self.assertRaises(tls.AlertUnexpectedMessage):
             client.handle_message(b"\x00\x00\x00\x00", create_buffers())
@@ -233,6 +238,14 @@ class ContextTest(TestCase):
         server = self.create_server()
 
         server.state = State.SERVER_EXPECT_CLIENT_HELLO
+        with self.assertRaises(tls.AlertUnexpectedMessage):
+            server.handle_message(b"\x00\x00\x00\x00", create_buffers())
+
+        server.state = State.SERVER_EXPECT_CERTIFICATE
+        with self.assertRaises(tls.AlertUnexpectedMessage):
+            server.handle_message(b"\x00\x00\x00\x00", create_buffers())
+
+        server.state = State.SERVER_EXPECT_CERTIFICATE_VERIFY
         with self.assertRaises(tls.AlertUnexpectedMessage):
             server.handle_message(b"\x00\x00\x00\x00", create_buffers())
 
@@ -382,6 +395,121 @@ class ContextTest(TestCase):
         # check ALPN matches
         self.assertEqual(client.alpn_negotiated, None)
         self.assertEqual(server.alpn_negotiated, None)
+
+    def test_handshake_with_certificate_request_no_certificate(self):
+        # The server requests a certificate, but the client has none.
+        client = self.create_client()
+        server = self.create_server()
+        server._request_client_certificate = True
+
+        # Send client hello.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
+        server_input = merge_buffers(client_buf)
+        self.assertGreaterEqual(len(server_input), 181)
+        self.assertLessEqual(len(server_input), 358)
+        reset_buffers(client_buf)
+
+        # Handle client hello.
+        #
+        # Send server hello, encrypted extensions, certificate request, certificate,
+        # certificate verify, finished.
+        server_buf = create_buffers()
+        server.handle_message(server_input, server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
+        client_input = merge_buffers(server_buf)
+        self.assertGreaterEqual(len(client_input), 587)
+        self.assertLessEqual(len(client_input), 2316)
+
+        reset_buffers(server_buf)
+
+        # Handle server hello, encrypted extensions, certificate request, certificate,
+        # certificate verify, finished.
+        #
+        # Send certificate, finished.
+        client.handle_message(client_input, client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+        server_input = merge_buffers(client_buf)
+        self.assertEqual(len(server_input), 60)
+        reset_buffers(client_buf)
+
+        # Handle certificate, finished.
+        server.handle_message(server_input, server_buf)
+        self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
+        client_input = merge_buffers(server_buf)
+        self.assertEqual(len(client_input), 0)
+
+        # check keys match
+        self.assertEqual(client._dec_key, server._enc_key)
+        self.assertEqual(client._enc_key, server._dec_key)
+
+        # check cipher suite
+        self.assertEqual(
+            client.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+        )
+        self.assertEqual(
+            server.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+        )
+
+    def test_handshake_with_certificate_request_with_certificate(self):
+        # The server requests a certificate, and the client has one.
+        client = self.create_client()
+        client.certificate, client.certificate_private_key = generate_rsa_certificate(
+            common_name="client.example.com"
+        )
+        server = self.create_server()
+        server._request_client_certificate = True
+
+        # Send client hello.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
+        server_input = merge_buffers(client_buf)
+        self.assertGreaterEqual(len(server_input), 181)
+        self.assertLessEqual(len(server_input), 358)
+        reset_buffers(client_buf)
+
+        # Handle client hello.
+        #
+        # Send server hello, encrypted extensions, certificate request, certificate,
+        # certificate verify, finished.
+        server_buf = create_buffers()
+        server.handle_message(server_input, server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
+        client_input = merge_buffers(server_buf)
+        self.assertGreaterEqual(len(client_input), 587)
+        self.assertLessEqual(len(client_input), 2316)
+
+        reset_buffers(server_buf)
+
+        # Handle server hello, encrypted extensions, certificate request, certificate,
+        # certificate verify, finished.
+        #
+        # Send certificate, certificate verify, finished.
+        client.handle_message(client_input, client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+        server_input = merge_buffers(client_buf)
+        self.assertEqual(len(server_input), 1043)
+        reset_buffers(client_buf)
+
+        # Handle certificate, certificate verify, finished.
+        server.handle_message(server_input, server_buf)
+        self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
+        client_input = merge_buffers(server_buf)
+        self.assertEqual(len(client_input), 0)
+
+        # check keys match
+        self.assertEqual(client._dec_key, server._enc_key)
+        self.assertEqual(client._enc_key, server._dec_key)
+
+        # check cipher suite
+        self.assertEqual(
+            client.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+        )
+        self.assertEqual(
+            server.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+        )
 
     def _test_handshake_with_certificate(self, certificate, private_key):
         server = self.create_server()
