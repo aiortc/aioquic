@@ -9,6 +9,7 @@ from aioquic.buffer import Buffer, BufferReadError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.tls import (
     Certificate,
+    CertificateRequest,
     CertificateVerify,
     ClientHello,
     Context,
@@ -20,6 +21,7 @@ from aioquic.tls import (
     load_pem_x509_certificates,
     pull_block,
     pull_certificate,
+    pull_certificate_request,
     pull_certificate_verify,
     pull_client_hello,
     pull_encrypted_extensions,
@@ -27,6 +29,7 @@ from aioquic.tls import (
     pull_new_session_ticket,
     pull_server_hello,
     push_certificate,
+    push_certificate_request,
     push_certificate_verify,
     push_client_hello,
     push_encrypted_extensions,
@@ -1227,6 +1230,39 @@ class TlsTest(TestCase):
         buf = Buffer(1600)
         push_certificate(buf, certificate)
         self.assertEqual(buf.data, load("tls_certificate.bin"))
+
+    def test_pull_certificate_request(self):
+        buf = Buffer(data=load("tls_certificate_request.bin"))
+        certificate_request = pull_certificate_request(buf)
+        self.assertTrue(buf.eof())
+
+        self.assertEqual(certificate_request.request_context, b"")
+        self.assertEqual(
+            certificate_request.signature_algorithms,
+            [
+                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
+                tls.SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
+                tls.SignatureAlgorithm.RSA_PKCS1_SHA256,
+                tls.SignatureAlgorithm.RSA_PKCS1_SHA1,
+            ],
+        )
+        self.assertEqual(certificate_request.other_extensions, [(12345, b"foo")])
+
+    def test_push_certificate_request(self):
+        certificate_request = CertificateRequest(
+            request_context=b"",
+            signature_algorithms=[
+                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
+                tls.SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
+                tls.SignatureAlgorithm.RSA_PKCS1_SHA256,
+                tls.SignatureAlgorithm.RSA_PKCS1_SHA1,
+            ],
+            other_extensions=[(12345, b"foo")],
+        )
+
+        buf = Buffer(400)
+        push_certificate_request(buf, certificate_request)
+        self.assertEqual(buf.data, load("tls_certificate_request.bin"))
 
     def test_pull_certificate_verify(self):
         buf = Buffer(data=load("tls_certificate_verify.bin"))

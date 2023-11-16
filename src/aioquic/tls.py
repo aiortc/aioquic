@@ -862,6 +862,55 @@ def push_certificate(buf: Buffer, certificate: Certificate) -> None:
 
 
 @dataclass
+class CertificateRequest:
+    request_context: bytes = b""
+    signature_algorithms: Optional[List[int]] = None
+    other_extensions: List[Tuple[int, bytes]] = field(default_factory=list)
+
+
+def pull_certificate_request(buf: Buffer) -> CertificateRequest:
+    certificate_request = CertificateRequest()
+
+    assert buf.pull_uint8() == HandshakeType.CERTIFICATE_REQUEST
+    with pull_block(buf, 3):
+        certificate_request.request_context = pull_opaque(buf, 1)
+
+        def pull_extension() -> None:
+            extension_type = buf.pull_uint16()
+            extension_length = buf.pull_uint16()
+            if extension_type == ExtensionType.SIGNATURE_ALGORITHMS:
+                certificate_request.signature_algorithms = pull_list(
+                    buf, 2, buf.pull_uint16
+                )
+            else:
+                certificate_request.other_extensions.append(
+                    (extension_type, buf.pull_bytes(extension_length))
+                )
+
+        pull_list(buf, 2, pull_extension)
+
+    return certificate_request
+
+
+def push_certificate_request(
+    buf: Buffer, certificate_request: CertificateRequest
+) -> None:
+    buf.push_uint8(HandshakeType.CERTIFICATE_REQUEST)
+    with push_block(buf, 3):
+        push_opaque(buf, 1, certificate_request.request_context)
+
+        with push_block(buf, 2):
+            with push_extension(buf, ExtensionType.SIGNATURE_ALGORITHMS):
+                push_list(
+                    buf, 2, buf.push_uint16, certificate_request.signature_algorithms
+                )
+
+            for extension_type, extension_value in certificate_request.other_extensions:
+                with push_extension(buf, extension_type):
+                    buf.push_bytes(extension_value)
+
+
+@dataclass
 class CertificateVerify:
     algorithm: int
     signature: bytes
