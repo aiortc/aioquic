@@ -53,14 +53,14 @@ Features
 
 - minimal TLS 1.3 implementation conforming with `RFC 8446`_
 - QUIC stack conforming with `RFC 9000`_
-  * IPv4 and IPv6 support
-  * connection migration and NAT rebinding
-  * logging TLS traffic secrets
-  * logging QUIC events in QLOG format
+   * IPv4 and IPv6 support
+   * connection migration and NAT rebinding
+   * logging TLS traffic secrets
+   * logging QUIC events in QLOG format
 - HTTP/3 stack conforming with `RFC 9114`_
-  * server push support
-  * WebSocket bootstrapping conforming with `RFC 9220`_
-  * datagram support conforming with `RFC 9297`_
+   * server push support
+   * WebSocket bootstrapping conforming with `RFC 9220`_
+   * datagram support conforming with `RFC 9297`_
 
 Requirements
 ------------
