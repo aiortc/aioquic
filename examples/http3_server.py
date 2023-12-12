@@ -302,7 +302,9 @@ class WebTransportHandler:
                 )
             end_stream = True
         elif message["type"] == "webtransport.datagram.send":
-            self.connection.send_datagram(flow_id=self.stream_id, data=message["data"])
+            self.connection.send_datagram(
+                stream_id=self.stream_id, data=message["data"]
+            )
         elif message["type"] == "webtransport.stream.send":
             self.connection._quic.send_stream_data(
                 stream_id=message["stream"], data=message["data"]
@@ -438,7 +440,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
             handler = self._handlers[event.stream_id]
             handler.http_event_received(event)
         elif isinstance(event, DatagramReceived):
-            handler = self._handlers[event.flow_id]
+            handler = self._handlers[event.stream_id]
             handler.http_event_received(event)
         elif isinstance(event, WebTransportStreamDataReceived):
             handler = self._handlers[event.session_id]

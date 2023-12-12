@@ -282,13 +282,13 @@ class WebTransportTest(TestCase):
             session_id = self._make_session(h3_client, h3_server)
 
             # send datagram
-            h3_client.send_datagram(data=b"foo", flow_id=session_id)
+            h3_client.send_datagram(data=b"foo", stream_id=session_id)
 
             # receive datagram
             events = h3_transfer(quic_client, h3_server)
             self.assertEqual(
                 events,
-                [DatagramReceived(data=b"foo", flow_id=session_id)],
+                [DatagramReceived(data=b"foo", stream_id=session_id)],
             )
 
     def test_handle_datagram_truncated(self):
@@ -301,8 +301,5 @@ class WebTransportTest(TestCase):
         h3_server.handle_event(DatagramFrameReceived(data=b"\xff"))
         self.assertEqual(
             quic_server.closed,
-            (
-                ErrorCode.H3_GENERAL_PROTOCOL_ERROR,
-                "Could not parse flow ID",
-            ),
+            (ErrorCode.H3_DATAGRAM_ERROR, "Could not parse quarter stream ID"),
         )

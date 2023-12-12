@@ -51,14 +51,16 @@ different concurrency models.
 Features
 --------
 
-- QUIC stack conforming with `RFC 9000`_
-- HTTP/3 stack conforming with `RFC 9114`_
 - minimal TLS 1.3 implementation conforming with `RFC 8446`_
-- IPv4 and IPv6 support
-- connection migration and NAT rebinding
-- logging TLS traffic secrets
-- logging QUIC events in QLOG format
-- HTTP/3 server push support
+- QUIC stack conforming with `RFC 9000`_
+  * IPv4 and IPv6 support
+  * connection migration and NAT rebinding
+  * logging TLS traffic secrets
+  * logging QUIC events in QLOG format
+- HTTP/3 stack conforming with `RFC 9114`_
+  * server push support
+  * WebSocket bootstrapping conforming with `RFC 9220`_
+  * datagram support conforming with `RFC 9297`_
 
 Requirements
 ------------
@@ -132,3 +134,5 @@ License
 .. _RFC 8446: https://datatracker.ietf.org/doc/html/rfc8446
 .. _RFC 9000: https://datatracker.ietf.org/doc/html/rfc9000
 .. _RFC 9114: https://datatracker.ietf.org/doc/html/rfc9114
+.. _RFC 9220: https://datatracker.ietf.org/doc/html/rfc9220
+.. _RFC 9297: https://datatracker.ietf.org/doc/html/rfc9297
