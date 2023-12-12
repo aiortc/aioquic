@@ -42,6 +42,7 @@ jobs:
           check_filenames: true
           check_hidden: false
           ignore_words_list: quicly
+          skip: "*.bin"
 
   test:
     runs-on: ${{ matrix.os }}
