@@ -40,8 +40,8 @@ class DatagramReceived(H3Event):
     data: bytes
     "The data which was received."
 
-    flow_id: int
-    "The ID of the flow the data was received for."
+    stream_id: int
+    "The ID of the stream the data was received for."
 
 
 @dataclass

@@ -28,6 +28,7 @@ UPPERCASE = re.compile(b"[A-Z]")
 
 
 class ErrorCode(IntEnum):
+    H3_DATAGRAM_ERROR = 0x33
     H3_NO_ERROR = 0x100
     H3_GENERAL_PROTOCOL_ERROR = 0x101
     H3_INTERNAL_ERROR = 0x102
@@ -76,7 +77,7 @@ class Setting(IntEnum):
 
     # https://datatracker.ietf.org/doc/html/rfc9220#section-5
     ENABLE_CONNECT_PROTOCOL = 0x8
-    # https://www.rfc-editor.org/rfc/rfc9297.html#section-5.1
+    # https://datatracker.ietf.org/doc/html/rfc9297#section-5.1
     H3_DATAGRAM = 0x33
     # https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2-02#section-10.1
     ENABLE_WEBTRANSPORT = 0x2B603742
@@ -122,6 +123,10 @@ class QpackEncoderStreamError(ProtocolError):
 
 class ClosedCriticalStream(ProtocolError):
     error_code = ErrorCode.H3_CLOSED_CRITICAL_STREAM
+
+
+class DatagramError(ProtocolError):
+    error_code = ErrorCode.H3_DATAGRAM_ERROR
 
 
 class FrameUnexpected(ProtocolError):
@@ -384,14 +389,17 @@ class H3Connection:
 
         return []
 
-    def send_datagram(self, flow_id: int, data: bytes) -> None:
+    def send_datagram(self, stream_id: int, data: bytes) -> None:
         """
-        Send a datagram for the specified flow.
+        Send a datagram for the specified stream.
 
-        :param flow_id: The flow ID.
+        :param stream_id: The stream ID.
         :param data: The HTTP/3 datagram payload.
         """
-        self._quic.send_datagram_frame(encode_uint_var(flow_id) + data)
+        assert (
+            stream_id % 4 == 0
+        ), "Datagrams can only be sent for client-initiated bidirectional streams"
+        self._quic.send_datagram_frame(encode_uint_var(stream_id // 4) + data)
 
     def send_push_promise(self, stream_id: int, headers: Headers) -> int:
         """
@@ -767,10 +775,12 @@ class H3Connection:
         """
         buf = Buffer(data=data)
         try:
-            flow_id = buf.pull_uint_var()
+            quarter_stream_id = buf.pull_uint_var()
         except BufferReadError:
-            raise ProtocolError("Could not parse flow ID")
-        return [DatagramReceived(data=data[buf.tell() :], flow_id=flow_id)]
+            raise DatagramError("Could not parse quarter stream ID")
+        return [
+            DatagramReceived(data=data[buf.tell() :], stream_id=quarter_stream_id * 4)
+        ]
 
     def _receive_request_or_push_data(
         self, stream: H3Stream, data: bytes, stream_ended: bool
