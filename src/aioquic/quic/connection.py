@@ -908,6 +908,7 @@ class QuicConnection:
                         )
                 return
 
+            crypto_frame_required = False
             network_path = self._find_network_path(addr)
 
             # server initialization
@@ -915,6 +916,7 @@ class QuicConnection:
                 assert (
                     header.packet_type == PACKET_TYPE_INITIAL
                 ), "first packet must be INITIAL"
+                crypto_frame_required = True
                 self._network_paths = [network_path]
                 self._version = QuicProtocolVersion(header.version)
                 self._initialize(header.destination_cid)
@@ -1042,7 +1044,7 @@ class QuicConnection:
             )
             try:
                 is_ack_eliciting, is_probing = self._payload_received(
-                    context, plain_payload
+                    context, plain_payload, crypto_frame_required=crypto_frame_required
                 )
             except QuicConnectionError as exc:
                 self._logger.warning(exc)
@@ -2329,13 +2331,17 @@ class QuicConnection:
             self._retire_connection_ids.append(sequence_number)
 
     def _payload_received(
-        self, context: QuicReceiveContext, plain: bytes
+        self,
+        context: QuicReceiveContext,
+        plain: bytes,
+        crypto_frame_required: bool = False,
     ) -> Tuple[bool, bool]:
         """
         Handle a QUIC packet payload.
         """
         buf = Buffer(data=plain)
 
+        crypto_frame_found = False
         frame_found = False
         is_ack_eliciting = False
         is_probing = None
@@ -2384,6 +2390,9 @@ class QuicConnection:
             # update ACK only / probing flags
             frame_found = True
 
+            if frame_type == QuicFrameType.CRYPTO:
+                crypto_frame_found = True
+
             if frame_type not in NON_ACK_ELICITING_FRAME_TYPES:
                 is_ack_eliciting = True
 
@@ -2397,6 +2406,15 @@ class QuicConnection:
                 error_code=QuicErrorCode.PROTOCOL_VIOLATION,
                 frame_type=QuicFrameType.PADDING,
                 reason_phrase="Packet contains no frames",
+            )
+
+        # RFC 9000 - 17.2.2. Initial Packet
+        # The first packet sent by a client always includes a CRYPTO frame.
+        if crypto_frame_required and not crypto_frame_found:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                frame_type=QuicFrameType.PADDING,
+                reason_phrase="Packet contains no CRYPTO frame",
             )
 
         return is_ack_eliciting, bool(is_probing)

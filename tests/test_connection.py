@@ -794,6 +794,19 @@ class QuicConnectionTest(TestCase):
         self.assertFalse(server._handshake_done_pending)
         self.assertEqual(datagram_sizes(items), [224])
 
+    def test_connect_with_no_crypto_frame(self):
+        def patch(client):
+            """
+            Patch client to send PING instead of CRYPTO.
+            """
+            client._push_crypto_data = client._send_probe
+
+        with client_and_server(client_patch=patch) as (client, server):
+            self.assertEqual(
+                server._close_event.reason_phrase,
+                "Packet contains no CRYPTO frame",
+            )
+
     def test_connect_with_no_transport_parameters(self):
         def patch(client):
             """
