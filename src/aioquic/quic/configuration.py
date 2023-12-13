@@ -26,6 +26,13 @@ class QuicConfiguration:
     A list of supported ALPN protocols.
     """
 
+    congestion_control_algorithm: str = "reno"
+    """
+    The name of the congestion control algorithm to use.
+
+    Currently supported algorithms: `"reno"`.
+    """
+
     connection_id_length: int = 8
     """
     The length in bytes of local connection IDs.

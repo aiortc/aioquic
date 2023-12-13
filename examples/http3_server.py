@@ -515,6 +515,12 @@ if __name__ == "__main__":
         help="load the TLS certificate from the specified file",
     )
     parser.add_argument(
+        "--congestion-control-algorithm",
+        type=str,
+        default="reno",
+        help="use the specified congestion control algorithm",
+    )
+    parser.add_argument(
         "--host",
         type=str,
         default="::",
@@ -584,6 +590,7 @@ if __name__ == "__main__":
 
     configuration = QuicConfiguration(
         alpn_protocols=H3_ALPN + H0_ALPN + ["siduck"],
+        congestion_control_algorithm=args.congestion_control_algorithm,
         is_client=False,
         max_datagram_frame_size=65536,
         max_datagram_size=args.max_datagram_size,
