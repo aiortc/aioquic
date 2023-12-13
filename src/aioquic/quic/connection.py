@@ -28,6 +28,7 @@ from ..buffer import (
 )
 from . import events
 from .configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
+from .congestion.base import K_GRANULARITY
 from .crypto import CryptoError, CryptoPair, KeyUnavailableError
 from .logger import QuicLoggerTrace
 from .packet import (
@@ -61,7 +62,7 @@ from .packet_builder import (
     QuicPacketBuilder,
     QuicPacketBuilderStop,
 )
-from .recovery import K_GRANULARITY, QuicPacketRecovery, QuicPacketSpace
+from .recovery import QuicPacketRecovery, QuicPacketSpace
 from .stream import FinalSizeError, QuicStream, StreamFinishedError
 
 logger = logging.getLogger("quic")
@@ -383,6 +384,7 @@ class QuicConnection:
 
         # loss recovery
         self._loss = QuicPacketRecovery(
+            congestion_control_algorithm=configuration.congestion_control_algorithm,
             initial_rtt=configuration.initial_rtt,
             max_datagram_size=self._max_datagram_size,
             peer_completed_address_validation=not self._is_client,
@@ -1508,10 +1510,10 @@ class QuicConnection:
             self._loss.peer_completed_address_validation = True
 
         self._loss.on_ack_received(
-            space=self._spaces[context.epoch],
             ack_rangeset=ack_rangeset,
             ack_delay=ack_delay,
             now=context.time,
+            space=self._spaces[context.epoch],
         )
 
     def _handle_connection_close_frame(

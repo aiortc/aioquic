@@ -446,6 +446,12 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--congestion-control-algorithm",
+        type=str,
+        default="reno",
+        help="use the specified congestion control algorithm",
+    )
+    parser.add_argument(
         "-d", "--data", type=str, help="send the specified data in a POST request"
     )
     parser.add_argument(
@@ -527,6 +533,7 @@ if __name__ == "__main__":
     configuration = QuicConfiguration(
         is_client=True,
         alpn_protocols=H0_ALPN if args.legacy_http else H3_ALPN,
+        congestion_control_algorithm=args.congestion_control_algorithm,
         max_datagram_size=args.max_datagram_size,
     )
     if args.ca_certs:
