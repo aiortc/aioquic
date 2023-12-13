@@ -30,7 +30,7 @@ class QuicConfiguration:
     """
     The name of the congestion control algorithm to use.
 
-    Currently supported algorithms: `"reno"`.
+    Currently supported algorithms: `"reno", `"cubic"`.
     """
 
     connection_id_length: int = 8
