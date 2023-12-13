@@ -1,5 +1,5 @@
 import abc
-from typing import Dict, Iterable, Optional, Protocol
+from typing import Any, Dict, Iterable, Optional, Protocol
 
 from ..packet_builder import QuicSentPacket
 
@@ -21,7 +21,7 @@ class QuicCongestionControl(abc.ABC):
         self.congestion_window = K_INITIAL_WINDOW * max_datagram_size
 
     @abc.abstractmethod
-    def on_packet_acked(self, *, packet: QuicSentPacket) -> None:
+    def on_packet_acked(self, *, now: float, packet: QuicSentPacket) -> None:
         ...  # pragma: no cover
 
     @abc.abstractmethod
@@ -39,6 +39,12 @@ class QuicCongestionControl(abc.ABC):
     @abc.abstractmethod
     def on_rtt_measurement(self, *, now: float, rtt: float) -> None:
         ...  # pragma: no cover
+
+    def get_log_data(self) -> Dict[str, Any]:
+        data = {"cwnd": self.congestion_window, "bytes_in_flight": self.bytes_in_flight}
+        if self.ssthresh is not None:
+            data["ssthresh"] = self.ssthresh
+        return data
 
 
 class QuicCongestionControlFactory(Protocol):
