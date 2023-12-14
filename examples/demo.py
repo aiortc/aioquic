@@ -6,8 +6,6 @@ import datetime
 import os
 from urllib.parse import urlencode
 
-import httpbin
-from asgiref.wsgi import WsgiToAsgi
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
@@ -134,7 +132,6 @@ starlette = Starlette(
         Route("/", homepage),
         Route("/{size:int}", padding),
         Route("/echo", echo, methods=["POST"]),
-        Mount("/httpbin", WsgiToAsgi(httpbin.app)),
         Route("/logs", logs),
         WebSocketRoute("/ws", ws),
         Mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True)),
