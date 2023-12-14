@@ -5,8 +5,7 @@ After checking out the code using git you can run:
 
 .. code-block:: console
 
-   pip install -e .
-   pip install asgiref dnslib "flask<2.2" httpbin starlette "werkzeug<2.1" wsproto
+   pip install . dnslib jinja2 starlette wsproto
 
 
 HTTP/3
