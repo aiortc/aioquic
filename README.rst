@@ -62,10 +62,20 @@ Features
    * WebSocket bootstrapping conforming with `RFC 9220`_
    * datagram support conforming with `RFC 9297`_
 
-Requirements
-------------
+Installing
+----------
 
-``aioquic`` requires Python 3.8 or better, and the OpenSSL development headers.
+The easiest way to install ``aioquic`` is to run:
+
+.. code:: bash
+
+    pip install aioquic
+
+Building from source
+--------------------
+
+If there are no wheels for your system or if you wish to build ``aioquic``
+from source you will need the OpenSSL development headers.
 
 Linux
 .....
