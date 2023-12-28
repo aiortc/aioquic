@@ -219,6 +219,18 @@ class ContextTest(TestCase):
         with self.assertRaises(tls.AlertUnexpectedMessage):
             client.handle_message(b"\x00\x00\x00\x00", create_buffers())
 
+    def test_client_bad_hello_buffer_read_error(self):
+        buf = Buffer(capacity=100)
+        buf.push_uint8(tls.HandshakeType.SERVER_HELLO)
+        with tls.push_block(buf, 3):
+            pass
+
+        self.handshake_with_client_input_corruption(
+            # Receive a malformed ServerHello
+            lambda x: buf.data,
+            tls.AlertDecodeError("Could not parse TLS message"),
+        )
+
     def test_client_bad_hello_compression_method(self):
         self.handshake_with_client_input_corruption(
             # Mess with compression method.
