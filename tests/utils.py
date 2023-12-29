@@ -32,14 +32,15 @@ def generate_certificate(*, alternative_names, common_name, hash_algorithm, key)
         [x509.NameAttribute(x509.NameOID.COMMON_NAME, common_name)]
     )
 
+    # See tls.py's comment about utcnow() for why we call now() with None below.
     builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.utcnow())
-        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=10))
+        .not_valid_before(datetime.datetime.now(None))
+        .not_valid_after(datetime.datetime.now(None) + datetime.timedelta(days=10))
     )
     if alternative_names:
         builder = builder.add_extension(

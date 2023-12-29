@@ -54,8 +54,17 @@ SERVER_CONTEXT_STRING = b"TLS 1.3, server CertificateVerify"
 
 T = TypeVar("T")
 
-# facilitate mocking for the test suite
-utcnow = datetime.datetime.utcnow
+# facilitate time mocking for the test suite
+#
+# Python 3.12 deprecates utcnow(), but we cannot do the recommended thing and replace
+# utcnow() with datetime.now(timezone.utc) as the datetime objects that the cryptography
+# x509 library puts in certificates do not have any timezone info.  If we try to
+# compare them with something that has timezone info we will get an exception:
+#
+#     TypeError: can't compare offset-naive and offset-aware datetimes
+#
+# We must continue to make an explictly offset-naive timestamp.
+utcnow = partial(datetime.datetime.now, None)
 
 
 class AlertDescription(IntEnum):
