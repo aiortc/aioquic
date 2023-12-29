@@ -63,7 +63,7 @@ T = TypeVar("T")
 #
 #     TypeError: can't compare offset-naive and offset-aware datetimes
 #
-# We must continue to make an explictly offset-naive timestamp.
+# We must continue to make an explicitly offset-naive timestamp.
 utcnow = partial(datetime.datetime.now, None)
 
 
