@@ -207,6 +207,8 @@ class QuicStreamSender:
             if self._pending_eof:
                 # FIN only
                 self._pending_eof = False
+                if self._buffer_start == self._buffer_fin:
+                    self.is_finished = True
                 return QuicStreamFrame(fin=True, offset=self._buffer_fin)
 
             self.buffer_is_empty = True
@@ -265,8 +267,8 @@ class QuicStreamSender:
                     self._buffer_start += size
                     del self._buffer[:size]
 
-            if self._buffer_start == self._buffer_fin:
-                # all date up to the FIN has been ACK'd, we're done sending
+            if self._buffer_start == self._buffer_fin and not self._pending_eof:
+                # all data up to the FIN has been ACK'd, we're done sending
                 self.is_finished = True
         else:
             if stop > start:

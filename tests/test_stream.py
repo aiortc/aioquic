@@ -635,6 +635,29 @@ class QuicStreamTest(TestCase):
         self.assertIsNone(frame)
         self.assertTrue(stream.sender.buffer_is_empty)
 
+    def test_sender_fin_then_ack(self):
+        stream = QuicStream()
+
+        # send some data
+        stream.sender.write(b"data")
+        frame = stream.sender.get_frame(8)
+        self.assertEqual(frame.data, b"data")
+
+        # write EOF
+        stream.sender.write(b"", end_stream=True)
+        self.assertFalse(stream.sender.buffer_is_empty)
+
+        # receive acknowledgement for data (but not for FIN)
+        stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 0, 4)
+        self.assertFalse(stream.sender.is_finished)
+
+        # sending FIN transitions to finished
+        frame = stream.sender.get_frame(8)
+        self.assertEqual(frame.data, b"")
+        self.assertTrue(frame.fin)
+        self.assertEqual(frame.offset, 4)
+        self.assertTrue(stream.sender.is_finished)
+
     def test_sender_fin_only_despite_blocked(self):
         stream = QuicStream()
 
