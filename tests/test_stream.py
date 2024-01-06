@@ -651,11 +651,15 @@ class QuicStreamTest(TestCase):
         stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 0, 4)
         self.assertFalse(stream.sender.is_finished)
 
-        # sending FIN transitions to finished
+        # send EOF
         frame = stream.sender.get_frame(8)
         self.assertEqual(frame.data, b"")
         self.assertTrue(frame.fin)
         self.assertEqual(frame.offset, 4)
+        self.assertFalse(stream.sender.is_finished)
+
+        # receive acknowledgement for EOF
+        stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 4, 4)
         self.assertTrue(stream.sender.is_finished)
 
     def test_sender_fin_only_despite_blocked(self):

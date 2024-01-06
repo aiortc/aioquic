@@ -207,8 +207,6 @@ class QuicStreamSender:
             if self._pending_eof:
                 # FIN only
                 self._pending_eof = False
-                if self._buffer_start == self._buffer_fin:
-                    self.is_finished = True
                 return QuicStreamFrame(fin=True, offset=self._buffer_fin)
 
             self.buffer_is_empty = True
