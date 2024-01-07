@@ -692,15 +692,28 @@ class QuicStreamTest(TestCase):
     def test_sender_reset(self):
         stream = QuicStream()
 
+        # send some data and EOF
+        stream.sender.write(b"data", end_stream=True)
+        frame = stream.sender.get_frame(8)
+        self.assertEqual(frame.data, b"data")
+        self.assertTrue(frame.fin)
+        self.assertEqual(frame.offset, 0)
+
         # reset is requested
         stream.sender.reset(QuicErrorCode.NO_ERROR)
+        self.assertTrue(stream.sender.buffer_is_empty)
         self.assertTrue(stream.sender.reset_pending)
 
         # reset is sent
         reset = stream.sender.get_reset_frame()
         self.assertEqual(reset.error_code, QuicErrorCode.NO_ERROR)
-        self.assertEqual(reset.final_size, 0)
+        self.assertEqual(reset.final_size, 4)
         self.assertFalse(stream.sender.reset_pending)
+        self.assertFalse(stream.sender.is_finished)
+
+        # data and EOF are acknowledged
+        stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 0, 4, True)
+        self.assertTrue(stream.sender.buffer_is_empty)
         self.assertFalse(stream.sender.is_finished)
 
         # reset is acklowledged
@@ -713,6 +726,7 @@ class QuicStreamTest(TestCase):
 
         # reset is requested
         stream.sender.reset(QuicErrorCode.NO_ERROR)
+        self.assertTrue(stream.sender.buffer_is_empty)
         self.assertTrue(stream.sender.reset_pending)
 
         # reset is sent
@@ -735,4 +749,38 @@ class QuicStreamTest(TestCase):
         # reset is acklowledged
         stream.sender.on_reset_delivery(QuicDeliveryState.ACKED)
         self.assertFalse(stream.sender.reset_pending)
+        self.assertTrue(stream.sender.buffer_is_empty)
+        self.assertTrue(stream.sender.is_finished)
+
+    def test_sender_reset_with_data_lost(self):
+        stream = QuicStream()
+
+        # send some data and EOF
+        stream.sender.write(b"data", end_stream=True)
+        frame = stream.sender.get_frame(8)
+        self.assertEqual(frame.data, b"data")
+        self.assertTrue(frame.fin)
+        self.assertEqual(frame.offset, 0)
+
+        # reset is requested
+        stream.sender.reset(QuicErrorCode.NO_ERROR)
+        self.assertTrue(stream.sender.buffer_is_empty)
+        self.assertTrue(stream.sender.reset_pending)
+
+        # reset is sent
+        reset = stream.sender.get_reset_frame()
+        self.assertEqual(reset.error_code, QuicErrorCode.NO_ERROR)
+        self.assertEqual(reset.final_size, 4)
+        self.assertFalse(stream.sender.reset_pending)
+        self.assertFalse(stream.sender.is_finished)
+
+        # data and EOF are lost
+        stream.sender.on_data_delivery(QuicDeliveryState.LOST, 0, 4, True)
+        self.assertTrue(stream.sender.buffer_is_empty)
+        self.assertFalse(stream.sender.is_finished)
+
+        # reset is acklowledged
+        stream.sender.on_reset_delivery(QuicDeliveryState.ACKED)
+        self.assertFalse(stream.sender.reset_pending)
+        self.assertTrue(stream.sender.buffer_is_empty)
         self.assertTrue(stream.sender.is_finished)
