@@ -201,6 +201,8 @@ class QuicStreamSender:
         """
         Get a frame of data to send.
         """
+        assert self._reset_error_code is None, "cannot call get_frame() after reset()"
+
         # get the first pending data range
         try:
             r = self._pending[0]
@@ -257,7 +259,15 @@ class QuicStreamSender:
         """
         # If the frame had the FIN bit set, its end MUST match otherwise
         # we have a programming error.
-        assert not fin or stop == self._buffer_fin
+        assert (
+            not fin or stop == self._buffer_fin
+        ), "on_data_delivered() was called with inconsistent fin / stop"
+
+        # If a reset has been requested, stop processing data delivery.
+        # The transition to the finished state only depends on the reset
+        # being acknowledged.
+        if self._reset_error_code is not None:
+            return
 
         if delivery == QuicDeliveryState.ACKED:
             if stop > start:
@@ -293,9 +303,10 @@ class QuicStreamSender:
         Callback when a reset is ACK'd.
         """
         if delivery == QuicDeliveryState.ACKED:
-            # the reset has been ACK'd, we're done sending
+            # The reset has been ACK'd, we're done sending.
             self.is_finished = True
         else:
+            # The reset has been lost, reschedule it.
             self.reset_pending = True
 
     def reset(self, error_code: int) -> None:
@@ -305,6 +316,9 @@ class QuicStreamSender:
         assert self._reset_error_code is None, "cannot call reset() more than once"
         self._reset_error_code = error_code
         self.reset_pending = True
+
+        # Prevent any more data from being sent or re-sent.
+        self.buffer_is_empty = True
 
     def write(self, data: bytes, end_stream: bool = False) -> None:
         """
