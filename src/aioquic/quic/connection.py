@@ -3019,7 +3019,7 @@ class QuicConnection:
                 QuicFrameType.CRYPTO,
                 capacity=frame_overhead,
                 handler=stream.sender.on_data_delivery,
-                handler_args=(frame.offset, frame.offset + len(frame.data)),
+                handler_args=(frame.offset, frame.offset + len(frame.data), False),
             )
             buf.push_uint_var(frame.offset)
             buf.push_uint16(len(frame.data) | 0x4000)
@@ -3246,7 +3246,7 @@ class QuicConnection:
                 frame_type,
                 capacity=frame_overhead,
                 handler=stream.sender.on_data_delivery,
-                handler_args=(frame.offset, frame.offset + len(frame.data)),
+                handler_args=(frame.offset, frame.offset + len(frame.data), frame.fin),
             )
             buf.push_uint_var(stream.stream_id)
             if frame.offset:
