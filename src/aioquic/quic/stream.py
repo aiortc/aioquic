@@ -173,6 +173,7 @@ class QuicStreamSender:
         self.reset_pending = False
 
         self._acked = RangeSet()
+        self._acked_fin = False
         self._buffer = bytearray()
         self._buffer_fin: Optional[int] = None
         self._buffer_start = 0  # the offset for the start of the buffer
@@ -249,14 +250,18 @@ class QuicStreamSender:
         )
 
     def on_data_delivery(
-        self, delivery: QuicDeliveryState, start: int, stop: int
+        self, delivery: QuicDeliveryState, start: int, stop: int, fin: bool
     ) -> None:
         """
         Callback when sent data is ACK'd.
         """
-        self.buffer_is_empty = False
+        # If the frame had the FIN bit set, its end MUST match otherwise
+        # we have a programming error.
+        assert not fin or stop == self._buffer_fin
+
         if delivery == QuicDeliveryState.ACKED:
             if stop > start:
+                # Some data has been ACK'd, discard it.
                 self._acked.add(start, stop)
                 first_range = self._acked[0]
                 if first_range.start == self._buffer_start:
@@ -265,14 +270,22 @@ class QuicStreamSender:
                     self._buffer_start += size
                     del self._buffer[:size]
 
-            if self._buffer_start == self._buffer_fin:
-                # all date up to the FIN has been ACK'd, we're done sending
+            if fin:
+                # The FIN has been ACK'd.
+                self._acked_fin = True
+
+            if self._buffer_start == self._buffer_fin and self._acked_fin:
+                # All data and the FIN have been ACK'd, we're done sending.
                 self.is_finished = True
         else:
             if stop > start:
+                # Some data has been lost, reschedule it.
+                self.buffer_is_empty = False
                 self._pending.add(start, stop)
-            if stop == self._buffer_fin:
-                self.send_buffer_empty = False
+
+            if fin:
+                # The FIN has been lost, reschedule it.
+                self.buffer_is_empty = False
                 self._pending_eof = True
 
     def on_reset_delivery(self, delivery: QuicDeliveryState) -> None:
