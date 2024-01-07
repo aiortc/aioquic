@@ -272,7 +272,6 @@ class QuicStreamSender:
             if stop > start:
                 self._pending.add(start, stop)
             if stop == self._buffer_fin:
-                self.send_buffer_empty = False
                 self._pending_eof = True
 
     def on_reset_delivery(self, delivery: QuicDeliveryState) -> None:
