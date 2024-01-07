@@ -27,7 +27,6 @@ QuicDeliveryHandler = Callable[..., None]
 class QuicDeliveryState(Enum):
     ACKED = 0
     LOST = 1
-    EXPIRED = 2
 
 
 @dataclass
