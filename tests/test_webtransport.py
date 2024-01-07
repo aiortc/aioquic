@@ -6,6 +6,7 @@ from aioquic.h3.events import (
     HeadersReceived,
     WebTransportStreamDataReceived,
 )
+from aioquic.h3.exceptions import InvalidStreamTypeError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import DatagramFrameReceived
 
@@ -280,6 +281,10 @@ class WebTransportTest(TestCase):
 
             # create session
             session_id = self._make_session(h3_client, h3_server)
+
+            # send datagram on a server-initiated stream
+            with self.assertRaises(InvalidStreamTypeError):
+                h3_client.send_datagram(data=b"foo", stream_id=1)
 
             # send datagram
             h3_client.send_datagram(data=b"foo", stream_id=session_id)

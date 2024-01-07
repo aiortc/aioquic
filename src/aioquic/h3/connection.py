@@ -400,12 +400,19 @@ class H3Connection:
         """
         Send a datagram for the specified stream.
 
+        If the stream ID is not a client-initiated bidirectional stream, an
+        :class:`~aioquic.h3.exceptions.InvalidStreamTypeError` exception is raised.
+
         :param stream_id: The stream ID.
         :param data: The HTTP/3 datagram payload.
         """
-        assert (
-            stream_id % 4 == 0
-        ), "Datagrams can only be sent for client-initiated bidirectional streams"
+
+        # check stream ID is valid
+        if not stream_is_request_response(stream_id):
+            raise InvalidStreamTypeError(
+                "Datagrams can only be sent for client-initiated bidirectional streams"
+            )
+
         self._quic.send_datagram_frame(encode_uint_var(stream_id // 4) + data)
 
     def send_push_promise(self, stream_id: int, headers: Headers) -> int:
