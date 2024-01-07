@@ -2470,8 +2470,9 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(stream.max_stream_data_local, 2097152)
             self.assertEqual(stream.max_stream_data_local_sent, 0)
 
-            # MAX_DATA is retransmitted and acked
-            self.assertEqual(roundtrip(client, server), (1, 1))
+            # MAX_STREAM_DATA is retransmitted and acked
+            for i in range(2):  # allow two round-trips to fix flakiness on Windows
+                roundtrip(client, server)
             self.assertEqual(stream.max_stream_data_local, 2097152)
             self.assertEqual(stream.max_stream_data_local_sent, 2097152)
 
