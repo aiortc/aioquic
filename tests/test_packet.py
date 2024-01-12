@@ -191,7 +191,7 @@ class PacketTest(TestCase):
         versions = []
         while not buf.eof():
             versions.append(buf.pull_uint32())
-        self.assertEqual(versions, [0x45474716, QuicProtocolVersion.VERSION_1]),
+        self.assertEqual(versions, [0x45474716, QuicProtocolVersion.VERSION_1])
 
     def test_pull_long_header_dcid_too_long(self):
         buf = Buffer(

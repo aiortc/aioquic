@@ -25,11 +25,11 @@ jobs:
         with:
           python-version: 3.8
       - name: Install packages
-        run: pip install black mypy ruff types-certifi types-cryptography types-pyopenssl
+        run: pip install mypy ruff types-certifi types-cryptography types-pyopenssl
       - name: Run linters
         run: |
-          ruff examples src tests
-          black --check --diff examples src tests
+          ruff .
+          ruff format --check --diff .
           mypy src tests
 
   codespell:

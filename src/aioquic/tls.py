@@ -1128,7 +1128,7 @@ def decode_public_key(
 def encode_public_key(
     public_key: Union[
         ec.EllipticCurvePublicKey, x25519.X25519PublicKey, x448.X448PublicKey
-    ]
+    ],
 ) -> KeyShareEntry:
     if isinstance(public_key, x25519.X25519PublicKey):
         return (Group.X25519, public_key.public_bytes(Encoding.Raw, PublicFormat.Raw))

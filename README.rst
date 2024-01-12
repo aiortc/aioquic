@@ -1,7 +1,7 @@
 aioquic
 =======
 
-|rtd| |pypi-v| |pypi-pyversions| |pypi-l| |tests| |codecov| |black|
+|rtd| |pypi-v| |pypi-pyversions| |pypi-l| |tests| |codecov|
 
 .. |rtd| image:: https://readthedocs.org/projects/aioquic/badge/?version=latest
     :target: https://aioquic.readthedocs.io/
@@ -20,9 +20,6 @@ aioquic
 
 .. |codecov| image:: https://img.shields.io/codecov/c/github/aiortc/aioquic.svg
     :target: https://codecov.io/gh/aiortc/aioquic
-
-.. |black| image:: https://img.shields.io/badge/code%20style-black-000000.svg
-    :target: https://github.com/python/black
 
 What is ``aioquic``?
 --------------------
