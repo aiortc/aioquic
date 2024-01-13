@@ -18,7 +18,7 @@ aioquic
    :alt: Tests
 
 .. image:: https://img.shields.io/codecov/c/github/aiortc/aioquic.svg
-   :target: https://codecov.io/gh/aiortc/aiortc
+   :target: https://codecov.io/gh/aiortc/aioquic
    :alt: Coverage
 
 .. image:: https://readthedocs.org/projects/aioquic/badge/?version=latest
