@@ -97,6 +97,23 @@ def datagram_sizes(items: List[Tuple[bytes, NetworkAddress]]) -> List[int]:
     return [len(x[0]) for x in items]
 
 
+def new_connection_id(
+    *,
+    sequence_number: int,
+    retire_prior_to: int = 0,
+    connection_id: bytes = bytes(8),
+    capacity: int = 100,
+):
+    buf = Buffer(capacity=capacity)
+    buf.push_uint_var(sequence_number)
+    buf.push_uint_var(retire_prior_to)
+    buf.push_uint_var(len(connection_id))
+    buf.push_bytes(connection_id)
+    buf.push_bytes(bytes(16))  # stateless reset token
+    buf.seek(0)
+    return buf
+
+
 @contextlib.contextmanager
 def client_and_server(
     client_kwargs={},
@@ -1574,13 +1591,7 @@ class QuicConnectionTest(TestCase):
 
     def test_handle_new_connection_id_duplicate(self):
         with client_and_server() as (client, server):
-            buf = Buffer(capacity=100)
-            buf.push_uint_var(7)  # sequence_number
-            buf.push_uint_var(0)  # retire_prior_to
-            buf.push_uint_var(8)
-            buf.push_bytes(bytes(8))
-            buf.push_bytes(bytes(16))
-            buf.seek(0)
+            buf = new_connection_id(sequence_number=7)
 
             # client receives NEW_CONNECTION_ID
             client._handle_new_connection_id_frame(
@@ -1596,13 +1607,7 @@ class QuicConnectionTest(TestCase):
 
     def test_handle_new_connection_id_over_limit(self):
         with client_and_server() as (client, server):
-            buf = Buffer(capacity=100)
-            buf.push_uint_var(8)  # sequence_number
-            buf.push_uint_var(0)  # retire_prior_to
-            buf.push_uint_var(8)
-            buf.push_bytes(bytes(8))
-            buf.push_bytes(bytes(16))
-            buf.seek(0)
+            buf = new_connection_id(sequence_number=8)
 
             # client receives NEW_CONNECTION_ID
             with self.assertRaises(QuicConnectionError) as cm:
@@ -1621,13 +1626,7 @@ class QuicConnectionTest(TestCase):
 
     def test_handle_new_connection_id_with_retire_prior_to(self):
         with client_and_server() as (client, server):
-            buf = Buffer(capacity=42)
-            buf.push_uint_var(8)  # sequence_number
-            buf.push_uint_var(2)  # retire_prior_to
-            buf.push_uint_var(8)
-            buf.push_bytes(bytes(8))
-            buf.push_bytes(bytes(16))
-            buf.seek(0)
+            buf = new_connection_id(sequence_number=8, retire_prior_to=2, capacity=42)
 
             # client receives NEW_CONNECTION_ID
             client._handle_new_connection_id_frame(
@@ -1641,15 +1640,75 @@ class QuicConnectionTest(TestCase):
                 sequence_numbers(client._peer_cid_available), [3, 4, 5, 6, 7, 8]
             )
 
+    def test_handle_new_connection_id_with_retire_prior_to_lower(self):
+        with client_and_server() as (client, server):
+            buf = new_connection_id(sequence_number=80, retire_prior_to=80)
+
+            # client receives NEW_CONNECTION_ID
+            client._handle_new_connection_id_frame(
+                client_receive_context(client),
+                QuicFrameType.NEW_CONNECTION_ID,
+                buf,
+            )
+
+            self.assertEqual(client._peer_cid.sequence_number, 80)
+            self.assertEqual(sequence_numbers(client._peer_cid_available), [])
+
+            buf = new_connection_id(sequence_number=30, retire_prior_to=30)
+
+            # client receives NEW_CONNECTION_ID
+            client._handle_new_connection_id_frame(
+                client_receive_context(client),
+                QuicFrameType.NEW_CONNECTION_ID,
+                buf,
+            )
+
+            self.assertEqual(client._peer_cid.sequence_number, 80)
+            self.assertEqual(sequence_numbers(client._peer_cid_available), [])
+
+    def test_handle_excessive_new_connection_id_retires(self):
+        with client_and_server() as (client, server):
+            for i in range(25):
+                sequence_number = 8 + i
+                buf = new_connection_id(
+                    sequence_number=sequence_number, retire_prior_to=sequence_number
+                )
+
+                # client receives NEW_CONNECTION_ID
+                client._handle_new_connection_id_frame(
+                    client_receive_context(client),
+                    QuicFrameType.NEW_CONNECTION_ID,
+                    buf,
+                )
+
+            # So far, so good!  We should be at the (default) limit of 4*8 pending
+            # retirements.
+            self.assertEqual(len(client._retire_connection_ids), 32)
+
+            # Now we will go one too many!
+            sequence_number = 8 + 25
+            buf = new_connection_id(
+                sequence_number=sequence_number, retire_prior_to=sequence_number
+            )
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_new_connection_id_frame(
+                    client_receive_context(client),
+                    QuicFrameType.NEW_CONNECTION_ID,
+                    buf,
+                )
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.CONNECTION_ID_LIMIT_ERROR
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.NEW_CONNECTION_ID)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Too many pending retired connection IDs"
+            )
+
     def test_handle_new_connection_id_with_connection_id_invalid(self):
         with client_and_server() as (client, server):
-            buf = Buffer(capacity=100)
-            buf.push_uint_var(8)  # sequence_number
-            buf.push_uint_var(2)  # retire_prior_to
-            buf.push_uint_var(21)
-            buf.push_bytes(bytes(21))
-            buf.push_bytes(bytes(16))
-            buf.seek(0)
+            buf = new_connection_id(
+                sequence_number=8, retire_prior_to=2, connection_id=bytes(21)
+            )
 
             # client receives NEW_CONNECTION_ID
             with self.assertRaises(QuicConnectionError) as cm:
@@ -1670,13 +1729,7 @@ class QuicConnectionTest(TestCase):
 
     def test_handle_new_connection_id_with_retire_prior_to_invalid(self):
         with client_and_server() as (client, server):
-            buf = Buffer(capacity=100)
-            buf.push_uint_var(8)  # sequence_number
-            buf.push_uint_var(9)  # retire_prior_to
-            buf.push_uint_var(8)
-            buf.push_bytes(bytes(8))
-            buf.push_bytes(bytes(16))
-            buf.seek(0)
+            buf = new_connection_id(sequence_number=8, retire_prior_to=9)
 
             # client receives NEW_CONNECTION_ID
             with self.assertRaises(QuicConnectionError) as cm:
