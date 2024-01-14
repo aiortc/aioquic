@@ -95,6 +95,11 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
     def transmit(self) -> None:
         """
         Send pending datagrams to the peer and arm the timer if needed.
+
+        This method is called automatically when data is received from the peer
+        or when a timer goes off. If you interact directly with the underlying
+        :class:`~aioquic.quic.connection.QuicConnection`, make sure you call this
+        method whenever data needs to be sent out to the network.
         """
         self._transmit_task = None
 
@@ -129,9 +134,11 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
     # asyncio.Transport
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        """:meta private:"""
         self._transport = cast(asyncio.DatagramTransport, transport)
 
     def datagram_received(self, data: Union[bytes, Text], addr: NetworkAddress) -> None:
+        """:meta private:"""
         self._quic.receive_datagram(cast(bytes, data), addr, now=self._loop.time())
         self._process_events()
         self.transmit()
