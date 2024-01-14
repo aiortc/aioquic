@@ -1666,8 +1666,7 @@ class VerifyCertificateTest(TestCase):
                     cadata=cadata, certificate=certificate, server_name="example.com"
                 )
             self.assertEqual(
-                str(cm.exception),
-                "subject alternative name not found in the certificate",
+                str(cm.exception), "Certificate does not contain any `subjectAltName`s."
             )
 
     def test_verify_subject_with_subjaltname(self):
