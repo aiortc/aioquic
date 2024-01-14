@@ -303,7 +303,7 @@ class H3Connection:
     """
     A low-level HTTP/3 connection object.
 
-    :param quic: A :class:`~aioquic.connection.QuicConnection` instance.
+    :param quic: A :class:`~aioquic.quic.connection.QuicConnection` instance.
     """
 
     def __init__(self, quic: QuicConnection, enable_webtransport: bool = False) -> None:
@@ -465,7 +465,7 @@ class H3Connection:
         Send data on the given stream.
 
         To retrieve datagram which need to be sent over the network call the QUIC
-        connection's :meth:`~aioquic.connection.QuicConnection.datagrams_to_send`
+        connection's :meth:`~aioquic.quic.connection.QuicConnection.datagrams_to_send`
         method.
 
         :param stream_id: The stream ID on which to send the data.
@@ -498,7 +498,7 @@ class H3Connection:
         Send headers on the given stream.
 
         To retrieve datagram which need to be sent over the network call the QUIC
-        connection's :meth:`~aioquic.connection.QuicConnection.datagrams_to_send`
+        connection's :meth:`~aioquic.quic.connection.QuicConnection.datagrams_to_send`
         method.
 
         :param stream_id: The stream ID on which to send the headers.
