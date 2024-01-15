@@ -348,6 +348,8 @@ class H3Connection:
         """
         Create a WebTransport stream and return the stream ID.
 
+        .. aioquic_transmit::
+
         :param session_id: The WebTransport session identifier.
         :param is_unidirectional: Whether to create a unidirectional stream.
         """
@@ -403,6 +405,8 @@ class H3Connection:
         If the stream ID is not a client-initiated bidirectional stream, an
         :class:`~aioquic.h3.exceptions.InvalidStreamTypeError` exception is raised.
 
+        .. aioquic_transmit::
+
         :param stream_id: The stream ID.
         :param data: The HTTP/3 datagram payload.
         """
@@ -426,6 +430,8 @@ class H3Connection:
 
         If there are not available push IDs, an
         :class:`~aioquic.h3.exceptions.NoAvailablePushIDError` exception is raised.
+
+        .. aioquic_transmit::
 
         :param stream_id: The stream ID on which to send the data.
         :param headers: The HTTP request headers for this push.
@@ -464,9 +470,7 @@ class H3Connection:
         """
         Send data on the given stream.
 
-        To retrieve datagram which need to be sent over the network call the QUIC
-        connection's :meth:`~aioquic.quic.connection.QuicConnection.datagrams_to_send`
-        method.
+        .. aioquic_transmit::
 
         :param stream_id: The stream ID on which to send the data.
         :param data: The data to send.
@@ -497,9 +501,7 @@ class H3Connection:
         """
         Send headers on the given stream.
 
-        To retrieve datagram which need to be sent over the network call the QUIC
-        connection's :meth:`~aioquic.quic.connection.QuicConnection.datagrams_to_send`
-        method.
+        .. aioquic_transmit::
 
         :param stream_id: The stream ID on which to send the headers.
         :param headers: The HTTP headers to send.

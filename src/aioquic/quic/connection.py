@@ -457,8 +457,7 @@ class QuicConnection:
         Switch to the next available connection ID and retire
         the previous one.
 
-        After calling this method call :meth:`datagrams_to_send` to retrieve data
-        which needs to be sent.
+        .. aioquic_transmit::
         """
         if self._peer_cid_available:
             # retire previous CID
@@ -475,6 +474,8 @@ class QuicConnection:
     ) -> None:
         """
         Close the connection.
+
+        .. aioquic_transmit::
 
         :param error_code: An error code indicating why the connection is
                            being closed.
@@ -495,8 +496,7 @@ class QuicConnection:
 
         This method can only be called for clients and a single time.
 
-        After calling this method call :meth:`datagrams_to_send` to retrieve data
-        which needs to be sent.
+        .. aioquic_transmit::
 
         :param addr: The network address of the remote peer.
         :param now: The current time.
@@ -686,8 +686,7 @@ class QuicConnection:
         """
         Handle the timer.
 
-        After calling this method call :meth:`datagrams_to_send` to retrieve data
-        which needs to be sent.
+        .. aioquic_transmit::
 
         :param now: The current time.
         """
@@ -722,8 +721,7 @@ class QuicConnection:
         """
         Handle an incoming datagram.
 
-        After calling this method call :meth:`datagrams_to_send` to retrieve data
-        which needs to be sent.
+        .. aioquic_transmit::
 
         :param data: The datagram which was received.
         :param addr: The network address from which the datagram was received.
@@ -1102,6 +1100,8 @@ class QuicConnection:
     def request_key_update(self) -> None:
         """
         Request an update of the encryption keys.
+
+        .. aioquic_transmit::
         """
         assert self._handshake_complete, "cannot change key before handshake completes"
         self._cryptos[tls.Epoch.ONE_RTT].update_key()
@@ -1109,6 +1109,8 @@ class QuicConnection:
     def reset_stream(self, stream_id: int, error_code: int) -> None:
         """
         Abruptly terminate the sending part of a stream.
+
+        .. aioquic_transmit::
 
         :param stream_id: The stream's ID.
         :param error_code: An error code indicating why the stream is being reset.
@@ -1120,6 +1122,8 @@ class QuicConnection:
         """
         Send a PING frame to the peer.
 
+        .. aioquic_transmit::
+
         :param uid: A unique ID for this PING.
         """
         self._ping_pending.append(uid)
@@ -1127,6 +1131,8 @@ class QuicConnection:
     def send_datagram_frame(self, data: bytes) -> None:
         """
         Send a DATAGRAM frame.
+
+        .. aioquic_transmit::
 
         :param data: The data to be sent.
         """
@@ -1138,6 +1144,8 @@ class QuicConnection:
         """
         Send data on the specific stream.
 
+        .. aioquic_transmit::
+
         :param stream_id: The stream's ID.
         :param data: The data to be sent.
         :param end_stream: If set to `True`, the FIN bit will be set.
@@ -1148,6 +1156,8 @@ class QuicConnection:
     def stop_stream(self, stream_id: int, error_code: int) -> None:
         """
         Request termination of the receiving part of a stream.
+
+        .. aioquic_transmit::
 
         :param stream_id: The stream's ID.
         :param error_code: An error code indicating why the stream is being stopped.
