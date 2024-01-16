@@ -62,21 +62,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install OpenSSL and disable firewall
+      - name: Disable firewall
         if: matrix.os == 'macos-latest'
         run: |
-          brew install openssl
-          echo "AIOQUIC_SKIP_TESTS=chacha20" >> $GITHUB_ENV
-          echo "CFLAGS=-I$(brew --prefix openssl)/include" >> $GITHUB_ENV
-          echo "LDFLAGS=-L$(brew --prefix openssl)/lib" >> $GITHUB_ENV
           sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
-      - name: Install OpenSSL
-        if: matrix.os == 'windows-latest'
-        run: |
-          # OpenSSL is pre-installed on windows-2025 runners.
-          echo "INCLUDE=C:\Progra~1\OpenSSL\include" >> $GITHUB_ENV
-          echo "LIB=C:\Progra~1\OpenSSL\\lib\\VC\\x64\\MD" >> $GITHUB_ENV
-        shell: bash
       - name: Run tests
         run: |
           python -m pip install -U pip setuptools wheel
@@ -137,10 +126,7 @@ jobs:
       - name: Build wheels
         env:
           CIBW_ARCHS: ${{ matrix.arch }}
-          CIBW_BEFORE_BUILD: python scripts/fetch-vendor.py /tmp/vendor
-          CIBW_BEFORE_BUILD_WINDOWS: python scripts\fetch-vendor.py C:\cibw\vendor
-          CIBW_ENVIRONMENT: AIOQUIC_SKIP_TESTS=ipv6,loss CFLAGS=-I/tmp/vendor/include LDFLAGS=-L/tmp/vendor/lib
-          CIBW_ENVIRONMENT_WINDOWS: AIOQUIC_SKIP_TESTS=ipv6,loss INCLUDE=C:\\cibw\\vendor\\include LIB=C:\\cibw\\vendor\\lib
+          CIBW_ENVIRONMENT: AIOQUIC_SKIP_TESTS=ipv6,loss
           # The limited API is not available on free-threaded builds.
           CIBW_SKIP: 'cp3??t-* pp*'
           CIBW_TEST_COMMAND: python -m unittest discover -t {project} -s {project}/tests
