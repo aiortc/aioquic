@@ -19,6 +19,7 @@ from typing import (
     Tuple,
     TypeVar,
     Union,
+    cast,
 )
 
 import certifi
@@ -37,6 +38,10 @@ from cryptography.hazmat.primitives.asymmetric import (
     x448,
     x25519,
 )
+from cryptography.hazmat.primitives.asymmetric.types import (
+    CertificateIssuerPublicKeyTypes,
+    PrivateKeyTypes,
+)
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from OpenSSL import crypto
@@ -54,8 +59,10 @@ SERVER_CONTEXT_STRING = b"TLS 1.3, server CertificateVerify"
 
 T = TypeVar("T")
 
+
 # facilitate mocking for the test suite
-utcnow = datetime.datetime.utcnow
+def utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 class AlertDescription(IntEnum):
@@ -191,7 +198,7 @@ def hkdf_extract(
 
 def load_pem_private_key(
     data: bytes, password: Optional[bytes] = None
-) -> Union[dsa.DSAPrivateKey, ec.EllipticCurvePrivateKey, rsa.RSAPrivateKey]:
+) -> PrivateKeyTypes:
     """
     Load a PEM-encoded private key.
     """
@@ -220,9 +227,9 @@ def verify_certificate(
 ) -> None:
     # verify dates
     now = utcnow()
-    if now < certificate.not_valid_before:
+    if now < certificate.not_valid_before_utc:
         raise AlertCertificateExpired("Certificate is not valid yet")
-    if now > certificate.not_valid_after:
+    if now > certificate.not_valid_after_utc:
         raise AlertCertificateExpired("Certificate is no longer valid")
 
     # verify subject
@@ -1082,7 +1089,7 @@ class KeyScheduleProxy:
             k.update_hash(data)
 
 
-CIPHER_SUITES = {
+CIPHER_SUITES: Dict = {
     CipherSuite.AES_128_GCM_SHA256: hashes.SHA256,
     CipherSuite.AES_256_GCM_SHA384: hashes.SHA384,
     CipherSuite.CHACHA20_POLY1305_SHA256: hashes.SHA256,
@@ -1471,7 +1478,16 @@ class Context:
             )
 
         try:
-            self._peer_certificate.public_key().verify(
+            # The type of public_key() is CertificatePublicKeyTypes, but along with
+            # ed25519 and ed448, which are fine, this type includes
+            # x25519 and x448 which can be public keys but can't sign.  We know
+            # we won't get x25519 and x448 as they are not on our list of
+            # signature algorithms, so we can cast public key to
+            # CertificateIssuerPublicKeyTypes safely and make mypy happy.
+            public_key = cast(
+                CertificateIssuerPublicKeyTypes, self._peer_certificate.public_key()
+            )
+            public_key.verify(
                 verify.signature,
                 self.key_schedule.certificate_verify_data(
                     SERVER_CONTEXT_STRING if self._is_client else CLIENT_CONTEXT_STRING
