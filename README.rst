@@ -106,8 +106,8 @@ You will need to set some environment variables to link against OpenSSL:
 
 .. code-block:: console
 
-   export CFLAGS=-I/usr/local/opt/openssl/include
-   export LDFLAGS=-L/usr/local/opt/openssl/lib
+   export CFLAGS=-I$(brew --prefix openssl)/include
+   export LDFLAGS=-L$(brew --prefix openssl)/lib
 
 Windows
 .......
