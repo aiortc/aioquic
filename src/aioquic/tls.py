@@ -407,15 +407,25 @@ def push_block(buf: Buffer, capacity: int) -> Generator:
 # LISTS
 
 
+class SkipItem(Exception):
+    "There is nothing to append for this invocation of a pull_list() func"
+
+
 def pull_list(buf: Buffer, capacity: int, func: Callable[[], T]) -> List[T]:
     """
     Pull a list of items.
+
+    If the callable raises SkipItem, then iteration continues but nothing
+    is added to the list.
     """
     items = []
     with pull_block(buf, capacity) as length:
         end = buf.tell() + length
         while buf.tell() < end:
-            items.append(func())
+            try:
+                items.append(func())
+            except SkipItem:
+                pass
     return items
 
 
@@ -494,7 +504,13 @@ def push_key_share(buf: Buffer, value: KeyShareEntry) -> None:
 
 
 def pull_alpn_protocol(buf: Buffer) -> str:
-    return pull_opaque(buf, 1).decode("ascii")
+    try:
+        return pull_opaque(buf, 1).decode("ascii")
+    except UnicodeDecodeError:
+        # We can get arbitrary bytes values for alpns from greasing,
+        # but we expect them to be strings in the rest of the API, so
+        # we ignore them if they don't decode as ASCII.
+        raise SkipItem
 
 
 def push_alpn_protocol(buf: Buffer, protocol: str) -> None:
@@ -1540,9 +1556,11 @@ class Context:
             legacy_compression_methods=self._legacy_compression_methods,
             alpn_protocols=self._alpn_protocols,
             key_share=key_share,
-            psk_key_exchange_modes=self._psk_key_exchange_modes
-            if (self.session_ticket or self.new_session_ticket_cb is not None)
-            else None,
+            psk_key_exchange_modes=(
+                self._psk_key_exchange_modes
+                if (self.session_ticket or self.new_session_ticket_cb is not None)
+                else None
+            ),
             server_name=server_name,
             signature_algorithms=self._signature_algorithms,
             supported_groups=supported_groups,
@@ -1749,12 +1767,14 @@ class Context:
                     output_buf,
                     Certificate(
                         request_context=self._certificate_request.request_context,
-                        certificates=[
-                            (x.public_bytes(Encoding.DER), b"")
-                            for x in [self.certificate] + self.certificate_chain
-                        ]
-                        if signature_algorithm
-                        else [],
+                        certificates=(
+                            [
+                                (x.public_bytes(Encoding.DER), b"")
+                                for x in [self.certificate] + self.certificate_chain
+                            ]
+                            if signature_algorithm
+                            else []
+                        ),
                     ),
                 )
 

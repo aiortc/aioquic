@@ -1,6 +1,7 @@
 import binascii
 import datetime
 import ssl
+from functools import partial
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -1724,3 +1725,19 @@ class VerifyCertificateTest(TestCase):
                 "hostname '8.8.8.8' doesn't match "
                 "IPAddressPattern(pattern=IPv4Address('1.2.3.4'))",
             )
+
+    def test_pull_greased_alpn_list(self):
+        """Test pulling a list alpns with an ASCII item, an undecodable binary value
+        such as greasing might give us, a valid UTF-8 encoding, and another ASCII item.
+        We should only return the ASCII values.
+
+        We currently only accept ASCII ALPNs, even though technically ALPNs are
+        arbitrary bytes values, as our API is a list of strings.
+        """
+
+        # the buffer is equivalent to "H2", b'\xff\xff', "é" in UTF-8, "H3"
+        buf = Buffer(data=binascii.unhexlify("000c02483202ffff02c3a9024833"))
+
+        self.assertEqual(
+            tls.pull_list(buf, 2, partial(tls.pull_alpn_protocol, buf)), ["H2", "H3"]
+        )
