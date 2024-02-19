@@ -1582,6 +1582,135 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
+    def _content_length_template(self, content_length, data, end_at, expected_closed):
+        quic_client = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=True)
+        )
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_client = H3Connection(quic_client)
+        h3_server = H3Connection(quic_server)
+        end_stream = False
+
+        stream_id = quic_client.get_next_available_stream_id()
+        if end_at == "headers":
+            end_stream = True
+        # Headers
+        headers = [
+            (b":method", b"GET"),
+            (b":scheme", b"https"),
+            (b":authority", b"localhost"),
+            (b":path", b"/"),
+        ]
+        if content_length is not None:
+            headers.append((b"content-length", content_length))
+        h3_client.send_headers(
+            stream_id=stream_id,
+            headers=headers,
+            end_stream=end_stream,
+        )
+        if not end_stream:
+            # Data
+            if end_at == "data":
+                end_stream = True
+            h3_client.send_data(stream_id=stream_id, data=data, end_stream=end_stream)
+        if not end_stream:
+            # Trailers
+            assert end_at == "trailers"
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b"x-foo", b"hi"),
+                ],
+                end_stream=True,
+            )
+        h3_transfer(quic_client, h3_server)
+        self.assertEqual(quic_server.closed, expected_closed)
+
+    def test_content_length_not_specified_is_ok(self):
+        """
+        If a content-length is specified and OK, all is good.
+        """
+        self._content_length_template(None, b"hello world", "data", None)
+
+    def test_content_length_is_ok(self):
+        """
+        If a content-length is specified and OK, all is good.
+        """
+        self._content_length_template(b"11", b"hello world", "data", None)
+
+    def test_content_length_that_is_not_an_int_rejected(self):
+        """
+        A content-length that doesn't parse as an integer is bad.
+        """
+        self._content_length_template(
+            b"1bogus1",
+            b"hello world",
+            "data",
+            (
+                ErrorCode(ErrorCode.H3_MESSAGE_ERROR),
+                "content-length is not a non-negative integer",
+            ),
+        )
+
+    def test_content_length_that_is_negative_is_rejected(self):
+        """
+        A content-length that doesn't parse as an integer is bad.
+        """
+        self._content_length_template(
+            b"-1",
+            b"hello world",
+            "data",
+            (
+                ErrorCode(ErrorCode.H3_MESSAGE_ERROR),
+                "content-length is not a non-negative integer",
+            ),
+        )
+
+    def test_content_length_does_not_match_data_length(self):
+        """
+        If a content-length is specified and wrong when data ends the stream,
+        we must close.
+        """
+        self._content_length_template(
+            b"20",
+            b"hello world",
+            "data",
+            (
+                ErrorCode(ErrorCode.H3_MESSAGE_ERROR),
+                "content-length does not match data size",
+            ),
+        )
+
+    def test_content_length_does_not_match_when_headers_end_stream(self):
+        """
+        If a content-length is specified and wrong, we must reject it.
+        """
+        self._content_length_template(
+            b"20",
+            b"",
+            "headers",
+            (
+                ErrorCode(ErrorCode.H3_MESSAGE_ERROR),
+                "content-length does not match data size",
+            ),
+        )
+
+    def test_content_length_does_not_match_when_trailers_end_stream(self):
+        """
+        If a content-length is specified and wrong, we must reject it.
+        """
+        self._content_length_template(
+            b"20",
+            b"hello world",
+            "trailers",
+            (
+                ErrorCode(ErrorCode.H3_MESSAGE_ERROR),
+                "content-length does not match data size",
+            ),
+        )
+
 
 class H3ParserTest(TestCase):
     def test_parse_settings_duplicate_identifier(self):
@@ -1701,8 +1830,70 @@ class H3ParserTest(TestCase):
         with self.assertRaises(MessageError) as cm:
             validate_request_headers([(b"X-Foo", b"foo")])
         self.assertEqual(
-            cm.exception.reason_phrase, "Header b'X-Foo' contains uppercase letters"
+            cm.exception.reason_phrase, "Header b'X-Foo' contains invalid characters"
         )
+
+        # header with too small a value
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers([(b"x-\x00foo", b"foo")])
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "Header b'x-\\x00foo' contains invalid characters",
+        )
+
+        # header with too big a value
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers([(b"x-\x7ffoo", b"foo")])
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "Header b'x-\\x7ffoo' contains invalid characters",
+        )
+
+        # header with non-initial colon
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers([(b"x-f:oo", b"foo")])
+        self.assertEqual(
+            cm.exception.reason_phrase, "Header b'x-f:oo' contains a non-initial colon"
+        )
+
+        # good transfer-encoding; this test passes by not asserting
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers([(b"transfer-encoding", b"trailers")])
+
+        # bad transfer-encoding
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers([(b"transfer-encoding", b"bogus")])
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "The only valid value for transfer-encoding is trailers",
+        )
+
+        # value with a forbidden NUL, LF, or CR:
+        for prefix in [b"\x00", b"\x0a", b"\x0d"]:
+            with self.assertRaises(MessageError) as cm:
+                validate_request_headers([(b"x-foo", prefix + b"foo")])
+            self.assertEqual(
+                cm.exception.reason_phrase,
+                "Header b'x-foo' value has forbidden characters",
+            )
+
+        # value with an initial TAB or SP:
+        for prefix in [b"\x09", b"\x20"]:
+            with self.assertRaises(MessageError) as cm:
+                validate_request_headers([(b"x-foo", prefix + b"foo")])
+            self.assertEqual(
+                cm.exception.reason_phrase,
+                "Header b'x-foo' value starts with whitespace",
+            )
+
+        # value with a final TAB or SP:
+        for suffix in [b"\x09", b"\x20"]:
+            with self.assertRaises(MessageError) as cm:
+                validate_request_headers([(b"x-foo", b"foo" + suffix)])
+            self.assertEqual(
+                cm.exception.reason_phrase,
+                "Header b'x-foo' value ends with whitespace",
+            )
 
         # invalid pseudo-header
         with self.assertRaises(MessageError) as cm:
