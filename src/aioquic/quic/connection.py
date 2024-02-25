@@ -359,6 +359,7 @@ class QuicConnection:
         self._spin_highest_pn = 0
         self._state = QuicConnectionState.FIRSTFLIGHT
         self._streams: Dict[int, QuicStream] = {}
+        self._streams_queue: List[QuicStream] = []
         self._streams_blocked_bidi: List[QuicStream] = []
         self._streams_blocked_uni: List[QuicStream] = []
         self._streams_finished: Set[int] = set()
@@ -615,9 +616,11 @@ class QuicConnection:
                                 "packet_type": self._quic_logger.packet_type(
                                     packet.packet_type
                                 ),
-                                "scid": dump_cid(self.host_cid)
-                                if is_long_header(packet.packet_type)
-                                else "",
+                                "scid": (
+                                    dump_cid(self.host_cid)
+                                    if is_long_header(packet.packet_type)
+                                    else ""
+                                ),
                                 "dcid": dump_cid(self._peer_cid.cid),
                             },
                             "raw": {"length": packet.sent_bytes},
@@ -1333,6 +1336,7 @@ class QuicConnection:
                 max_stream_data_remote=max_stream_data_remote,
                 writable=not stream_is_unidirectional(stream_id),
             )
+            self._streams_queue.append(stream)
         return stream
 
     def _get_or_create_stream_for_send(self, stream_id: int) -> QuicStream:
@@ -1370,6 +1374,7 @@ class QuicConnection:
                 max_stream_data_remote=max_stream_data_remote,
                 readable=not is_unidirectional,
             )
+            self._streams_queue.append(stream)
             if is_unidirectional:
                 self._local_next_stream_id_uni = stream_id + 4
             else:
@@ -2631,9 +2636,11 @@ class QuicConnection:
             initial_source_connection_id=self._local_initial_source_connection_id,
             max_ack_delay=25,
             max_datagram_frame_size=self._configuration.max_datagram_frame_size,
-            quantum_readiness=b"Q" * SMALLEST_MAX_DATAGRAM_SIZE
-            if self._configuration.quantum_readiness_test
-            else None,
+            quantum_readiness=(
+                b"Q" * SMALLEST_MAX_DATAGRAM_SIZE
+                if self._configuration.quantum_readiness_test
+                else None
+            ),
             stateless_reset_token=self._host_cids[0].stateless_reset_token,
         )
         if not self._is_client:
@@ -2836,34 +2843,54 @@ class QuicConnection:
                 except QuicPacketBuilderStop:
                     break
 
-            for stream in list(self._streams.values()):
-                # if the stream is finished, discard it
-                if stream.is_finished:
-                    self._logger.debug("Stream %d discarded", stream.stream_id)
-                    self._streams.pop(stream.stream_id)
-                    self._streams_finished.add(stream.stream_id)
-                    continue
+            sent: Set[QuicStream] = set()
+            discarded: Set[QuicStream] = set()
+            try:
+                for stream in self._streams_queue:
+                    # if the stream is finished, discard it
+                    if stream.is_finished:
+                        self._logger.debug("Stream %d discarded", stream.stream_id)
+                        self._streams.pop(stream.stream_id)
+                        self._streams_finished.add(stream.stream_id)
+                        discarded.add(stream)
+                        continue
 
-                if stream.receiver.stop_pending:
-                    # STOP_SENDING
-                    self._write_stop_sending_frame(builder=builder, stream=stream)
+                    if stream.receiver.stop_pending:
+                        # STOP_SENDING
+                        self._write_stop_sending_frame(builder=builder, stream=stream)
 
-                if stream.sender.reset_pending:
-                    # RESET_STREAM
-                    self._write_reset_stream_frame(builder=builder, stream=stream)
-                elif not stream.is_blocked and not stream.sender.buffer_is_empty:
-                    # STREAM
-                    self._remote_max_data_used += self._write_stream_frame(
-                        builder=builder,
-                        space=space,
-                        stream=stream,
-                        max_offset=min(
-                            stream.sender.highest_offset
-                            + self._remote_max_data
-                            - self._remote_max_data_used,
-                            stream.max_stream_data_remote,
-                        ),
-                    )
+                    if stream.sender.reset_pending:
+                        # RESET_STREAM
+                        self._write_reset_stream_frame(builder=builder, stream=stream)
+                    elif not stream.is_blocked and not stream.sender.buffer_is_empty:
+                        # STREAM
+                        used = self._write_stream_frame(
+                            builder=builder,
+                            space=space,
+                            stream=stream,
+                            max_offset=min(
+                                stream.sender.highest_offset
+                                + self._remote_max_data
+                                - self._remote_max_data_used,
+                                stream.max_stream_data_remote,
+                            ),
+                        )
+                        self._remote_max_data_used += used
+                        if used > 0:
+                            sent.add(stream)
+
+            finally:
+                # Make a new stream service order, putting served ones at the end.
+                #
+                # This method of updating the streams queue ensures that discarded
+                # streams are removed and ones which sent are moved to the end even
+                # if an exception occurs in the loop.
+                self._streams_queue = [
+                    stream
+                    for stream in self._streams_queue
+                    if not (stream in discarded or stream in sent)
+                ]
+                self._streams_queue.extend(sent)
 
             if builder.packet_is_empty:
                 break
