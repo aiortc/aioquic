@@ -343,7 +343,7 @@ class QuicConnection:
         self._remote_ack_delay_exponent = 3
         self._remote_active_connection_id_limit = 2
         self._remote_initial_source_connection_id: Optional[bytes] = None
-        self._remote_max_idle_timeout = 0.0  # seconds
+        self._remote_max_idle_timeout: Optional[float] = None  # seconds
         self._remote_max_data = 0
         self._remote_max_data_used = 0
         self._remote_max_datagram_frame_size: Optional[int] = None
@@ -615,9 +615,11 @@ class QuicConnection:
                                 "packet_type": self._quic_logger.packet_type(
                                     packet.packet_type
                                 ),
-                                "scid": dump_cid(self.host_cid)
-                                if is_long_header(packet.packet_type)
-                                else "",
+                                "scid": (
+                                    dump_cid(self.host_cid)
+                                    if is_long_header(packet.packet_type)
+                                    else ""
+                                ),
                                 "dcid": dump_cid(self._peer_cid.cid),
                             },
                             "raw": {"length": packet.sent_bytes},
@@ -717,6 +719,17 @@ class QuicConnection:
         except IndexError:
             return None
 
+    def _idle_timeout(self) -> float:
+        # RFC 9000 section 10.1
+
+        # Start with our local timeout.
+        idle_timeout = self._configuration.idle_timeout
+        if self._remote_max_idle_timeout is not None:
+            # Our peer has a preference too, so pick the smaller timeout.
+            idle_timeout = min(idle_timeout, self._remote_max_idle_timeout)
+        # But not too small!
+        return max(idle_timeout, 3 * self._loss.get_probe_timeout())
+
     def receive_datagram(self, data: bytes, addr: NetworkAddress, now: float) -> None:
         """
         Handle an incoming datagram.
@@ -750,7 +763,7 @@ class QuicConnection:
 
         # for servers, arm the idle timeout on the first datagram
         if self._close_at is None:
-            self._close_at = now + self._configuration.idle_timeout
+            self._close_at = now + self._idle_timeout()
 
         buf = Buffer(data=data)
         while not buf.eof():
@@ -1057,7 +1070,7 @@ class QuicConnection:
                 return
 
             # update idle timeout
-            self._close_at = now + self._configuration.idle_timeout
+            self._close_at = now + self._idle_timeout()
 
             # handle migration
             if (
@@ -1262,7 +1275,7 @@ class QuicConnection:
                 data={"client_alpns": self._configuration.alpn_protocols},
             )
 
-        self._close_at = now + self._configuration.idle_timeout
+        self._close_at = now + self._idle_timeout()
         self._initialize(self._peer_cid.cid)
 
         self.tls.handle_message(b"", self._crypto_buffers)
@@ -2631,9 +2644,11 @@ class QuicConnection:
             initial_source_connection_id=self._local_initial_source_connection_id,
             max_ack_delay=25,
             max_datagram_frame_size=self._configuration.max_datagram_frame_size,
-            quantum_readiness=b"Q" * SMALLEST_MAX_DATAGRAM_SIZE
-            if self._configuration.quantum_readiness_test
-            else None,
+            quantum_readiness=(
+                b"Q" * SMALLEST_MAX_DATAGRAM_SIZE
+                if self._configuration.quantum_readiness_test
+                else None
+            ),
             stateless_reset_token=self._host_cids[0].stateless_reset_token,
         )
         if not self._is_client:
