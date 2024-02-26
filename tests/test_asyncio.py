@@ -91,6 +91,9 @@ class HighLevelTest(TestCase):
 
             response = await reader.read()
 
+            # explicit no-op close to test that multiple closes are harmless.
+            writer.close()
+
         # waiting for closed when closed returns immediately
         await client.wait_closed()
 
