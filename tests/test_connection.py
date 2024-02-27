@@ -2196,6 +2196,48 @@ class QuicConnectionTest(TestCase):
         )
         client._parse_transport_parameters(data)
 
+    def test_parse_transport_parameters_idle_time(self):
+        # Remote idle of 10s and local idle of 60s.
+        client = create_standalone_client(self)
+        data = encode_transport_parameters(
+            # Note the timeout parameter here is in milliseconds.
+            QuicTransportParameters(
+                original_destination_connection_id=client.original_destination_connection_id,
+                max_idle_timeout=10000,
+            )
+        )
+        client._parse_transport_parameters(data)
+        self.assertAlmostEqual(client._remote_max_idle_timeout, 10.0)
+        self.assertAlmostEqual(client._idle_timeout(), 10.0)
+
+        # Remote idle of 120s and local idle of 60s.
+        client = create_standalone_client(self)
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                original_destination_connection_id=client.original_destination_connection_id,
+                max_idle_timeout=120000,
+            )
+        )
+        client._parse_transport_parameters(data)
+        self.assertAlmostEqual(client._remote_max_idle_timeout, 120.0)
+        self.assertAlmostEqual(client._idle_timeout(), 60.0)
+
+        # Remote idle of 1ms and local idle of 60s.
+        #
+        # Very low values are clamped to 3 * PTO; we use the default initial RTT of 0.1
+        # and since RTT is not initialized get_probe_timeout() will return 2 * the
+        # initial RTT as the PTO, i.e. 0.2, so 3 * PTO == 0.6.
+        client = create_standalone_client(self)
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                original_destination_connection_id=client.original_destination_connection_id,
+                max_idle_timeout=1,
+            )
+        )
+        client._parse_transport_parameters(data)
+        self.assertAlmostEqual(client._remote_max_idle_timeout, 0.001)
+        self.assertAlmostEqual(client._idle_timeout(), 0.6)
+
     def test_parse_transport_parameters_malformed(self):
         client = create_standalone_client(self)
 
