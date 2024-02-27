@@ -25,6 +25,13 @@ logger = logging.getLogger("http3")
 H3_ALPN = ["h3", "h3-32", "h3-31", "h3-30", "h3-29"]
 RESERVED_SETTINGS = (0x0, 0x2, 0x3, 0x4, 0x5)
 UPPERCASE = re.compile(b"[A-Z]")
+COLON = 0x3A
+NUL = 0x00
+LF = 0x0A
+CR = 0x0D
+SP = 0x20
+HTAB = 0x09
+WHITESPACE = (SP, HTAB)
 
 
 class ErrorCode(IntEnum):
@@ -194,10 +201,41 @@ def stream_is_request_response(stream_id: int):
     return stream_id % 4 == 0
 
 
+def validate_header_name(key: bytes) -> None:
+    """
+    Validate a header name as specified by RFC 9113 section 8.2.1.
+    """
+    for i, c in enumerate(key):
+        if c <= 0x20 or (c >= 0x41 and c <= 0x5A) or c >= 0x7F:
+            raise MessageError("Header %r contains invalid characters" % key)
+        if c == COLON and i != 0:
+            # Colon not at start, definitely bad.  Keys starting with a colon
+            # will be checked in pseudo-header validation code.
+            raise MessageError("Header %r contains a non-initial colon" % key)
+
+
+def validate_header_value(key: bytes, value: bytes):
+    """
+    Validate a header value as specified by RFC 9113 section 8.2.1.
+    """
+    for c in value:
+        if c == NUL or c == LF or c == CR:
+            raise MessageError("Header %r value has forbidden characters" % key)
+    if len(value) > 0:
+        first = value[0]
+        if first in WHITESPACE:
+            raise MessageError("Header %r value starts with whitespace" % key)
+        if len(value) > 1:
+            last = value[-1]
+            if last in WHITESPACE:
+                raise MessageError("Header %r value ends with whitespace" % key)
+
+
 def validate_headers(
     headers: Headers,
     allowed_pseudo_headers: FrozenSet[bytes],
     required_pseudo_headers: FrozenSet[bytes],
+    stream: Optional["H3Stream"] = None,
 ) -> None:
     after_pseudo_headers = False
     authority: Optional[bytes] = None
@@ -205,8 +243,8 @@ def validate_headers(
     scheme: Optional[bytes] = None
     seen_pseudo_headers: Set[bytes] = set()
     for key, value in headers:
-        if UPPERCASE.search(key):
-            raise MessageError("Header %r contains uppercase letters" % key)
+        validate_header_name(key)
+        validate_header_value(key, value)
 
         if key.startswith(b":"):
             # pseudo-headers
@@ -230,6 +268,20 @@ def validate_headers(
         else:
             # regular headers
             after_pseudo_headers = True
+            # a few more semantic checks
+            if key == b"content-length":
+                try:
+                    content_length = int(value)
+                    if content_length < 0:
+                        raise ValueError
+                except ValueError:
+                    raise MessageError("content-length is not a non-negative integer")
+                if stream:
+                    stream.expected_content_length = content_length
+            elif key == b"transfer-encoding" and value != b"trailers":
+                raise MessageError(
+                    "The only valid value for transfer-encoding is trailers"
+                )
 
     # check required pseudo-headers are present
     missing = required_pseudo_headers.difference(seen_pseudo_headers)
@@ -255,7 +307,9 @@ def validate_push_promise_headers(headers: Headers) -> None:
     )
 
 
-def validate_request_headers(headers: Headers) -> None:
+def validate_request_headers(
+    headers: Headers, stream: Optional["H3Stream"] = None
+) -> None:
     validate_headers(
         headers,
         allowed_pseudo_headers=frozenset(
@@ -264,14 +318,18 @@ def validate_request_headers(headers: Headers) -> None:
             (b":method", b":scheme", b":authority", b":path", b":protocol")
         ),
         required_pseudo_headers=frozenset((b":method", b":authority")),
+        stream=stream,
     )
 
 
-def validate_response_headers(headers: Headers) -> None:
+def validate_response_headers(
+    headers: Headers, stream: Optional["H3Stream"] = None
+) -> None:
     validate_headers(
         headers,
         allowed_pseudo_headers=frozenset((b":status",)),
         required_pseudo_headers=frozenset((b":status",)),
+        stream=stream,
     )
 
 
@@ -297,6 +355,8 @@ class H3Stream:
         self.session_id: Optional[int] = None
         self.stream_id = stream_id
         self.stream_type: Optional[int] = None
+        self.expected_content_length: Optional[int] = None
+        self.content_length: int = 0
 
 
 class H3Connection:
@@ -638,6 +698,13 @@ class H3Connection:
         ):
             raise FrameUnexpected("Invalid frame type on control stream")
 
+    def _check_content_length(self, stream: H3Stream):
+        if (
+            stream.expected_content_length is not None
+            and stream.content_length != stream.expected_content_length
+        ):
+            raise MessageError("content-length does not match data size")
+
     def _handle_request_or_push_frame(
         self,
         frame_type: int,
@@ -654,6 +721,12 @@ class H3Connection:
             # check DATA frame is allowed
             if stream.headers_recv_state != HeadersState.AFTER_HEADERS:
                 raise FrameUnexpected("DATA frame is not allowed in this state")
+
+            if frame_data is not None:
+                stream.content_length += len(frame_data)
+
+            if stream_ended:
+                self._check_content_length(stream)
 
             if stream_ended or frame_data:
                 http_events.append(
@@ -675,11 +748,15 @@ class H3Connection:
             # validate headers
             if stream.headers_recv_state == HeadersState.INITIAL:
                 if self._is_client:
-                    validate_response_headers(headers)
+                    validate_response_headers(headers, stream)
                 else:
-                    validate_request_headers(headers)
+                    validate_request_headers(headers, stream)
             else:
                 validate_trailers(headers)
+
+            # content-length needs checking even when there is no data
+            if stream_ended:
+                self._check_content_length(stream)
 
             # log frame
             if self._quic_logger is not None:
@@ -687,9 +764,11 @@ class H3Connection:
                     category="http",
                     event="frame_parsed",
                     data=self._quic_logger.encode_http3_headers_frame(
-                        length=stream.blocked_frame_size
-                        if frame_data is None
-                        else len(frame_data),
+                        length=(
+                            stream.blocked_frame_size
+                            if frame_data is None
+                            else len(frame_data)
+                        ),
                         headers=headers,
                         stream_id=stream.stream_id,
                     ),
@@ -849,6 +928,7 @@ class H3Connection:
             and stream.frame_size is not None
             and len(stream.buffer) < stream.frame_size
         ):
+            stream.content_length += len(stream.buffer)
             http_events.append(
                 DataReceived(
                     data=stream.buffer,
@@ -863,6 +943,8 @@ class H3Connection:
 
         # handle lone FIN
         if stream_ended and not stream.buffer:
+            self._check_content_length(stream)
+
             http_events.append(
                 DataReceived(
                     data=b"",
