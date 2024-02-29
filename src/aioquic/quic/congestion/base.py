@@ -21,24 +21,21 @@ class QuicCongestionControl(abc.ABC):
         self.congestion_window = K_INITIAL_WINDOW * max_datagram_size
 
     @abc.abstractmethod
-    def on_packet_acked(self, *, now: float, packet: QuicSentPacket) -> None:
-        ...  # pragma: no cover
+    def on_packet_acked(self, *, now: float, packet: QuicSentPacket) -> None: ...
 
     @abc.abstractmethod
-    def on_packet_sent(self, *, packet: QuicSentPacket) -> None:
-        ...  # pragma: no cover
+    def on_packet_sent(self, *, packet: QuicSentPacket) -> None: ...
 
     @abc.abstractmethod
-    def on_packets_expired(self, *, packets: Iterable[QuicSentPacket]) -> None:
-        ...  # pragma: no cover
+    def on_packets_expired(self, *, packets: Iterable[QuicSentPacket]) -> None: ...
 
     @abc.abstractmethod
-    def on_packets_lost(self, *, now: float, packets: Iterable[QuicSentPacket]) -> None:
-        ...  # pragma: no cover
+    def on_packets_lost(
+        self, *, now: float, packets: Iterable[QuicSentPacket]
+    ) -> None: ...
 
     @abc.abstractmethod
-    def on_rtt_measurement(self, *, now: float, rtt: float) -> None:
-        ...  # pragma: no cover
+    def on_rtt_measurement(self, *, now: float, rtt: float) -> None: ...
 
     def get_log_data(self) -> Dict[str, Any]:
         data = {"cwnd": self.congestion_window, "bytes_in_flight": self.bytes_in_flight}
@@ -48,8 +45,7 @@ class QuicCongestionControl(abc.ABC):
 
 
 class QuicCongestionControlFactory(Protocol):
-    def __call__(self, *, max_datagram_size: int) -> QuicCongestionControl:
-        ...  # pragma: no cover
+    def __call__(self, *, max_datagram_size: int) -> QuicCongestionControl: ...
 
 
 class QuicRttMonitor:
