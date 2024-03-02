@@ -271,7 +271,11 @@ def verify_certificate(
 
     # load CAs
     store = crypto.X509Store()
-    store.load_locations(certifi.where())
+
+    if cadata is None and cafile is None and capath is None:
+        # Load defaults from certifi.
+        store.load_locations(certifi.where())
+
     if cadata is not None:
         for cert in load_pem_x509_certificates(cadata):
             store.add_cert(crypto.X509.from_cryptography(cert))
