@@ -410,7 +410,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1148])
+        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
         self.assertAlmostEqual(server.get_timer(), 0.45)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -421,8 +421,9 @@ class QuicConnectionTest(TestCase):
         now += TICK
         client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
         client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+        client.receive_datagram(items[2][0], SERVER_ADDR, now=now)
         items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [376])
+        self.assertEqual(datagram_sizes(items), [1200, 327])
         self.assertAlmostEqual(client.get_timer(), 0.625)
         self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
         self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
@@ -430,6 +431,7 @@ class QuicConnectionTest(TestCase):
 
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        server.receive_datagram(items[1][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [229])
         self.assertAlmostEqual(server.get_timer(), 0.625)
@@ -478,7 +480,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1148])
+        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -497,7 +499,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1148])
+        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
         self.assertAlmostEqual(server.get_timer(), 0.35)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -506,8 +508,9 @@ class QuicConnectionTest(TestCase):
         now += TICK
         client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
         client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+        client.receive_datagram(items[2][0], SERVER_ADDR, now=now)
         items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [376])
+        self.assertEqual(datagram_sizes(items), [1200, 327])
         self.assertAlmostEqual(client.get_timer(), 0.525)
         self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
         self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
@@ -515,6 +518,7 @@ class QuicConnectionTest(TestCase):
 
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        server.receive_datagram(items[1][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [229])
         self.assertAlmostEqual(server.get_timer(), 0.525)
@@ -564,7 +568,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1148])
+        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -583,7 +587,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1148])
+        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
         self.assertEqual(server.get_timer(), 0.45)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -592,8 +596,9 @@ class QuicConnectionTest(TestCase):
         now += TICK
         client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
         client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+        client.receive_datagram(items[2][0], SERVER_ADDR, now=now)
         items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [376])
+        self.assertEqual(datagram_sizes(items), [1200, 327])
         self.assertAlmostEqual(client.get_timer(), 0.625)
         self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
         self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
@@ -601,6 +606,7 @@ class QuicConnectionTest(TestCase):
 
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        server.receive_datagram(items[1][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [229])
         self.assertAlmostEqual(server.get_timer(), 0.625)
@@ -641,22 +647,24 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(datagram_sizes(items), [1200])
         self.assertEqual(client.get_timer(), 0.2)
 
-        # server receives INITIAL, sends INITIAL + HANDSHAKE but second datagram is lost
+        # server receives INITIAL, sends ACK + INITIAL + HANDSHAKE but third datagram
+        # is lost
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1148])
+        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
         self.assertEqual(type(server.next_event()), events.ProtocolNegotiated)
         self.assertIsNone(server.next_event())
 
-        # client only receives first datagram and sends ACKS
+        # client only receives first two datagrams and sends ACKS
         now += TICK
         client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+        client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
         items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [97])
+        self.assertEqual(datagram_sizes(items), [1200, 48])
         self.assertAlmostEqual(client.get_timer(), 0.325)
         self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
         self.assertIsNone(client.next_event())
@@ -742,7 +750,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1148])
+        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -753,8 +761,9 @@ class QuicConnectionTest(TestCase):
         now += TICK
         client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
         client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+        client.receive_datagram(items[2][0], SERVER_ADDR, now=now)
         items = client.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [376])
+        self.assertEqual(datagram_sizes(items), [1200, 327])
         self.assertAlmostEqual(client.get_timer(), 0.425)
         self.assertEqual(type(client.next_event()), events.ProtocolNegotiated)
         self.assertEqual(type(client.next_event()), events.HandshakeCompleted)
@@ -763,6 +772,7 @@ class QuicConnectionTest(TestCase):
         # server completes handshake, but HANDSHAKE_DONE is lost
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+        server.receive_datagram(items[1][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [229])
         self.assertAlmostEqual(server.get_timer(), 0.425)
@@ -793,6 +803,49 @@ class QuicConnectionTest(TestCase):
         items = server.datagrams_to_send(now=now)
         self.assertFalse(server._handshake_done_pending)
         self.assertEqual(datagram_sizes(items), [224])
+
+    def test_initial_that_is_too_small(self):
+        """
+        Check that a too-small initial datagram from the client is dropped by the
+        server.
+        """
+        client = create_standalone_client(self)
+
+        builder = QuicPacketBuilder(
+            host_cid=client._peer_cid.cid,
+            is_client=False,
+            max_datagram_size=1000,  # too small!
+            peer_cid=client.host_cid,
+            version=client._version,
+        )
+        crypto = CryptoPair()
+        crypto.setup_initial(
+            client._peer_cid.cid, is_client=False, version=client._version
+        )
+        builder.start_packet(PACKET_TYPE_INITIAL, crypto)
+        buf = builder.start_frame(QuicFrameType.PADDING)
+        buf.push_bytes(bytes(builder.remaining_flight_space))
+
+        server_configuration = QuicConfiguration(is_client=False)
+        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        server_configuration.quic_logger = QuicLogger()
+
+        server = QuicConnection(
+            configuration=server_configuration,
+            original_destination_connection_id=client.original_destination_connection_id,
+        )
+        server._ack_delay = 0
+
+        for datagram in builder.flush()[0]:
+            server.receive_datagram(datagram, SERVER_ADDR, now=time.time())
+        # look for the drop event
+        log = server_configuration.quic_logger.to_dict()
+        trigger = None
+        for event in log["traces"][0]["events"]:
+            trigger = event["data"].get("trigger")
+            if trigger is not None:
+                break
+        self.assertEqual(trigger, "initial_packet_datagram_too_small")
 
     def test_connect_with_no_crypto_frame(self):
         def patch(client):
@@ -869,7 +922,7 @@ class QuicConnectionTest(TestCase):
             stream_id = client.get_next_available_stream_id()
             client.send_stream_data(stream_id, b"hello")
 
-            self.assertEqual(roundtrip(client, server), (2, 1))
+            self.assertEqual(roundtrip(client, server), (2, 2))
 
             event = server.next_event()
             self.assertEqual(type(event), events.ProtocolNegotiated)

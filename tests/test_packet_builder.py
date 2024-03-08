@@ -164,7 +164,7 @@ class QuicPacketBuilderTest(TestCase):
         # check datagrams
         datagrams, packets = builder.flush()
         self.assertEqual(len(datagrams), 1)
-        self.assertEqual(len(datagrams[0]), 145)
+        self.assertEqual(len(datagrams[0]), 1200)
         self.assertEqual(
             packets,
             [
@@ -175,7 +175,7 @@ class QuicPacketBuilderTest(TestCase):
                     is_crypto_packet=True,
                     packet_number=0,
                     packet_type=PACKET_TYPE_INITIAL,
-                    sent_bytes=145,
+                    sent_bytes=1200,
                 )
             ],
         )
@@ -286,22 +286,24 @@ class QuicPacketBuilderTest(TestCase):
 
         # HANDSHAKE
         builder.start_packet(PACKET_TYPE_HANDSHAKE, crypto)
-        self.assertEqual(builder.remaining_flight_space, 913)
+        self.assertEqual(builder.remaining_flight_space, 1157)
         buf = builder.start_frame(QuicFrameType.CRYPTO)
         buf.push_bytes(bytes(299))
         self.assertFalse(builder.packet_is_empty)
+        self.assertEqual(builder.remaining_flight_space, 857)
 
         # ONE_RTT
         builder.start_packet(PACKET_TYPE_ONE_RTT, crypto)
-        self.assertEqual(builder.remaining_flight_space, 586)
+        self.assertEqual(builder.remaining_flight_space, 830)
         buf = builder.start_frame(QuicFrameType.CRYPTO)
         buf.push_bytes(bytes(299))
         self.assertFalse(builder.packet_is_empty)
 
         # check datagrams
         datagrams, packets = builder.flush()
-        self.assertEqual(len(datagrams), 1)
-        self.assertEqual(len(datagrams[0]), 914)
+        self.assertEqual(len(datagrams), 2)
+        self.assertEqual(len(datagrams[0]), 1200)
+        self.assertEqual(len(datagrams[1]), 670)
         self.assertEqual(
             packets,
             [
@@ -312,7 +314,7 @@ class QuicPacketBuilderTest(TestCase):
                     is_crypto_packet=True,
                     packet_number=0,
                     packet_type=PACKET_TYPE_INITIAL,
-                    sent_bytes=244,
+                    sent_bytes=1200,
                 ),
                 QuicSentPacket(
                     epoch=Epoch.HANDSHAKE,
