@@ -785,6 +785,24 @@ class QuicConnection:
                     )
                 return
 
+            # RFC 9000 section 14.1 requires servers to drop all initial packets
+            # contained in a datagram smaller than 1200 bytes.
+            if (
+                not self._is_client
+                and header.packet_type == PACKET_TYPE_INITIAL
+                and len(data) < SMALLEST_MAX_DATAGRAM_SIZE
+            ):
+                if self._quic_logger is not None:
+                    self._quic_logger.log_event(
+                        category="transport",
+                        event="packet_dropped",
+                        data={
+                            "trigger": "initial_packet_datagram_too_small",
+                            "raw": {"length": buf.capacity - start_off},
+                        },
+                    )
+                return
+
             # check destination CID matches
             destination_cid_seq: Optional[int] = None
             for connection_id in self._host_cids:
