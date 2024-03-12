@@ -39,4 +39,5 @@ APIs:
    quic
    h3
    asyncio
+   changelog
    license
