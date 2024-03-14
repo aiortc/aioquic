@@ -75,6 +75,8 @@ EPOCH_SHORTCUTS = {
     "1": tls.Epoch.ONE_RTT,
 }
 MAX_EARLY_DATA = 0xFFFFFFFF
+MAX_REMOTE_CHALLENGES = 5
+MAX_LOCAL_CHALLENGES = 5
 SECRETS_LABELS = [
     [
         None,
@@ -198,14 +200,14 @@ class QuicConnectionState(Enum):
     TERMINATED = 4
 
 
-@dataclass
 class QuicNetworkPath:
-    addr: NetworkAddress
-    bytes_received: int = 0
-    bytes_sent: int = 0
-    is_validated: bool = False
-    local_challenge: Optional[bytes] = None
-    remote_challenge: Optional[bytes] = None
+    def __init__(self, addr: NetworkAddress, is_validated: bool = False):
+        self.addr: NetworkAddress = addr
+        self.bytes_received: int = 0
+        self.bytes_sent: int = 0
+        self.is_validated: bool = is_validated
+        self.local_challenge_sent: bool = False
+        self.remote_challenges: Deque[bytes] = deque()
 
     def can_send(self, size: int) -> bool:
         return self.is_validated or (self.bytes_sent + size) <= 3 * self.bytes_received
@@ -309,6 +311,7 @@ class QuicConnection:
         self._host_cid_seq = 1
         self._local_ack_delay_exponent = 3
         self._local_active_connection_id_limit = 8
+        self._local_challenges: Dict[bytes, QuicNetworkPath] = {}
         self._local_initial_source_connection_id = self._host_cids[0].cid
         self._local_max_data = Limit(
             frame_type=QuicFrameType.MAX_DATA,
@@ -2037,7 +2040,7 @@ class QuicConnection:
                 self._quic_logger.encode_path_challenge_frame(data=data)
             )
 
-        context.network_path.remote_challenge = data
+        context.network_path.remote_challenges.append(data)
 
     def _handle_path_response_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -2053,16 +2056,16 @@ class QuicConnection:
                 self._quic_logger.encode_path_response_frame(data=data)
             )
 
-        if data != context.network_path.local_challenge:
+        try:
+            network_path = self._local_challenges.pop(data)
+        except KeyError:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.PROTOCOL_VIOLATION,
                 frame_type=frame_type,
                 reason_phrase="Response does not match challenge",
             )
-        self._logger.debug(
-            "Network path %s validated by challenge", context.network_path.addr
-        )
-        context.network_path.is_validated = True
+        self._logger.debug("Network path %s validated by challenge", network_path.addr)
+        network_path.is_validated = True
 
     def _handle_ping_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -2780,6 +2783,14 @@ class QuicConnection:
                 cipher_suite=cipher_suite, secret=secret, version=self._version
             )
 
+    def _add_local_challenge(self, challenge: bytes, network_path: QuicNetworkPath):
+        self._local_challenges[challenge] = network_path
+        while len(self._local_challenges) > MAX_LOCAL_CHALLENGES:
+            # Dictionaries are ordered, so pop the first key until we are below the
+            # limit.
+            key = next(iter(self._local_challenges.keys()))
+            del self._local_challenges[key]
+
     def _write_application(
         self, builder: QuicPacketBuilder, network_path: QuicNetworkPath, now: float
     ) -> None:
@@ -2814,22 +2825,22 @@ class QuicConnection:
                     self._handshake_done_pending = False
 
                 # PATH CHALLENGE
-                if (
-                    not network_path.is_validated
-                    and network_path.local_challenge is None
-                ):
+                if not (network_path.is_validated or network_path.local_challenge_sent):
                     challenge = os.urandom(8)
+                    self._add_local_challenge(
+                        challenge=challenge, network_path=network_path
+                    )
                     self._write_path_challenge_frame(
                         builder=builder, challenge=challenge
                     )
-                    network_path.local_challenge = challenge
+                    network_path.local_challenge_sent = True
 
                 # PATH RESPONSE
-                if network_path.remote_challenge is not None:
+                while len(network_path.remote_challenges) > 0:
+                    challenge = network_path.remote_challenges.popleft()
                     self._write_path_response_frame(
-                        builder=builder, challenge=network_path.remote_challenge
+                        builder=builder, challenge=challenge
                     )
-                    network_path.remote_challenge = None
 
                 # NEW_CONNECTION_ID
                 for connection_id in self._host_cids:
