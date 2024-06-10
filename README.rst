@@ -25,6 +25,10 @@ aioquic
    :target: https://aioquic.readthedocs.io/
    :alt: Documentation
 
+.. image:: https://assets.piptrends.com/get-last-month-downloads-badge/aioquic.svg
+    :alt: aioquic Downloads Last Month by pip Trends
+    :target: https://piptrends.com/package/aioquic
+
 What is ``aioquic``?
 --------------------
 
