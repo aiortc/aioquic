@@ -11,6 +11,7 @@ from aioquic.quic import events
 from aioquic.quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
 from aioquic.quic.connection import (
     MAX_LOCAL_CHALLENGES,
+    MAX_PENDING_CRYPTO,
     STREAM_COUNT_MAX,
     NetworkAddress,
     QuicConnection,
@@ -30,10 +31,7 @@ from aioquic.quic.packet import (
     encode_quic_version_negotiation,
     push_quic_transport_parameters,
 )
-from aioquic.quic.packet_builder import (
-    QuicDeliveryState,
-    QuicPacketBuilder,
-)
+from aioquic.quic.packet_builder import QuicDeliveryState, QuicPacketBuilder
 from aioquic.quic.recovery import QuicPacketPacer
 
 from .utils import (
@@ -1364,6 +1362,34 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(
                 cm.exception.reason_phrase, "offset + length cannot exceed 2^62 - 1"
             )
+
+    def test_excessive_crypto_buffering(self):
+        with client_and_server() as (client, server):
+            # Client receives data that causes more than 512K of buffering; note that
+            # because the stream buffer is a single buffer and not a set of fragments,
+            # the total buffering size depends not on how much data is received, but
+            # how much buffering is needed.  We send fragments of only 100 bytes
+            # at offsets 10000, 20000, 30000 etc.
+            highest_good_offset = 0
+            with self.assertRaises(QuicConnectionError) as cm:
+                # We don't start at zero as we want to force buffering, not cause
+                # a TLS error.
+                for offset in range(10000, 1000000, 10000):
+                    client._handle_crypto_frame(
+                        client_receive_context(client),
+                        QuicFrameType.CRYPTO,
+                        Buffer(
+                            data=encode_uint_var(offset)
+                            + encode_uint_var(100)
+                            + b"\x00" * 100
+                        ),
+                    )
+                    highest_good_offset = offset
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.CRYPTO_BUFFER_EXCEEDED
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+            self.assertEqual(highest_good_offset, (MAX_PENDING_CRYPTO // 10000) * 10000)
 
     def test_handle_data_blocked_frame(self):
         with client_and_server() as (client, server):

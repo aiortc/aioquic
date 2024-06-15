@@ -48,6 +48,9 @@ class QuicStreamReceiver:
             stream_id=self._stream_id,
         )
 
+    def starting_offset(self) -> int:
+        return self._buffer_start
+
     def handle_frame(
         self, frame: QuicStreamFrame
     ) -> Optional[events.StreamDataReceived]:
