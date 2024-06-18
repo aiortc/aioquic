@@ -25,12 +25,13 @@ jobs:
         with:
           python-version: 3.8
       - name: Install packages
-        run: pip install mypy ruff types-certifi types-pyopenssl
+        run: pip install check-manifest mypy ruff types-certifi types-pyopenssl
       - name: Run linters
         run: |
           ruff .
           ruff format --check --diff .
           mypy src tests
+          check-manifest
 
   codespell:
     name: Check for spelling errors
