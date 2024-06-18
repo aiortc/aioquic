@@ -1312,7 +1312,7 @@ class Context:
             self._signature_algorithms.append(SignatureAlgorithm.ED25519)
         if default_backend().ed448_supported():
             self._signature_algorithms.append(SignatureAlgorithm.ED448)
-        self._supported_groups = [Group.SECP256R1]
+        self._supported_groups = [Group.SECP256R1, Group.SECP384R1]
         if default_backend().x25519_supported():
             self._supported_groups.append(Group.X25519)
         if default_backend().x448_supported():
@@ -1337,7 +1337,7 @@ class Context:
         self._dec_key: Optional[bytes] = None
         self.__logger = logger
 
-        self._ec_private_key: Optional[ec.EllipticCurvePrivateKey] = None
+        self._ec_private_keys: List[ec.EllipticCurvePrivateKey] = []
         self._x25519_private_key: Optional[x25519.X25519PrivateKey] = None
         self._x448_private_key: Optional[x448.X448PrivateKey] = None
 
@@ -1525,13 +1525,7 @@ class Context:
         supported_groups: List[int] = []
 
         for group in self._supported_groups:
-            if group == Group.SECP256R1:
-                self._ec_private_key = ec.generate_private_key(
-                    GROUP_TO_CURVE[Group.SECP256R1]()
-                )
-                key_share.append(encode_public_key(self._ec_private_key.public_key()))
-                supported_groups.append(Group.SECP256R1)
-            elif group == Group.X25519:
+            if group == Group.X25519:
                 self._x25519_private_key = x25519.X25519PrivateKey.generate()
                 key_share.append(
                     encode_public_key(self._x25519_private_key.public_key())
@@ -1544,6 +1538,11 @@ class Context:
             elif group == Group.GREASE:
                 key_share.append((Group.GREASE, b"\x00"))
                 supported_groups.append(Group.GREASE)
+            elif group in GROUP_TO_CURVE:
+                ec_private_key = ec.generate_private_key(GROUP_TO_CURVE[group]())
+                self._ec_private_keys.append(ec_private_key)
+                key_share.append(encode_public_key(ec_private_key.public_key()))
+                supported_groups.append(group)
 
         assert len(key_share), "no key share entries"
 
@@ -1668,13 +1667,13 @@ class Context:
             and self._x448_private_key is not None
         ):
             shared_key = self._x448_private_key.exchange(peer_public_key)
-        elif (
-            isinstance(peer_public_key, ec.EllipticCurvePublicKey)
-            and self._ec_private_key is not None
-            and self._ec_private_key.public_key().curve.__class__
-            == peer_public_key.curve.__class__
-        ):
-            shared_key = self._ec_private_key.exchange(ec.ECDH(), peer_public_key)
+        elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
+            for ec_private_key in self._ec_private_keys:
+                if (
+                    ec_private_key.public_key().curve.__class__
+                    == peer_public_key.curve.__class__
+                ):
+                    shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
         assert shared_key is not None
 
         self.key_schedule.update_hash(input_buf.data)
@@ -1989,11 +1988,10 @@ class Context:
                 shared_key = self._x448_private_key.exchange(peer_public_key)
                 break
             elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
-                self._ec_private_key = ec.generate_private_key(
-                    GROUP_TO_CURVE[key_share[0]]()
-                )
-                public_key = self._ec_private_key.public_key()
-                shared_key = self._ec_private_key.exchange(ec.ECDH(), peer_public_key)
+                ec_private_key = ec.generate_private_key(GROUP_TO_CURVE[key_share[0]]())
+                self._ec_private_keys.append(ec_private_key)
+                public_key = ec_private_key.public_key()
+                shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
                 break
         assert shared_key is not None
 

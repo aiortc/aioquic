@@ -116,6 +116,11 @@ def reset_buffers(buffers):
 
 
 class ContextTest(TestCase):
+    def assertClientHello(self, data: bytes):
+        self.assertEqual(data[0], tls.HandshakeType.CLIENT_HELLO)
+        self.assertGreaterEqual(len(data), 191)
+        self.assertLessEqual(len(data), 564)
+
     def create_client(
         self, alpn_protocols=None, cadata=None, cafile=SERVER_CACERTFILE, **kwargs
     ):
@@ -379,8 +384,7 @@ class ContextTest(TestCase):
         client.handle_message(b"", client_buf)
         self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
         server_input = merge_buffers(client_buf)
-        self.assertGreaterEqual(len(server_input), 181)
-        self.assertLessEqual(len(server_input), 358)
+        self.assertClientHello(server_input)
         reset_buffers(client_buf)
 
         # Handle client hello.
@@ -445,8 +449,7 @@ class ContextTest(TestCase):
         client.handle_message(b"", client_buf)
         self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
         server_input = merge_buffers(client_buf)
-        self.assertGreaterEqual(len(server_input), 181)
-        self.assertLessEqual(len(server_input), 358)
+        self.assertClientHello(server_input)
         reset_buffers(client_buf)
 
         # Handle client hello.
@@ -504,8 +507,7 @@ class ContextTest(TestCase):
         client.handle_message(b"", client_buf)
         self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
         server_input = merge_buffers(client_buf)
-        self.assertGreaterEqual(len(server_input), 181)
-        self.assertLessEqual(len(server_input), 358)
+        self.assertClientHello(server_input)
         reset_buffers(client_buf)
 
         # Handle client hello.
@@ -660,6 +662,20 @@ class ContextTest(TestCase):
 
         self._handshake(client, server)
 
+    def test_handshake_with_secp256r1_group(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP256R1]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_secp384r1_group(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP384R1]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
     def test_handshake_with_x25519(self):
         client = self.create_client()
         client._supported_groups = [tls.Group.X25519]
@@ -729,8 +745,7 @@ class ContextTest(TestCase):
             client.handle_message(b"", client_buf)
             self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
             server_input = merge_buffers(client_buf)
-            self.assertGreaterEqual(len(server_input), 383)
-            self.assertLessEqual(len(server_input), 483)
+            self.assertClientHello(server_input)
             reset_buffers(client_buf)
 
             # Handle client hello.
@@ -782,8 +797,7 @@ class ContextTest(TestCase):
             client.handle_message(b"", client_buf)
             self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
             server_input = merge_buffers(client_buf)
-            self.assertGreaterEqual(len(server_input), 383)
-            self.assertLessEqual(len(server_input), 483)
+            self.assertClientHello(server_input)
             reset_buffers(client_buf)
 
             # tamper with binder
@@ -808,8 +822,7 @@ class ContextTest(TestCase):
             client.handle_message(b"", client_buf)
             self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
             server_input = merge_buffers(client_buf)
-            self.assertGreaterEqual(len(server_input), 383)
-            self.assertLessEqual(len(server_input), 483)
+            self.assertClientHello(server_input)
             reset_buffers(client_buf)
 
             # handle client hello
