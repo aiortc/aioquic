@@ -43,6 +43,7 @@ from aioquic.tls import (
 )
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from .utils import (
     SERVER_CACERTFILE,
@@ -565,9 +566,14 @@ class ContextTest(TestCase):
         self.assertEqual(client.alpn_negotiated, None)
         self.assertEqual(server.alpn_negotiated, None)
 
-    def test_handshake_with_ec_certificate(self):
+    def test_handshake_with_ec_certificate_secp256r1(self):
         self._test_handshake_with_certificate(
-            *generate_ec_certificate(common_name="example.com")
+            *generate_ec_certificate(common_name="example.com", curve=ec.SECP256R1)
+        )
+
+    def test_handshake_with_ec_certificate_secp384r1(self):
+        self._test_handshake_with_certificate(
+            *generate_ec_certificate(common_name="example.com", curve=ec.SECP384R1)
         )
 
     def test_handshake_with_ed25519_certificate(self):
@@ -598,9 +604,37 @@ class ContextTest(TestCase):
             self._handshake(client, server)
         self.assertEqual(str(cm.exception), "No common ALPN protocols")
 
+    def test_handshake_with_rsa_pkcs1_sha1_signature(self):
+        client = self.create_client()
+        client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PKCS1_SHA1]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
     def test_handshake_with_rsa_pkcs1_sha256_signature(self):
         client = self.create_client()
         client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PKCS1_SHA256]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_rsa_pkcs1_sha384_signature(self):
+        client = self.create_client()
+        client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PKCS1_SHA384]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_rsa_pss_rsae_sha256_signature(self):
+        client = self.create_client()
+        client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_rsa_pss_rsae_sha384_signature(self):
+        client = self.create_client()
+        client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA384]
         server = self.create_server()
 
         self._handshake(client, server)

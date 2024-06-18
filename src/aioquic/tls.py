@@ -1300,9 +1300,12 @@ class Context:
         self._legacy_compression_methods: List[int] = [CompressionMethod.NULL]
         self._psk_key_exchange_modes: List[int] = [PskKeyExchangeMode.PSK_DHE_KE]
         self._signature_algorithms: List[int] = [
-            SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
             SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
+            SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
             SignatureAlgorithm.RSA_PKCS1_SHA256,
+            SignatureAlgorithm.ECDSA_SECP384R1_SHA384,
+            SignatureAlgorithm.RSA_PSS_RSAE_SHA384,
+            SignatureAlgorithm.RSA_PKCS1_SHA384,
             SignatureAlgorithm.RSA_PKCS1_SHA1,
         ]
         if default_backend().ed25519_supported():
@@ -2161,12 +2164,18 @@ class Context:
             signature_algorithms = [
                 SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
                 SignatureAlgorithm.RSA_PKCS1_SHA256,
+                SignatureAlgorithm.RSA_PSS_RSAE_SHA384,
+                SignatureAlgorithm.RSA_PKCS1_SHA384,
                 SignatureAlgorithm.RSA_PKCS1_SHA1,
             ]
         elif isinstance(
             self.certificate_private_key, ec.EllipticCurvePrivateKey
         ) and isinstance(self.certificate_private_key.curve, ec.SECP256R1):
             signature_algorithms = [SignatureAlgorithm.ECDSA_SECP256R1_SHA256]
+        elif isinstance(
+            self.certificate_private_key, ec.EllipticCurvePrivateKey
+        ) and isinstance(self.certificate_private_key.curve, ec.SECP384R1):
+            signature_algorithms = [SignatureAlgorithm.ECDSA_SECP384R1_SHA384]
         elif isinstance(self.certificate_private_key, ed25519.Ed25519PrivateKey):
             signature_algorithms = [SignatureAlgorithm.ED25519]
         elif isinstance(self.certificate_private_key, ed448.Ed448PrivateKey):
