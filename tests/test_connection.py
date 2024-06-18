@@ -10,6 +10,7 @@ from aioquic.buffer import UINT_VAR_MAX, Buffer, encode_uint_var
 from aioquic.quic import events
 from aioquic.quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
 from aioquic.quic.connection import (
+    MAX_LOCAL_CHALLENGES,
     STREAM_COUNT_MAX,
     NetworkAddress,
     QuicConnection,
@@ -1808,6 +1809,47 @@ class QuicConnectionTest(TestCase):
             self.assertTrue(server._network_paths[0].is_validated)
             self.assertEqual(server._network_paths[1].addr, ("1.2.3.4", 1234))
             self.assertTrue(server._network_paths[1].is_validated)
+
+    def test_handle_path_challenge_response_on_different_path(self):
+        with client_and_server() as (client, server):
+            # client changes address and sends some data
+            client.send_stream_data(0, b"01234567")
+            for data, addr in client.datagrams_to_send(now=time.time()):
+                server.receive_datagram(data, ("1.2.3.4", 2345), now=time.time())
+
+            # check paths
+            self.assertEqual(len(server._network_paths), 2)
+            self.assertEqual(server._network_paths[0].addr, ("1.2.3.4", 2345))
+            self.assertFalse(server._network_paths[0].is_validated)
+            self.assertEqual(server._network_paths[1].addr, ("1.2.3.4", 1234))
+            self.assertTrue(server._network_paths[1].is_validated)
+
+            # server sends PATH_CHALLENGE and receives PATH_RESPONSE on the 1234
+            # path instead of the expected 2345 path.
+            for data, addr in server.datagrams_to_send(now=time.time()):
+                client.receive_datagram(data, SERVER_ADDR, now=time.time())
+            for data, addr in client.datagrams_to_send(now=time.time()):
+                server.receive_datagram(data, ("1.2.3.4", 1234), now=time.time())
+
+            # check paths; note that the order is backwards from the prior test
+            # as receiving on 1234 promotes it to first in the list
+            self.assertEqual(server._network_paths[0].addr, ("1.2.3.4", 1234))
+            self.assertTrue(server._network_paths[0].is_validated)
+            self.assertEqual(server._network_paths[1].addr, ("1.2.3.4", 2345))
+            self.assertTrue(server._network_paths[1].is_validated)
+
+    def test_local_path_challenges_are_bounded(self):
+        with client_and_server() as (client, server):
+            for i in range(MAX_LOCAL_CHALLENGES + 2):
+                server._add_local_challenge(
+                    int.to_bytes(i, 8, "big"), QuicNetworkPath(f"1.2.3.{i}")
+                )
+            self.assertEqual(len(server._local_challenges), MAX_LOCAL_CHALLENGES)
+            for i in range(2, MAX_LOCAL_CHALLENGES + 2):
+                self.assertEqual(
+                    server._local_challenges[int.to_bytes(i, 8, "big")].addr,
+                    f"1.2.3.{i}",
+                )
 
     def test_handle_path_response_frame_bad(self):
         with client_and_server() as (client, server):
