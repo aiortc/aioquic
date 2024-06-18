@@ -1,6 +1,14 @@
 Changelog
 =========
 
+1.1.0
+-----
+
+* Improve path challenge handling and compliance with :rfc:`9000`.
+* Limit the amount of buffered CRYPTO data to avoid memory exhaustion.
+* Enable SHA-384 based signature algorithms and SECP384R1 key exchange.
+* Build binary wheels against `OpenSSL`_ 3.3.0.
+
 1.0.0
 -----
 
