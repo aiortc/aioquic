@@ -41,7 +41,7 @@ jobs:
         with:
           check_filenames: true
           check_hidden: false
-          ignore_words_list: quicly
+          ignore_words_list: assertIn,quicly
           skip: "*.bin"
 
   test:
