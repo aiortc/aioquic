@@ -61,13 +61,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Disable firewall and configure compiler
+      - name: Install OpenSSL and disable firewall
         if: matrix.os == 'macos-latest'
         run: |
-          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
+          brew install openssl
           echo "AIOQUIC_SKIP_TESTS=chacha20" >> $GITHUB_ENV
-          echo "CFLAGS=-I/usr/local/opt/openssl/include" >> $GITHUB_ENV
-          echo "LDFLAGS=-L/usr/local/opt/openssl/lib" >> $GITHUB_ENV
+          echo "CFLAGS=-I$(brew --prefix openssl)/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L$(brew --prefix openssl)/lib" >> $GITHUB_ENV
+          sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
       - name: Install OpenSSL
         if: matrix.os == 'windows-latest'
         run: |
