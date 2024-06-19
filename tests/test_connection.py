@@ -1287,6 +1287,56 @@ class QuicConnectionTest(TestCase):
         )
         self.assertEqual(drop(client), 0)
 
+    def test_handle_ack_delivery(self):
+        data_chunk = b"h" * 1000
+
+        with client_and_server() as (client, server):
+            # Check handshake completed.
+            self.check_handshake(client=client, server=server)
+
+            # Check the initial state.
+            server_space = server._spaces[tls.Epoch.ONE_RTT]
+            self.assertEqual(list(server_space.ack_queue), [range(3, 5)])
+
+            # Client packet 5: stream data => received.
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, data_chunk)
+            self.assertEqual(transfer(client, server), 1)
+            self.assertEqual(list(server_space.ack_queue), [range(3, 6)])
+
+            # Client packet 6: stream data => lost.
+            client.send_stream_data(stream_id, data_chunk)
+            self.assertEqual(drop(client), 1)
+            self.assertEqual(list(server_space.ack_queue), [range(3, 6)])
+
+            # Client packet 7: stream data => received.
+            client.send_stream_data(stream_id, data_chunk)
+            self.assertEqual(transfer(client, server), 1)
+            # The server is aware of a gap, packet 6 is missing.
+            self.assertEqual(list(server_space.ack_queue), [range(3, 6), range(7, 8)])
+
+            # Server sends ACK.
+            self.assertEqual(transfer(server, client), 1)
+
+            # Client packet 8: sends stream data => lost.
+            client.send_stream_data(stream_id, data_chunk)
+            self.assertEqual(drop(client), 1)
+            self.assertEqual(list(server_space.ack_queue), [range(3, 6), range(7, 8)])
+
+            # Server sends ACK + PING.
+            server.send_ping(0)
+            self.assertEqual(transfer(server, client), 1)
+
+            # Client packet 9: ACK + PING => received.
+            client.send_stream_data(stream_id, data_chunk)
+            self.assertEqual(transfer(client, server), 1)
+            # The server discards some ACK ranges, but keeps enough information
+            # to note packet 8 is missing.
+            self.assertEqual(list(server_space.ack_queue), [range(7, 8), range(9, 10)])
+
+            # Server sends ACK.
+            self.assertEqual(transfer(server, client), 1)
+
     def test_handle_ack_frame_ecn(self):
         client = create_standalone_client(self)
 

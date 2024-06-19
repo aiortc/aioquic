@@ -2347,8 +2347,13 @@ class QuicConnection:
         """
         Callback when an ACK frame is acknowledged or lost.
         """
-        if delivery == QuicDeliveryState.ACKED:
-            space.ack_queue.subtract(0, highest_acked + 1)
+        if delivery == QuicDeliveryState.ACKED and highest_acked > 0:
+            # When a packet containing an ACK is acknowledged, we *could* discard ACK
+            # ranges up to and including the highest acknowledged packet. However, doing
+            # so would prevent us from reporting a gap if the very next packet(s) are
+            # lost. We therefore retain the highest acknowledged packet in our ACK
+            # ranges.
+            space.ack_queue.subtract(0, highest_acked)
 
     def _on_connection_limit_delivery(
         self, delivery: QuicDeliveryState, limit: Limit
