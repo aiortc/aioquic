@@ -1,7 +1,8 @@
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from functools import partial
-from typing import Callable, Dict, Optional, Text, Union, cast
+from typing import AsyncGenerator, Callable, Dict, Optional, Text, Union, cast
 
 from ..buffer import Buffer
 from ..quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
@@ -45,12 +46,14 @@ class QuicServer(asyncio.DatagramProtocol):
         else:
             self._retry = None
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """
         Close any ongoing connections and stop listening.
         """
-        for protocol in set(self._protocols.values()):
+        protocols = set(self._protocols.values())
+        for protocol in protocols:
             protocol.close()
+        await asyncio.gather(*[p.wait_closed() for p in protocols])
         self._protocols.clear()
         self._transport.close()
 
@@ -166,6 +169,7 @@ class QuicServer(asyncio.DatagramProtocol):
                 del self._protocols[cid]
 
 
+@asynccontextmanager
 async def serve(
     host: str,
     port: int,
@@ -176,7 +180,7 @@ async def serve(
     session_ticket_handler: Optional[SessionTicketHandler] = None,
     retry: bool = False,
     stream_handler: QuicStreamHandler = None,
-) -> QuicServer:
+) -> AsyncGenerator[QuicServer, None]:
     """
     Start a QUIC server at the given `host` and `port`.
 
@@ -204,7 +208,7 @@ async def serve(
 
     loop = asyncio.get_running_loop()
 
-    _, protocol = await loop.create_datagram_endpoint(
+    _, server = await loop.create_datagram_endpoint(
         lambda: QuicServer(
             configuration=configuration,
             create_protocol=create_protocol,
@@ -215,4 +219,7 @@ async def serve(
         ),
         local_addr=(host, port),
     )
-    return protocol
+    try:
+        yield server
+    finally:
+        await server.close()
