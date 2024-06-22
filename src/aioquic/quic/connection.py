@@ -34,23 +34,18 @@ from .logger import QuicLoggerTrace
 from .packet import (
     CONNECTION_ID_MAX_SIZE,
     NON_ACK_ELICITING_FRAME_TYPES,
-    PACKET_TYPE_HANDSHAKE,
-    PACKET_TYPE_INITIAL,
-    PACKET_TYPE_ONE_RTT,
-    PACKET_TYPE_RETRY,
-    PACKET_TYPE_ZERO_RTT,
     PROBING_FRAME_TYPES,
     RETRY_INTEGRITY_TAG_SIZE,
     STATELESS_RESET_TOKEN_SIZE,
     QuicErrorCode,
     QuicFrameType,
+    QuicPacketType,
     QuicProtocolVersion,
     QuicStreamFrame,
     QuicTransportParameters,
     get_retry_integrity_tag,
     get_spin_bit,
     is_draft_version,
-    is_long_header,
     pull_ack_frame,
     pull_quic_header,
     pull_quic_transport_parameters,
@@ -122,12 +117,12 @@ def dump_cid(cid: bytes) -> str:
     return binascii.hexlify(cid).decode("ascii")
 
 
-def get_epoch(packet_type: int) -> tls.Epoch:
-    if packet_type == PACKET_TYPE_INITIAL:
+def get_epoch(packet_type: QuicPacketType) -> tls.Epoch:
+    if packet_type == QuicPacketType.INITIAL:
         return tls.Epoch.INITIAL
-    elif packet_type == PACKET_TYPE_ZERO_RTT:
+    elif packet_type == QuicPacketType.ZERO_RTT:
         return tls.Epoch.ZERO_RTT
-    elif packet_type == PACKET_TYPE_HANDSHAKE:
+    elif packet_type == QuicPacketType.HANDSHAKE:
         return tls.Epoch.HANDSHAKE
     else:
         return tls.Epoch.ONE_RTT
@@ -544,10 +539,10 @@ class QuicConnection:
             epoch_packet_types = []
             if not self._handshake_confirmed:
                 epoch_packet_types += [
-                    (tls.Epoch.INITIAL, PACKET_TYPE_INITIAL),
-                    (tls.Epoch.HANDSHAKE, PACKET_TYPE_HANDSHAKE),
+                    (tls.Epoch.INITIAL, QuicPacketType.INITIAL),
+                    (tls.Epoch.HANDSHAKE, QuicPacketType.HANDSHAKE),
                 ]
-            epoch_packet_types.append((tls.Epoch.ONE_RTT, PACKET_TYPE_ONE_RTT))
+            epoch_packet_types.append((tls.Epoch.ONE_RTT, QuicPacketType.ONE_RTT))
             for epoch, packet_type in epoch_packet_types:
                 crypto = self._cryptos[epoch]
                 if crypto.send.is_valid():
@@ -619,9 +614,9 @@ class QuicConnection:
                                     packet.packet_type
                                 ),
                                 "scid": (
-                                    dump_cid(self.host_cid)
-                                    if is_long_header(packet.packet_type)
-                                    else ""
+                                    ""
+                                    if packet.packet_type == QuicPacketType.ONE_RTT
+                                    else dump_cid(self.host_cid)
                                 ),
                                 "dcid": dump_cid(self._peer_cid.cid),
                             },
@@ -791,7 +786,7 @@ class QuicConnection:
             # contained in a datagram smaller than 1200 bytes.
             if (
                 not self._is_client
-                and header.packet_type == PACKET_TYPE_INITIAL
+                and header.packet_type == QuicPacketType.INITIAL
                 and len(data) < SMALLEST_MAX_DATAGRAM_SIZE
             ):
                 if self._quic_logger is not None:
@@ -800,7 +795,7 @@ class QuicConnection:
                         event="packet_dropped",
                         data={
                             "trigger": "initial_packet_datagram_too_small",
-                            "raw": {"length": buf.capacity - start_off},
+                            "raw": {"length": header.packet_length},
                         },
                     )
                 return
@@ -812,13 +807,16 @@ class QuicConnection:
                     destination_cid_seq = connection_id.sequence_number
                     break
             if (
-                self._is_client or header.packet_type == PACKET_TYPE_HANDSHAKE
+                self._is_client or header.packet_type == QuicPacketType.HANDSHAKE
             ) and destination_cid_seq is None:
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
                         category="transport",
                         event="packet_dropped",
-                        data={"trigger": "unknown_connection_id"},
+                        data={
+                            "trigger": "unknown_connection_id",
+                            "raw": {"length": header.packet_length},
+                        },
                     )
                 return
 
@@ -826,13 +824,10 @@ class QuicConnection:
             if (
                 self._is_client
                 and self._state == QuicConnectionState.FIRSTFLIGHT
-                and header.version == QuicProtocolVersion.NEGOTIATION
+                and header.packet_type == QuicPacketType.VERSION_NEGOTIATION
                 and not self._version_negotiation_count
             ):
                 # version negotiation
-                versions = []
-                while not buf.eof():
-                    versions.append(buf.pull_uint32())
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
                         category="transport",
@@ -840,20 +835,24 @@ class QuicConnection:
                         data={
                             "frames": [],
                             "header": {
-                                "packet_type": "version_negotiation",
+                                "packet_type": self._quic_logger.packet_type(
+                                    header.packet_type
+                                ),
                                 "scid": dump_cid(header.source_cid),
                                 "dcid": dump_cid(header.destination_cid),
                             },
-                            "raw": {"length": buf.tell() - start_off},
+                            "raw": {"length": header.packet_length},
                         },
                     )
-                if self._version in versions:
+                if self._version in header.supported_versions:
                     self._logger.warning(
                         "Version negotiation packet contains %s" % self._version
                     )
                     return
                 common = [
-                    x for x in self._configuration.supported_versions if x in versions
+                    x
+                    for x in self._configuration.supported_versions
+                    if x in header.supported_versions
                 ]
                 chosen_version = common[0] if common else None
                 if self._quic_logger is not None:
@@ -861,7 +860,7 @@ class QuicConnection:
                         category="transport",
                         event="version_information",
                         data={
-                            "server_versions": versions,
+                            "server_versions": header.supported_versions,
                             "client_versions": self._configuration.supported_versions,
                             "chosen_version": chosen_version,
                         },
@@ -890,12 +889,15 @@ class QuicConnection:
                     self._quic_logger.log_event(
                         category="transport",
                         event="packet_dropped",
-                        data={"trigger": "unsupported_version"},
+                        data={
+                            "trigger": "unsupported_version",
+                            "raw": {"length": header.packet_length},
+                        },
                     )
                 return
 
             # handle retry packet
-            if header.packet_type == PACKET_TYPE_RETRY:
+            if header.packet_type == QuicPacketType.RETRY:
                 if (
                     self._is_client
                     and not self._retry_count
@@ -920,7 +922,7 @@ class QuicConnection:
                                     "scid": dump_cid(header.source_cid),
                                     "dcid": dump_cid(header.destination_cid),
                                 },
-                                "raw": {"length": buf.tell() - start_off},
+                                "raw": {"length": header.packet_length},
                             },
                         )
 
@@ -938,7 +940,10 @@ class QuicConnection:
                         self._quic_logger.log_event(
                             category="transport",
                             event="packet_dropped",
-                            data={"trigger": "unexpected_packet"},
+                            data={
+                                "trigger": "unexpected_packet",
+                                "raw": {"length": header.packet_length},
+                            },
                         )
                 return
 
@@ -948,7 +953,7 @@ class QuicConnection:
             # server initialization
             if not self._is_client and self._state == QuicConnectionState.FIRSTFLIGHT:
                 assert (
-                    header.packet_type == PACKET_TYPE_INITIAL
+                    header.packet_type == QuicPacketType.INITIAL
                 ), "first packet must be INITIAL"
                 crypto_frame_required = True
                 self._network_paths = [network_path]
@@ -965,7 +970,7 @@ class QuicConnection:
 
             # decrypt packet
             encrypted_off = buf.tell() - start_off
-            end_off = buf.tell() + header.rest_length
+            end_off = start_off + header.packet_length
             buf.seek(end_off)
 
             try:
@@ -978,7 +983,10 @@ class QuicConnection:
                     self._quic_logger.log_event(
                         category="transport",
                         event="packet_dropped",
-                        data={"trigger": "key_unavailable"},
+                        data={
+                            "trigger": "key_unavailable",
+                            "raw": {"length": header.packet_length},
+                        },
                     )
 
                 # If a client receives HANDSHAKE or 1-RTT packets before it has
@@ -997,15 +1005,18 @@ class QuicConnection:
                     self._quic_logger.log_event(
                         category="transport",
                         event="packet_dropped",
-                        data={"trigger": "payload_decrypt_error"},
+                        data={
+                            "trigger": "payload_decrypt_error",
+                            "raw": {"length": header.packet_length},
+                        },
                     )
                 continue
 
             # check reserved bits
-            if header.is_long_header:
-                reserved_mask = 0x0C
-            else:
+            if header.packet_type == QuicPacketType.ONE_RTT:
                 reserved_mask = 0x18
+            else:
+                reserved_mask = 0x0C
             if plain_header[0] & reserved_mask:
                 self.close(
                     error_code=QuicErrorCode.PROTOCOL_VIOLATION,
@@ -1031,7 +1042,7 @@ class QuicConnection:
                             "dcid": dump_cid(header.destination_cid),
                             "scid": dump_cid(header.source_cid),
                         },
-                        "raw": {"length": end_off - start_off},
+                        "raw": {"length": header.packet_length},
                     },
                 )
 
@@ -1053,7 +1064,10 @@ class QuicConnection:
                 self._set_state(QuicConnectionState.CONNECTED)
 
             # update spin bit
-            if not header.is_long_header and packet_number > self._spin_highest_pn:
+            if (
+                header.packet_type == QuicPacketType.ONE_RTT
+                and packet_number > self._spin_highest_pn
+            ):
                 spin_bit = get_spin_bit(plain_header[0])
                 if self._is_client:
                     self._spin_bit = not spin_bit
@@ -2802,10 +2816,10 @@ class QuicConnection:
         if self._cryptos[tls.Epoch.ONE_RTT].send.is_valid():
             crypto = self._cryptos[tls.Epoch.ONE_RTT]
             crypto_stream = self._crypto_streams[tls.Epoch.ONE_RTT]
-            packet_type = PACKET_TYPE_ONE_RTT
+            packet_type = QuicPacketType.ONE_RTT
         elif self._cryptos[tls.Epoch.ZERO_RTT].send.is_valid():
             crypto = self._cryptos[tls.Epoch.ZERO_RTT]
-            packet_type = PACKET_TYPE_ZERO_RTT
+            packet_type = QuicPacketType.ZERO_RTT
         else:
             return
         space = self._spaces[tls.Epoch.ONE_RTT]
@@ -2977,9 +2991,9 @@ class QuicConnection:
 
         while True:
             if epoch == tls.Epoch.INITIAL:
-                packet_type = PACKET_TYPE_INITIAL
+                packet_type = QuicPacketType.INITIAL
             else:
-                packet_type = PACKET_TYPE_HANDSHAKE
+                packet_type = QuicPacketType.HANDSHAKE
             builder.start_packet(packet_type, crypto)
 
             # ACK

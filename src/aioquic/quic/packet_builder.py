@@ -9,12 +9,12 @@ from .logger import QuicLoggerTrace
 from .packet import (
     NON_ACK_ELICITING_FRAME_TYPES,
     NON_IN_FLIGHT_FRAME_TYPES,
+    PACKET_FIXED_BIT,
+    PACKET_LONG_HEADER,
+    PACKET_LONG_TYPE_ENCODE_VERSION_1,
     PACKET_NUMBER_MAX_SIZE,
-    PACKET_TYPE_HANDSHAKE,
-    PACKET_TYPE_INITIAL,
-    PACKET_TYPE_MASK,
     QuicFrameType,
-    is_long_header,
+    QuicPacketType,
 )
 
 PACKET_LENGTH_SEND_SIZE = 2
@@ -36,7 +36,7 @@ class QuicSentPacket:
     is_ack_eliciting: bool
     is_crypto_packet: bool
     packet_number: int
-    packet_type: int
+    packet_type: QuicPacketType
     sent_time: Optional[float] = None
     sent_bytes: int = 0
 
@@ -92,10 +92,9 @@ class QuicPacketBuilder:
         self._header_size = 0
         self._packet: Optional[QuicSentPacket] = None
         self._packet_crypto: Optional[CryptoPair] = None
-        self._packet_long_header = False
         self._packet_number = packet_number
         self._packet_start = 0
-        self._packet_type = 0
+        self._packet_type: Optional[QuicPacketType] = None
 
         self._buffer = Buffer(max_datagram_size)
         self._buffer_capacity = max_datagram_size
@@ -182,10 +181,16 @@ class QuicPacketBuilder:
             self._packet.delivery_handlers.append((handler, handler_args))
         return self._buffer
 
-    def start_packet(self, packet_type: int, crypto: CryptoPair) -> None:
+    def start_packet(self, packet_type: QuicPacketType, crypto: CryptoPair) -> None:
         """
         Starts a new packet.
         """
+        assert packet_type in (
+            QuicPacketType.INITIAL,
+            QuicPacketType.HANDSHAKE,
+            QuicPacketType.ZERO_RTT,
+            QuicPacketType.ONE_RTT,
+        ), "Invalid packet type"
         buf = self._buffer
 
         # finish previous datagram
@@ -215,10 +220,9 @@ class QuicPacketBuilder:
             self._datagram_init = False
 
         # calculate header size
-        packet_long_header = is_long_header(packet_type)
-        if packet_long_header:
+        if packet_type != QuicPacketType.ONE_RTT:
             header_size = 11 + len(self._peer_cid) + len(self._host_cid)
-            if (packet_type & PACKET_TYPE_MASK) == PACKET_TYPE_INITIAL:
+            if packet_type == QuicPacketType.INITIAL:
                 token_length = len(self._peer_token)
                 header_size += size_uint_var(token_length) + token_length
         else:
@@ -229,9 +233,9 @@ class QuicPacketBuilder:
             raise QuicPacketBuilderStop
 
         # determine ack epoch
-        if packet_type == PACKET_TYPE_INITIAL:
+        if packet_type == QuicPacketType.INITIAL:
             epoch = Epoch.INITIAL
-        elif packet_type == PACKET_TYPE_HANDSHAKE:
+        elif packet_type == QuicPacketType.HANDSHAKE:
             epoch = Epoch.HANDSHAKE
         else:
             epoch = Epoch.ONE_RTT
@@ -246,7 +250,6 @@ class QuicPacketBuilder:
             packet_type=packet_type,
         )
         self._packet_crypto = crypto
-        self._packet_long_header = packet_long_header
         self._packet_start = packet_start
         self._packet_type = packet_type
         self.quic_logger_frames = self._packet.quic_logger_frames
@@ -272,7 +275,7 @@ class QuicPacketBuilder:
             # 14.1.
             if (
                 (self._is_client or self._packet.is_ack_eliciting)
-                and self._packet_type == PACKET_TYPE_INITIAL
+                and self._packet_type == QuicPacketType.INITIAL
                 and self.remaining_flight_space
                 and self.remaining_flight_space > padding_size
             ):
@@ -291,7 +294,7 @@ class QuicPacketBuilder:
                     )
 
             # write header
-            if self._packet_long_header:
+            if self._packet_type != QuicPacketType.ONE_RTT:
                 length = (
                     packet_size
                     - self._header_size
@@ -300,13 +303,18 @@ class QuicPacketBuilder:
                 )
 
                 buf.seek(self._packet_start)
-                buf.push_uint8(self._packet_type | (PACKET_NUMBER_SEND_SIZE - 1))
+                buf.push_uint8(
+                    PACKET_LONG_HEADER
+                    | PACKET_FIXED_BIT
+                    | PACKET_LONG_TYPE_ENCODE_VERSION_1[self._packet_type] << 4
+                    | (PACKET_NUMBER_SEND_SIZE - 1)
+                )
                 buf.push_uint32(self._version)
                 buf.push_uint8(len(self._peer_cid))
                 buf.push_bytes(self._peer_cid)
                 buf.push_uint8(len(self._host_cid))
                 buf.push_bytes(self._host_cid)
-                if (self._packet_type & PACKET_TYPE_MASK) == PACKET_TYPE_INITIAL:
+                if self._packet_type == QuicPacketType.INITIAL:
                     buf.push_uint_var(len(self._peer_token))
                     buf.push_bytes(self._peer_token)
                 buf.push_uint16(length | 0x4000)
@@ -314,7 +322,7 @@ class QuicPacketBuilder:
             else:
                 buf.seek(self._packet_start)
                 buf.push_uint8(
-                    self._packet_type
+                    PACKET_FIXED_BIT
                     | (self._spin_bit << 5)
                     | (self._packet_crypto.key_phase << 2)
                     | (PACKET_NUMBER_SEND_SIZE - 1)
@@ -338,7 +346,7 @@ class QuicPacketBuilder:
                 self._datagram_flight_bytes += self._packet.sent_bytes
 
             # short header packets cannot be coalesced, we need a new datagram
-            if not self._packet_long_header:
+            if self._packet_type == QuicPacketType.ONE_RTT:
                 self._flush_current_datagram()
 
             self._packet_number += 1

@@ -7,7 +7,7 @@ from ..buffer import Buffer
 from ..quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
 from ..quic.connection import NetworkAddress, QuicConnection
 from ..quic.packet import (
-    PACKET_TYPE_INITIAL,
+    QuicPacketType,
     encode_quic_retry,
     encode_quic_version_negotiation,
     pull_quic_header,
@@ -86,7 +86,7 @@ class QuicServer(asyncio.DatagramProtocol):
         if (
             protocol is None
             and len(data) >= SMALLEST_MAX_DATAGRAM_SIZE
-            and header.packet_type == PACKET_TYPE_INITIAL
+            and header.packet_type == QuicPacketType.INITIAL
         ):
             # retry
             if self._retry is not None:

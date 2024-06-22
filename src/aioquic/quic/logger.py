@@ -7,24 +7,20 @@ from typing import Any, Deque, Dict, List, Optional
 
 from ..h3.events import Headers
 from .packet import (
-    PACKET_TYPE_HANDSHAKE,
-    PACKET_TYPE_INITIAL,
-    PACKET_TYPE_MASK,
-    PACKET_TYPE_ONE_RTT,
-    PACKET_TYPE_RETRY,
-    PACKET_TYPE_ZERO_RTT,
     QuicFrameType,
+    QuicPacketType,
     QuicStreamFrame,
     QuicTransportParameters,
 )
 from .rangeset import RangeSet
 
 PACKET_TYPE_NAMES = {
-    PACKET_TYPE_INITIAL: "initial",
-    PACKET_TYPE_HANDSHAKE: "handshake",
-    PACKET_TYPE_ZERO_RTT: "0RTT",
-    PACKET_TYPE_ONE_RTT: "1RTT",
-    PACKET_TYPE_RETRY: "retry",
+    QuicPacketType.INITIAL: "initial",
+    QuicPacketType.HANDSHAKE: "handshake",
+    QuicPacketType.ZERO_RTT: "0RTT",
+    QuicPacketType.ONE_RTT: "1RTT",
+    QuicPacketType.RETRY: "retry",
+    QuicPacketType.VERSION_NEGOTIATION: "version_negotiation",
 }
 QLOG_VERSION = "0.3"
 
@@ -212,8 +208,8 @@ class QuicLoggerTrace:
                 data[param_name] = param_value
         return data
 
-    def packet_type(self, packet_type: int) -> str:
-        return PACKET_TYPE_NAMES.get(packet_type & PACKET_TYPE_MASK, "1RTT")
+    def packet_type(self, packet_type: QuicPacketType) -> str:
+        return PACKET_TYPE_NAMES[packet_type]
 
     # HTTP/3
 
