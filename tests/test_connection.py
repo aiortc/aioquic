@@ -22,9 +22,9 @@ from aioquic.quic.connection import (
 from aioquic.quic.crypto import CryptoPair
 from aioquic.quic.logger import QuicLogger
 from aioquic.quic.packet import (
-    PACKET_TYPE_INITIAL,
     QuicErrorCode,
     QuicFrameType,
+    QuicPacketType,
     QuicProtocolVersion,
     QuicTransportParameters,
     encode_quic_retry,
@@ -838,7 +838,7 @@ class QuicConnectionTest(TestCase):
         crypto.setup_initial(
             client._peer_cid.cid, is_client=False, version=client._version
         )
-        builder.start_packet(PACKET_TYPE_INITIAL, crypto)
+        builder.start_packet(QuicPacketType.INITIAL, crypto)
         buf = builder.start_frame(QuicFrameType.PADDING)
         buf.push_bytes(bytes(builder.remaining_flight_space))
 
@@ -1200,7 +1200,7 @@ class QuicConnectionTest(TestCase):
 
         crypto.encrypt_packet = encrypt_packet
 
-        builder.start_packet(PACKET_TYPE_INITIAL, crypto)
+        builder.start_packet(QuicPacketType.INITIAL, crypto)
         buf = builder.start_frame(QuicFrameType.PADDING)
         buf.push_bytes(bytes(builder.remaining_flight_space))
 
@@ -1230,7 +1230,7 @@ class QuicConnectionTest(TestCase):
         crypto.setup_initial(
             client._peer_cid.cid, is_client=False, version=client._version
         )
-        builder.start_packet(PACKET_TYPE_INITIAL, crypto)
+        builder.start_packet(QuicPacketType.INITIAL, crypto)
         buf = builder.start_frame(QuicFrameType.PADDING)
         buf.push_bytes(bytes(builder.remaining_flight_space))
 
@@ -3007,7 +3007,7 @@ class QuicConnectionTest(TestCase):
         )
         crypto = CryptoPair()
         crypto.setup_initial(client.host_cid, is_client=True, version=client._version)
-        builder.start_packet(PACKET_TYPE_INITIAL, crypto)
+        builder.start_packet(QuicPacketType.INITIAL, crypto)
         client._write_connection_close_frame(
             builder=builder,
             epoch=tls.Epoch.INITIAL,

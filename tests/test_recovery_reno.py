@@ -2,7 +2,7 @@ import math
 from unittest import TestCase
 
 from aioquic import tls
-from aioquic.quic.packet import PACKET_TYPE_INITIAL, PACKET_TYPE_ONE_RTT
+from aioquic.quic.packet import QuicPacketType
 from aioquic.quic.packet_builder import QuicSentPacket
 from aioquic.quic.rangeset import RangeSet
 from aioquic.quic.recovery import QuicPacketRecovery, QuicPacketSpace
@@ -41,7 +41,7 @@ class QuicPacketRecoveryRenoTest(TestCase):
             is_ack_eliciting=True,
             is_crypto_packet=False,
             packet_number=0,
-            packet_type=PACKET_TYPE_ONE_RTT,
+            packet_type=QuicPacketType.ONE_RTT,
             sent_bytes=1280,
             sent_time=0.0,
         )
@@ -77,7 +77,7 @@ class QuicPacketRecoveryRenoTest(TestCase):
             is_ack_eliciting=False,
             is_crypto_packet=False,
             packet_number=0,
-            packet_type=PACKET_TYPE_ONE_RTT,
+            packet_type=QuicPacketType.ONE_RTT,
             sent_bytes=1280,
             sent_time=123.45,
         )
@@ -113,7 +113,7 @@ class QuicPacketRecoveryRenoTest(TestCase):
             is_ack_eliciting=True,
             is_crypto_packet=True,
             packet_number=0,
-            packet_type=PACKET_TYPE_INITIAL,
+            packet_type=QuicPacketType.INITIAL,
             sent_bytes=1280,
             sent_time=0.0,
         )
