@@ -22,7 +22,7 @@ from aioquic.quic.logger import QuicLoggerTrace
 
 logger = logging.getLogger("http3")
 
-H3_ALPN = ["h3", "h3-32", "h3-31", "h3-30", "h3-29"]
+H3_ALPN = ["h3"]
 RESERVED_SETTINGS = (0x0, 0x2, 0x3, 0x4, 0x5)
 UPPERCASE = re.compile(b"[A-Z]")
 COLON = 0x3A

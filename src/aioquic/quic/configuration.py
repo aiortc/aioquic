@@ -113,10 +113,6 @@ class QuicConfiguration:
     supported_versions: List[int] = field(
         default_factory=lambda: [
             QuicProtocolVersion.VERSION_1,
-            QuicProtocolVersion.DRAFT_32,
-            QuicProtocolVersion.DRAFT_31,
-            QuicProtocolVersion.DRAFT_30,
-            QuicProtocolVersion.DRAFT_29,
         ]
     )
     verify_mode: Optional[int] = None

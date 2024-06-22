@@ -589,18 +589,18 @@ class ContextTest(TestCase):
         )
 
     def test_handshake_with_alpn(self):
-        client = self.create_client(alpn_protocols=["hq-20"])
-        server = self.create_server(alpn_protocols=["hq-20", "h3-20"])
+        client = self.create_client(alpn_protocols=["hq-interop"])
+        server = self.create_server(alpn_protocols=["hq-interop", "h3"])
 
         self._handshake(client, server)
 
         # check ALPN matches
-        self.assertEqual(client.alpn_negotiated, "hq-20")
-        self.assertEqual(server.alpn_negotiated, "hq-20")
+        self.assertEqual(client.alpn_negotiated, "hq-interop")
+        self.assertEqual(server.alpn_negotiated, "hq-interop")
 
     def test_handshake_with_alpn_fail(self):
-        client = self.create_client(alpn_protocols=["hq-20"])
-        server = self.create_server(alpn_protocols=["h3-20"])
+        client = self.create_client(alpn_protocols=["hq-interop"])
+        server = self.create_server(alpn_protocols=["h3"])
 
         with self.assertRaises(tls.AlertHandshakeFailure) as cm:
             self._handshake(client, server)
