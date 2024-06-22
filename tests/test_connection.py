@@ -281,11 +281,13 @@ class QuicConnectionTest(TestCase):
 
     def test_connect_with_alpn(self):
         with client_and_server(
-            client_options={"alpn_protocols": ["h3-25", "hq-25"]},
-            server_options={"alpn_protocols": ["hq-25"]},
+            client_options={"alpn_protocols": ["h3", "hq-interop"]},
+            server_options={"alpn_protocols": ["hq-interop"]},
         ) as (client, server):
             # check handshake completed
-            self.check_handshake(client=client, server=server, alpn_protocol="hq-25")
+            self.check_handshake(
+                client=client, server=server, alpn_protocol="hq-interop"
+            )
 
     def test_connect_with_secrets_log(self):
         client_log_file = io.StringIO()
@@ -1224,7 +1226,7 @@ class QuicConnectionTest(TestCase):
             is_client=False,
             max_datagram_size=SMALLEST_MAX_DATAGRAM_SIZE,
             peer_cid=client.host_cid,
-            version=0xFF000011,  # DRAFT_16
+            version=0x1A2A3A4A,
         )
         crypto = CryptoPair()
         crypto.setup_initial(
@@ -2950,7 +2952,7 @@ class QuicConnectionTest(TestCase):
             encode_quic_version_negotiation(
                 source_cid=client._peer_cid.cid,
                 destination_cid=client.host_cid,
-                supported_versions=[0xFF000011],  # DRAFT_16
+                supported_versions=[0x1A2A3A4A],
             ),
             SERVER_ADDR,
             now=time.time(),
@@ -2981,14 +2983,20 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(drop(client), 0)
 
     def test_version_negotiation_ok(self):
-        client = create_standalone_client(self)
+        client = create_standalone_client(
+            self,
+            supported_versions=[
+                QuicProtocolVersion.VERSION_1,
+                0x1A2A3A4A,
+            ],
+        )
 
         # found a common version, retry
         client.receive_datagram(
             encode_quic_version_negotiation(
                 source_cid=client._peer_cid.cid,
                 destination_cid=client.host_cid,
-                supported_versions=[QuicProtocolVersion.DRAFT_29],
+                supported_versions=[0x1A2A3A4A],
             ),
             SERVER_ADDR,
             now=time.time(),

@@ -10,11 +10,10 @@ from .packet import (
     NON_ACK_ELICITING_FRAME_TYPES,
     NON_IN_FLIGHT_FRAME_TYPES,
     PACKET_FIXED_BIT,
-    PACKET_LONG_HEADER,
-    PACKET_LONG_TYPE_ENCODE_VERSION_1,
     PACKET_NUMBER_MAX_SIZE,
     QuicFrameType,
     QuicPacketType,
+    encode_long_header_first_byte,
 )
 
 PACKET_LENGTH_SEND_SIZE = 2
@@ -304,10 +303,9 @@ class QuicPacketBuilder:
 
                 buf.seek(self._packet_start)
                 buf.push_uint8(
-                    PACKET_LONG_HEADER
-                    | PACKET_FIXED_BIT
-                    | PACKET_LONG_TYPE_ENCODE_VERSION_1[self._packet_type] << 4
-                    | (PACKET_NUMBER_SEND_SIZE - 1)
+                    encode_long_header_first_byte(
+                        self._version, self._packet_type, PACKET_NUMBER_SEND_SIZE - 1
+                    )
                 )
                 buf.push_uint32(self._version)
                 buf.push_uint8(len(self._peer_cid))

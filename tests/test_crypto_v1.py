@@ -134,7 +134,11 @@ class CryptoTest(TestCase):
         secret = binascii.unhexlify(
             "c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea"
         )
-        key, iv, hp = derive_key_iv_hp(INITIAL_CIPHER_SUITE, secret)
+        key, iv, hp = derive_key_iv_hp(
+            cipher_suite=INITIAL_CIPHER_SUITE,
+            secret=secret,
+            version=PROTOCOL_VERSION,
+        )
         self.assertEqual(key, binascii.unhexlify("1f369613dd76d5467730efcbe3b1a22d"))
         self.assertEqual(iv, binascii.unhexlify("fa044b2f42a3fd3b46fb255c"))
         self.assertEqual(hp, binascii.unhexlify("9f50449e04a0e810283a1e9933adedd2"))
@@ -143,7 +147,11 @@ class CryptoTest(TestCase):
         secret = binascii.unhexlify(
             "3c199828fd139efd216c155ad844cc81fb82fa8d7446fa7d78be803acdda951b"
         )
-        key, iv, hp = derive_key_iv_hp(INITIAL_CIPHER_SUITE, secret)
+        key, iv, hp = derive_key_iv_hp(
+            cipher_suite=INITIAL_CIPHER_SUITE,
+            secret=secret,
+            version=PROTOCOL_VERSION,
+        )
         self.assertEqual(key, binascii.unhexlify("cf3a5331653c364c88f0f379b6067e37"))
         self.assertEqual(iv, binascii.unhexlify("0ac1493ca1905853b0bba03e"))
         self.assertEqual(hp, binascii.unhexlify("c206b8d9b9f0f37644430b490eeaa314"))
@@ -156,7 +164,11 @@ class CryptoTest(TestCase):
         secret = binascii.unhexlify(
             "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
         )
-        key, iv, hp = derive_key_iv_hp(CipherSuite.CHACHA20_POLY1305_SHA256, secret)
+        key, iv, hp = derive_key_iv_hp(
+            cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
+            secret=secret,
+            version=PROTOCOL_VERSION,
+        )
         self.assertEqual(
             key,
             binascii.unhexlify(

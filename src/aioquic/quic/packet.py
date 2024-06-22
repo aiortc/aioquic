@@ -16,10 +16,10 @@ PACKET_SPIN_BIT = 0x20
 
 CONNECTION_ID_MAX_SIZE = 20
 PACKET_NUMBER_MAX_SIZE = 4
-RETRY_AEAD_KEY_DRAFT_29 = binascii.unhexlify("ccce187ed09a09d05728155a6cb96be1")
 RETRY_AEAD_KEY_VERSION_1 = binascii.unhexlify("be0c690b9f66575a1d766b54e368c84e")
-RETRY_AEAD_NONCE_DRAFT_29 = binascii.unhexlify("e54930f97f2136f0530a8c1c")
+RETRY_AEAD_KEY_VERSION_2 = binascii.unhexlify("8fb4b01b56ac48e260fbcbcead7ccc92")
 RETRY_AEAD_NONCE_VERSION_1 = binascii.unhexlify("461599d35d632bf2239825bb")
+RETRY_AEAD_NONCE_VERSION_2 = binascii.unhexlify("d86969bc2d7c6d9990efb04a")
 RETRY_INTEGRITY_TAG_SIZE = 16
 STATELESS_RESET_TOKEN_SIZE = 16
 
@@ -68,14 +68,23 @@ PACKET_LONG_TYPE_DECODE_VERSION_1 = dict(
     (v, i) for (i, v) in PACKET_LONG_TYPE_ENCODE_VERSION_1.items()
 )
 
+# QUIC version 2
+# https://datatracker.ietf.org/doc/html/rfc9369#section-3.2
+PACKET_LONG_TYPE_ENCODE_VERSION_2 = {
+    QuicPacketType.INITIAL: 1,
+    QuicPacketType.ZERO_RTT: 2,
+    QuicPacketType.HANDSHAKE: 3,
+    QuicPacketType.RETRY: 0,
+}
+PACKET_LONG_TYPE_DECODE_VERSION_2 = dict(
+    (v, i) for (i, v) in PACKET_LONG_TYPE_ENCODE_VERSION_2.items()
+)
+
 
 class QuicProtocolVersion(IntEnum):
     NEGOTIATION = 0
     VERSION_1 = 0x00000001
-    DRAFT_29 = 0xFF00001D
-    DRAFT_30 = 0xFF00001E
-    DRAFT_31 = 0xFF00001F
-    DRAFT_32 = 0xFF000020
+    VERSION_2 = 0x6B3343CF
 
 
 @dataclass
@@ -135,9 +144,9 @@ def get_retry_integrity_tag(
     buf.push_bytes(packet_without_tag)
     assert buf.eof()
 
-    if is_draft_version(version):
-        aead_key = RETRY_AEAD_KEY_DRAFT_29
-        aead_nonce = RETRY_AEAD_NONCE_DRAFT_29
+    if version == QuicProtocolVersion.VERSION_2:
+        aead_key = RETRY_AEAD_KEY_VERSION_2
+        aead_nonce = RETRY_AEAD_NONCE_VERSION_2
     else:
         aead_key = RETRY_AEAD_KEY_VERSION_1
         aead_nonce = RETRY_AEAD_NONCE_VERSION_1
@@ -151,15 +160,6 @@ def get_retry_integrity_tag(
 
 def get_spin_bit(first_byte: int) -> bool:
     return bool(first_byte & PACKET_SPIN_BIT)
-
-
-def is_draft_version(version: int) -> bool:
-    return version in (
-        QuicProtocolVersion.DRAFT_29,
-        QuicProtocolVersion.DRAFT_30,
-        QuicProtocolVersion.DRAFT_31,
-        QuicProtocolVersion.DRAFT_32,
-    )
 
 
 def is_long_header(first_byte: int) -> bool:
@@ -203,7 +203,15 @@ def pull_quic_header(buf: Buffer, host_cid_length: Optional[int] = None) -> Quic
             if not (first_byte & PACKET_FIXED_BIT):
                 raise ValueError("Packet fixed bit is zero")
 
-            packet_type = PACKET_LONG_TYPE_DECODE_VERSION_1[(first_byte & 0x30) >> 4]
+            if version == QuicProtocolVersion.VERSION_2:
+                packet_type = PACKET_LONG_TYPE_DECODE_VERSION_2[
+                    (first_byte & 0x30) >> 4
+                ]
+            else:
+                packet_type = PACKET_LONG_TYPE_DECODE_VERSION_1[
+                    (first_byte & 0x30) >> 4
+                ]
+
             if packet_type == QuicPacketType.INITIAL:
                 token_length = buf.pull_uint_var()
                 token = buf.pull_bytes(token_length)
@@ -247,12 +255,31 @@ def pull_quic_header(buf: Buffer, host_cid_length: Optional[int] = None) -> Quic
     )
 
 
+def encode_long_header_first_byte(
+    version: int, packet_type: QuicPacketType, bits: int
+) -> int:
+    """
+    Encode the first byte of a long header packet.
+    """
+    if version == QuicProtocolVersion.VERSION_2:
+        long_type_encode = PACKET_LONG_TYPE_ENCODE_VERSION_2
+    else:
+        long_type_encode = PACKET_LONG_TYPE_ENCODE_VERSION_1
+    return (
+        PACKET_LONG_HEADER
+        | PACKET_FIXED_BIT
+        | long_type_encode[packet_type] << 4
+        | bits
+    )
+
+
 def encode_quic_retry(
     version: int,
     source_cid: bytes,
     destination_cid: bytes,
     original_destination_cid: bytes,
     retry_token: bytes,
+    unused: int = 0,
 ) -> bytes:
     buf = Buffer(
         capacity=7
@@ -261,11 +288,7 @@ def encode_quic_retry(
         + len(retry_token)
         + RETRY_INTEGRITY_TAG_SIZE
     )
-    buf.push_uint8(
-        PACKET_LONG_HEADER
-        | PACKET_FIXED_BIT
-        | PACKET_LONG_TYPE_ENCODE_VERSION_1[QuicPacketType.RETRY] << 4
-    )
+    buf.push_uint8(encode_long_header_first_byte(version, QuicPacketType.RETRY, unused))
     buf.push_uint32(version)
     buf.push_uint8(len(destination_cid))
     buf.push_bytes(destination_cid)
