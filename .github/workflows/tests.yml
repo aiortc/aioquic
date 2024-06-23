@@ -28,7 +28,7 @@ jobs:
         run: pip install check-manifest mypy ruff types-certifi types-pyopenssl
       - name: Run linters
         run: |
-          ruff .
+          ruff check .
           ruff format --check --diff .
           mypy src tests
           check-manifest

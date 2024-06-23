@@ -334,6 +334,12 @@ class QuicPreferredAddress:
 
 
 @dataclass
+class QuicVersionInformation:
+    chosen_version: int
+    available_versions: List[int]
+
+
+@dataclass
 class QuicTransportParameters:
     original_destination_connection_id: Optional[bytes] = None
     max_idle_timeout: Optional[int] = None
@@ -352,6 +358,7 @@ class QuicTransportParameters:
     active_connection_id_limit: Optional[int] = None
     initial_source_connection_id: Optional[bytes] = None
     retry_source_connection_id: Optional[bytes] = None
+    version_information: Optional[QuicVersionInformation] = None
     max_datagram_frame_size: Optional[int] = None
     quantum_readiness: Optional[bytes] = None
 
@@ -374,6 +381,8 @@ PARAMS = {
     0x0E: ("active_connection_id_limit", int),
     0x0F: ("initial_source_connection_id", bytes),
     0x10: ("retry_source_connection_id", bytes),
+    # https://datatracker.ietf.org/doc/html/rfc9368#section-3
+    0x11: ("version_information", QuicVersionInformation),
     # extensions
     0x0020: ("max_datagram_frame_size", int),
     0x0C37: ("quantum_readiness", bytes),
@@ -425,6 +434,33 @@ def push_quic_preferred_address(
     buf.push_bytes(preferred_address.stateless_reset_token)
 
 
+def pull_quic_version_information(buf: Buffer, length: int) -> QuicVersionInformation:
+    chosen_version = buf.pull_uint32()
+    available_versions = []
+    for i in range(length // 4 - 1):
+        available_versions.append(buf.pull_uint32())
+
+    # If an endpoint receives a Chosen Version equal to zero, or any Available Version
+    # equal to zero, it MUST treat it as a parsing failure.
+    #
+    # https://datatracker.ietf.org/doc/html/rfc9368#section-4
+    if chosen_version == 0 or 0 in available_versions:
+        raise ValueError("Version Information must not contain version 0")
+
+    return QuicVersionInformation(
+        chosen_version=chosen_version,
+        available_versions=available_versions,
+    )
+
+
+def push_quic_version_information(
+    buf: Buffer, version_information: QuicVersionInformation
+) -> None:
+    buf.push_uint32(version_information.chosen_version)
+    for version in version_information.available_versions:
+        buf.push_uint32(version)
+
+
 def pull_quic_transport_parameters(buf: Buffer) -> QuicTransportParameters:
     params = QuicTransportParameters()
     while not buf.eof():
@@ -432,7 +468,7 @@ def pull_quic_transport_parameters(buf: Buffer) -> QuicTransportParameters:
         param_len = buf.pull_uint_var()
         param_start = buf.tell()
         if param_id in PARAMS:
-            # parse known parameter
+            # Parse known parameter.
             param_name, param_type = PARAMS[param_id]
             if param_type == int:
                 setattr(params, param_name, buf.pull_uint_var())
@@ -440,12 +476,20 @@ def pull_quic_transport_parameters(buf: Buffer) -> QuicTransportParameters:
                 setattr(params, param_name, buf.pull_bytes(param_len))
             elif param_type == QuicPreferredAddress:
                 setattr(params, param_name, pull_quic_preferred_address(buf))
+            elif param_type == QuicVersionInformation:
+                setattr(
+                    params,
+                    param_name,
+                    pull_quic_version_information(buf, param_len),
+                )
             else:
                 setattr(params, param_name, True)
         else:
-            # skip unknown parameter
+            # Skip unknown parameter.
             buf.pull_bytes(param_len)
-        assert buf.tell() == param_start + param_len
+
+        if buf.tell() != param_start + param_len:
+            raise ValueError("Transport parameter length does not match")
 
     return params
 
@@ -463,6 +507,8 @@ def push_quic_transport_parameters(
                 param_buf.push_bytes(param_value)
             elif param_type == QuicPreferredAddress:
                 push_quic_preferred_address(param_buf, param_value)
+            elif param_type == QuicVersionInformation:
+                push_quic_version_information(param_buf, param_value)
             buf.push_uint_var(param_id)
             buf.push_uint_var(param_buf.tell())
             buf.push_bytes(param_buf.data)

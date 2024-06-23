@@ -8,6 +8,7 @@ from aioquic.quic.packet import (
     QuicPreferredAddress,
     QuicProtocolVersion,
     QuicTransportParameters,
+    QuicVersionInformation,
     decode_packet_number,
     encode_quic_retry,
     encode_quic_version_negotiation,
@@ -316,6 +317,25 @@ class ParamsTest(TestCase):
         push_quic_transport_parameters(buf, params)
         self.assertEqual(buf.data, data)
 
+    def test_params_max_ack_delay(self):
+        data = binascii.unhexlify("0b010a")
+
+        # parse
+        buf = Buffer(data=data)
+        params = pull_quic_transport_parameters(buf)
+        self.assertEqual(params, QuicTransportParameters(max_ack_delay=10))
+
+        # serialize
+        buf = Buffer(capacity=len(data))
+        push_quic_transport_parameters(buf, params)
+        self.assertEqual(buf.data, data)
+
+    def test_params_max_ack_delay_length_mismatch(self):
+        buf = Buffer(data=binascii.unhexlify("0b020a"))
+        with self.assertRaises(ValueError) as cm:
+            pull_quic_transport_parameters(buf)
+        self.assertEqual(str(cm.exception), "Transport parameter length does not match")
+
     def test_params_preferred_address(self):
         data = binascii.unhexlify(
             "0d3b8ba27b8611532400890200000000f03c91fffe69a45411531262c4518d6"
@@ -338,7 +358,7 @@ class ParamsTest(TestCase):
         )
 
         # serialize
-        buf = Buffer(capacity=1000)
+        buf = Buffer(capacity=len(data))
         push_quic_transport_parameters(buf, params)
         self.assertEqual(buf.data, data)
 
@@ -349,6 +369,58 @@ class ParamsTest(TestCase):
         buf = Buffer(data=data)
         params = pull_quic_transport_parameters(buf)
         self.assertEqual(params, QuicTransportParameters())
+
+    def test_params_version_information(self):
+        data = binascii.unhexlify("110c00000001000000016b3343cf")
+
+        # parse
+        buf = Buffer(data=data)
+        params = pull_quic_transport_parameters(buf)
+        self.assertEqual(
+            params,
+            QuicTransportParameters(
+                version_information=QuicVersionInformation(
+                    chosen_version=QuicProtocolVersion.VERSION_1,
+                    available_versions=[
+                        QuicProtocolVersion.VERSION_1,
+                        QuicProtocolVersion.VERSION_2,
+                    ],
+                ),
+            ),
+        )
+
+        # serialize
+        buf = Buffer(capacity=len(data))
+        push_quic_transport_parameters(buf, params)
+        self.assertEqual(buf.data, data)
+
+    def test_params_version_information_available_version_0(self):
+        buf = Buffer(data=binascii.unhexlify("11080000000100000000"))
+        with self.assertRaises(ValueError) as cm:
+            pull_quic_transport_parameters(buf)
+        self.assertEqual(
+            str(cm.exception), "Version Information must not contain version 0"
+        )
+
+    def test_params_version_information_chosen_version_0(self):
+        buf = Buffer(data=binascii.unhexlify("110400000000"))
+        with self.assertRaises(ValueError) as cm:
+            pull_quic_transport_parameters(buf)
+        self.assertEqual(
+            str(cm.exception), "Version Information must not contain version 0"
+        )
+
+    def test_params_version_information_length_not_divisible_by_four(self):
+        buf = Buffer(data=binascii.unhexlify("11050000000100"))
+        with self.assertRaises(ValueError) as cm:
+            pull_quic_transport_parameters(buf)
+        self.assertEqual(str(cm.exception), "Transport parameter length does not match")
+
+    def test_params_version_information_truncated(self):
+        buf = Buffer(data=binascii.unhexlify("110800000000"))
+        with self.assertRaises(ValueError) as cm:
+            pull_quic_transport_parameters(buf)
+        self.assertEqual(str(cm.exception), "Read out of bounds")
 
     def test_preferred_address_ipv4_only(self):
         data = binascii.unhexlify(
