@@ -39,6 +39,7 @@ from .packet import (
     STATELESS_RESET_TOKEN_SIZE,
     QuicErrorCode,
     QuicFrameType,
+    QuicHeader,
     QuicPacketType,
     QuicStreamFrame,
     QuicTransportParameters,
@@ -791,7 +792,7 @@ class QuicConnection:
                     )
                 return
 
-            # check destination CID matches
+            # Check destination CID matches.
             destination_cid_seq: Optional[int] = None
             for connection_id in self._host_cids:
                 if header.destination_cid == connection_id.cid:
@@ -811,71 +812,16 @@ class QuicConnection:
                     )
                 return
 
-            # check protocol version
-            if (
-                self._is_client
-                and self._state == QuicConnectionState.FIRSTFLIGHT
-                and header.packet_type == QuicPacketType.VERSION_NEGOTIATION
-                and not self._version_negotiation_count
-            ):
-                # version negotiation
-                if self._quic_logger is not None:
-                    self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_received",
-                        data={
-                            "frames": [],
-                            "header": {
-                                "packet_type": self._quic_logger.packet_type(
-                                    header.packet_type
-                                ),
-                                "scid": dump_cid(header.source_cid),
-                                "dcid": dump_cid(header.destination_cid),
-                            },
-                            "raw": {"length": header.packet_length},
-                        },
-                    )
-                if self._version in header.supported_versions:
-                    self._logger.warning(
-                        "Version negotiation packet contains %s" % self._version
-                    )
-                    return
-                common = [
-                    x
-                    for x in self._configuration.supported_versions
-                    if x in header.supported_versions
-                ]
-                chosen_version = common[0] if common else None
-                if self._quic_logger is not None:
-                    self._quic_logger.log_event(
-                        category="transport",
-                        event="version_information",
-                        data={
-                            "server_versions": header.supported_versions,
-                            "client_versions": self._configuration.supported_versions,
-                            "chosen_version": chosen_version,
-                        },
-                    )
-                if chosen_version is None:
-                    self._logger.error("Could not find a common protocol version")
-                    self._close_event = events.ConnectionTerminated(
-                        error_code=QuicErrorCode.INTERNAL_ERROR,
-                        frame_type=QuicFrameType.PADDING,
-                        reason_phrase="Could not find a common protocol version",
-                    )
-                    self._close_end()
-                    return
-                self._packet_number = 0
-                self._version = chosen_version
-                self._version_negotiation_count += 1
-                self._logger.info("Retrying with %s", self._version)
-                self._connect(now=now)
+            # Handle version negotiation packet.
+            if header.packet_type == QuicPacketType.VERSION_NEGOTIATION:
+                self._receive_version_negotiation_packet(header=header, now=now)
                 return
-            elif (
+
+            # Check long header packet protocol version.
+            if (
                 header.version is not None
                 and header.version not in self._configuration.supported_versions
             ):
-                # unsupported version
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
                         category="transport",
@@ -887,55 +833,15 @@ class QuicConnection:
                     )
                 return
 
-            # handle retry packet
+            # Handle retry packet.
             if header.packet_type == QuicPacketType.RETRY:
-                if (
-                    self._is_client
-                    and not self._retry_count
-                    and header.destination_cid == self.host_cid
-                    and header.integrity_tag
-                    == get_retry_integrity_tag(
-                        buf.data_slice(
-                            start_off, buf.tell() - RETRY_INTEGRITY_TAG_SIZE
-                        ),
-                        self._peer_cid.cid,
-                        version=header.version,
-                    )
-                ):
-                    if self._quic_logger is not None:
-                        self._quic_logger.log_event(
-                            category="transport",
-                            event="packet_received",
-                            data={
-                                "frames": [],
-                                "header": {
-                                    "packet_type": "retry",
-                                    "scid": dump_cid(header.source_cid),
-                                    "dcid": dump_cid(header.destination_cid),
-                                },
-                                "raw": {"length": header.packet_length},
-                            },
-                        )
-
-                    self._peer_cid.cid = header.source_cid
-                    self._peer_token = header.token
-                    self._retry_count += 1
-                    self._retry_source_connection_id = header.source_cid
-                    self._logger.info(
-                        "Retrying with token (%d bytes)" % len(header.token)
-                    )
-                    self._connect(now=now)
-                else:
-                    # unexpected or invalid retry packet
-                    if self._quic_logger is not None:
-                        self._quic_logger.log_event(
-                            category="transport",
-                            event="packet_dropped",
-                            data={
-                                "trigger": "unexpected_packet",
-                                "raw": {"length": header.packet_length},
-                            },
-                        )
+                self._receive_retry_packet(
+                    header=header,
+                    packet_without_tag=buf.data_slice(
+                        start_off, buf.tell() - RETRY_INTEGRITY_TAG_SIZE
+                    ),
+                    now=now,
+                )
                 return
 
             crypto_frame_required = False
@@ -2499,6 +2405,133 @@ class QuicConnection:
             )
 
         return is_ack_eliciting, bool(is_probing)
+
+    def _receive_retry_packet(
+        self, header: QuicHeader, packet_without_tag: bytes, now: float
+    ) -> None:
+        """
+        Handle a retry packet.
+        """
+        if (
+            self._is_client
+            and not self._retry_count
+            and header.destination_cid == self.host_cid
+            and header.integrity_tag
+            == get_retry_integrity_tag(
+                packet_without_tag,
+                self._peer_cid.cid,
+                version=header.version,
+            )
+        ):
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="transport",
+                    event="packet_received",
+                    data={
+                        "frames": [],
+                        "header": {
+                            "packet_type": "retry",
+                            "scid": dump_cid(header.source_cid),
+                            "dcid": dump_cid(header.destination_cid),
+                        },
+                        "raw": {"length": header.packet_length},
+                    },
+                )
+
+            self._peer_cid.cid = header.source_cid
+            self._peer_token = header.token
+            self._retry_count += 1
+            self._retry_source_connection_id = header.source_cid
+            self._logger.info("Retrying with token (%d bytes)" % len(header.token))
+            self._connect(now=now)
+        else:
+            # Unexpected or invalid retry packet.
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="transport",
+                    event="packet_dropped",
+                    data={
+                        "trigger": "unexpected_packet",
+                        "raw": {"length": header.packet_length},
+                    },
+                )
+
+    def _receive_version_negotiation_packet(
+        self, header: QuicHeader, now: float
+    ) -> None:
+        """
+        Handle a version negotiation packet.
+
+        This is used in "Incompatible Version Negotiation", see:
+        https://datatracker.ietf.org/doc/html/rfc9368#section-2.2
+        """
+        if (
+            self._is_client
+            and self._state == QuicConnectionState.FIRSTFLIGHT
+            and not self._version_negotiation_count
+        ):
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="transport",
+                    event="packet_received",
+                    data={
+                        "frames": [],
+                        "header": {
+                            "packet_type": self._quic_logger.packet_type(
+                                header.packet_type
+                            ),
+                            "scid": dump_cid(header.source_cid),
+                            "dcid": dump_cid(header.destination_cid),
+                        },
+                        "raw": {"length": header.packet_length},
+                    },
+                )
+            if self._version in header.supported_versions:
+                self._logger.warning(
+                    "Version negotiation packet contains %s" % self._version
+                )
+                return
+            common = [
+                x
+                for x in self._configuration.supported_versions
+                if x in header.supported_versions
+            ]
+            chosen_version = common[0] if common else None
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="transport",
+                    event="version_information",
+                    data={
+                        "server_versions": header.supported_versions,
+                        "client_versions": self._configuration.supported_versions,
+                        "chosen_version": chosen_version,
+                    },
+                )
+            if chosen_version is None:
+                self._logger.error("Could not find a common protocol version")
+                self._close_event = events.ConnectionTerminated(
+                    error_code=QuicErrorCode.INTERNAL_ERROR,
+                    frame_type=QuicFrameType.PADDING,
+                    reason_phrase="Could not find a common protocol version",
+                )
+                self._close_end()
+                return
+            self._packet_number = 0
+            self._version = chosen_version
+            self._version_negotiation_count += 1
+            self._logger.info("Retrying with %s", self._version)
+            self._connect(now=now)
+        else:
+            # Unexpected version negotiation packet.
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="transport",
+                    event="packet_dropped",
+                    data={
+                        "trigger": "unexpected_packet",
+                        "raw": {"length": header.packet_length},
+                    },
+                )
 
     def _replenish_connection_ids(self) -> None:
         """
