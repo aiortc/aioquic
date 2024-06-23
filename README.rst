@@ -53,7 +53,7 @@ Features
 --------
 
 - minimal TLS 1.3 implementation conforming with `RFC 8446`_
-- QUIC stack conforming with `RFC 9000`_ (QUIC v1) and `RFC 9369` (QUIC v2)
+- QUIC stack conforming with `RFC 9000`_ (QUIC v1) and `RFC 9369`_ (QUIC v2)
    * IPv4 and IPv6 support
    * connection migration and NAT rebinding
    * logging TLS traffic secrets
