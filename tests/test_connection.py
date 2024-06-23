@@ -210,6 +210,15 @@ def transfer(sender, receiver):
 
 
 class QuicConnectionTest(TestCase):
+    def assertPacketDropped(self, connection: QuicConnection, trigger: str):
+        log = connection.configuration.quic_logger.to_dict()
+        found_trigger = None
+        for event in log["traces"][0]["events"]:
+            if event["name"] == "transport:packet_dropped":
+                found_trigger = event["data"]["trigger"]
+                break
+        self.assertEqual(found_trigger, trigger)
+
     def check_handshake(self, client, server, alpn_protocol=None):
         """
         Check handshake completed.
@@ -472,7 +481,9 @@ class QuicConnectionTest(TestCase):
         and decides to retransmit its own CRYPTO to speedup handshake completion.
         """
 
-        client_configuration = QuicConfiguration(is_client=True)
+        client_configuration = QuicConfiguration(
+            is_client=True, quic_logger=QuicLogger()
+        )
         client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
 
         client = QuicConnection(configuration=client_configuration)
@@ -512,6 +523,8 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(datagram_sizes(items), [1200])
         self.assertAlmostEqual(client.get_timer(), 0.3)
         self.assertIsNone(client.next_event())
+
+        self.assertPacketDropped(client, "key_unavailable")
 
         # server receives duplicate INITIAL, retransmits INITIAL + HANDSHAKE
         now += TICK
@@ -856,14 +869,9 @@ class QuicConnectionTest(TestCase):
 
         for datagram in builder.flush()[0]:
             server.receive_datagram(datagram, SERVER_ADDR, now=time.time())
-        # look for the drop event
-        log = server_configuration.quic_logger.to_dict()
-        trigger = None
-        for event in log["traces"][0]["events"]:
-            trigger = event["data"].get("trigger")
-            if trigger is not None:
-                break
-        self.assertEqual(trigger, "initial_packet_datagram_too_small")
+
+        # Look for the drop event.
+        self.assertPacketDropped(server, "initial_packet_datagram_too_small")
 
     def test_connect_with_no_crypto_frame(self):
         def patch(client):
@@ -1240,6 +1248,8 @@ class QuicConnectionTest(TestCase):
             client.receive_datagram(datagram, SERVER_ADDR, now=time.time())
         self.assertEqual(drop(client), 0)
 
+        self.assertPacketDropped(client, "unsupported_version")
+
     def test_receive_datagram_retry(self):
         client = create_standalone_client(self)
 
@@ -1259,6 +1269,7 @@ class QuicConnectionTest(TestCase):
     def test_receive_datagram_retry_wrong_destination_cid(self):
         client = create_standalone_client(self)
 
+        # The client does not reply to a retry packet with a wrong destination CID.
         client.receive_datagram(
             encode_quic_retry(
                 version=client._version,
@@ -1271,6 +1282,8 @@ class QuicConnectionTest(TestCase):
             now=time.time(),
         )
         self.assertEqual(drop(client), 0)
+
+        self.assertPacketDropped(client, "unknown_connection_id")
 
     def test_receive_datagram_retry_wrong_integrity_tag(self):
         client = create_standalone_client(self)
@@ -2981,6 +2994,22 @@ class QuicConnectionTest(TestCase):
             now=time.time(),
         )
         self.assertEqual(drop(client), 0)
+
+    def test_version_negotiation_ignore_server(self):
+        with client_and_server() as (client, server):
+            # The server does not reply to the version negotiation packet.
+            server.receive_datagram(
+                encode_quic_version_negotiation(
+                    source_cid=server._peer_cid.cid,
+                    destination_cid=server.host_cid,
+                    supported_versions=[QuicProtocolVersion.VERSION_1],
+                ),
+                CLIENT_ADDR,
+                now=time.time(),
+            )
+            self.assertEqual(drop(client), 0)
+
+            self.assertPacketDropped(server, "unexpected_packet")
 
     def test_version_negotiation_ok(self):
         client = create_standalone_client(
