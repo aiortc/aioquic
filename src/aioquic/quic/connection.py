@@ -45,6 +45,7 @@ from .packet import (
     QuicTransportParameters,
     get_retry_integrity_tag,
     get_spin_bit,
+    pretty_protocol_version,
     pull_ack_frame,
     pull_quic_header,
     pull_quic_transport_parameters,
@@ -2465,6 +2466,11 @@ class QuicConnection:
         This is used in "Incompatible Version Negotiation", see:
         https://datatracker.ietf.org/doc/html/rfc9368#section-2.2
         """
+        # Only clients process Version Negotiation, and once a Version
+        # Negotiation packet has been acted upon, any further
+        # such packets must be ignored.
+        #
+        # https://datatracker.ietf.org/doc/html/rfc9368#section-4
         if (
             self._is_client
             and self._state == QuicConnectionState.FIRSTFLIGHT
@@ -2486,16 +2492,26 @@ class QuicConnection:
                         "raw": {"length": header.packet_length},
                     },
                 )
+
+            # Ignore any Version Negotiation packets that contain the
+            # original version.
+            #
+            # https://datatracker.ietf.org/doc/html/rfc9368#section-4
             if self._version in header.supported_versions:
                 self._logger.warning(
-                    "Version negotiation packet contains %s" % self._version
+                    "Version negotiation packet contains protocol version %s",
+                    pretty_protocol_version(self._version),
                 )
                 return
+
+            # Look for a common protocol version.
             common = [
                 x
                 for x in self._configuration.supported_versions
                 if x in header.supported_versions
             ]
+
+            # Look for a common protocol version.
             chosen_version = common[0] if common else None
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
@@ -2519,7 +2535,10 @@ class QuicConnection:
             self._packet_number = 0
             self._version = chosen_version
             self._version_negotiation_count += 1
-            self._logger.info("Retrying with %s", self._version)
+            self._logger.info(
+                "Retrying with protocol version %s",
+                pretty_protocol_version(self._version),
+            )
             self._connect(now=now)
         else:
             # Unexpected version negotiation packet.
@@ -2598,7 +2617,7 @@ class QuicConnection:
                 ),
             )
 
-        # validate remote parameters
+        # Validate remote parameters.
         if not self._is_client:
             for attr in [
                 "original_destination_connection_id",
@@ -2612,6 +2631,25 @@ class QuicConnection:
                         frame_type=QuicFrameType.CRYPTO,
                         reason_phrase="%s is not allowed for clients" % attr,
                     )
+
+            # If a server receives Version Information where the Chosen Version
+            # is not included in Available Versions, it MUST treat is as a
+            # parsing failure.
+            #
+            # https://datatracker.ietf.org/doc/html/rfc9368#section-4
+            if (
+                quic_transport_parameters.version_information is not None
+                and quic_transport_parameters.version_information.chosen_version
+                not in quic_transport_parameters.version_information.available_versions
+            ):
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase=(
+                        "version_information's chosen_version is not included "
+                        "in available_versions"
+                    ),
+                )
 
         if not from_session_ticket:
             if (
