@@ -166,6 +166,17 @@ def is_long_header(first_byte: int) -> bool:
     return bool(first_byte & PACKET_LONG_HEADER)
 
 
+def pretty_protocol_version(version: int) -> str:
+    """
+    Return a user-friendly representation of a protocol version.
+    """
+    try:
+        version_name = QuicProtocolVersion(version).name
+    except ValueError:
+        version_name = "UNKNOWN"
+    return f"0x{version:08x} ({version_name})"
+
+
 def pull_quic_header(buf: Buffer, host_cid_length: Optional[int] = None) -> QuicHeader:
     packet_start = buf.tell()
 

@@ -27,6 +27,7 @@ from aioquic.quic.packet import (
     QuicPacketType,
     QuicProtocolVersion,
     QuicTransportParameters,
+    QuicVersionInformation,
     encode_quic_retry,
     encode_quic_version_negotiation,
     push_quic_transport_parameters,
@@ -90,6 +91,19 @@ def create_standalone_client(self, **client_options):
     self.assertEqual(drop(client), 1)
 
     return client
+
+
+def create_standalone_server(self, original_destination_connection_id=bytes(8)):
+    server_configuration = QuicConfiguration(is_client=False, quic_logger=QuicLogger())
+    server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+
+    server = QuicConnection(
+        configuration=server_configuration,
+        original_destination_connection_id=original_destination_connection_id,
+    )
+    server._ack_delay = 0
+
+    return server
 
 
 def datagram_sizes(items: List[Tuple[bytes, NetworkAddress]]) -> List[int]:
@@ -841,6 +855,10 @@ class QuicConnectionTest(TestCase):
         server.
         """
         client = create_standalone_client(self)
+        server = create_standalone_server(
+            self,
+            original_destination_connection_id=client.original_destination_connection_id,
+        )
 
         builder = QuicPacketBuilder(
             host_cid=client._peer_cid.cid,
@@ -856,16 +874,6 @@ class QuicConnectionTest(TestCase):
         builder.start_packet(QuicPacketType.INITIAL, crypto)
         buf = builder.start_frame(QuicFrameType.PADDING)
         buf.push_bytes(bytes(builder.remaining_flight_space))
-
-        server_configuration = QuicConfiguration(is_client=False)
-        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
-        server_configuration.quic_logger = QuicLogger()
-
-        server = QuicConnection(
-            configuration=server_configuration,
-            original_destination_connection_id=client.original_destination_connection_id,
-        )
-        server._ack_delay = 0
 
         for datagram in builder.flush()[0]:
             server.receive_datagram(datagram, SERVER_ADDR, now=time.time())
@@ -2534,16 +2542,30 @@ class QuicConnectionTest(TestCase):
             cm.exception.reason_phrase, "initial_source_connection_id does not match"
         )
 
-    def test_parse_transport_parameters_with_server_only_parameter(self):
-        server_configuration = QuicConfiguration(
-            is_client=False, quic_logger=QuicLogger()
+    def test_parse_transport_parameters_with_bad_version_information(self):
+        server = create_standalone_server(self)
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                version_information=QuicVersionInformation(
+                    chosen_version=QuicProtocolVersion.VERSION_1,
+                    available_versions=[QuicProtocolVersion.VERSION_2],
+                )
+            )
         )
-        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        with self.assertRaises(QuicConnectionError) as cm:
+            server._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "version_information's chosen_version is not included in "
+            "available_versions",
+        )
 
-        server = QuicConnection(
-            configuration=server_configuration,
-            original_destination_connection_id=bytes(8),
-        )
+    def test_parse_transport_parameters_with_server_only_parameter(self):
+        server = create_standalone_server(self)
         for active_connection_id_limit in [0, 1]:
             data = encode_transport_parameters(
                 QuicTransportParameters(
