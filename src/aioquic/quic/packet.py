@@ -470,13 +470,13 @@ def pull_quic_transport_parameters(buf: Buffer) -> QuicTransportParameters:
         if param_id in PARAMS:
             # Parse known parameter.
             param_name, param_type = PARAMS[param_id]
-            if param_type == int:
+            if param_type is int:
                 setattr(params, param_name, buf.pull_uint_var())
-            elif param_type == bytes:
+            elif param_type is bytes:
                 setattr(params, param_name, buf.pull_bytes(param_len))
-            elif param_type == QuicPreferredAddress:
+            elif param_type is QuicPreferredAddress:
                 setattr(params, param_name, pull_quic_preferred_address(buf))
-            elif param_type == QuicVersionInformation:
+            elif param_type is QuicVersionInformation:
                 setattr(
                     params,
                     param_name,
@@ -501,13 +501,13 @@ def push_quic_transport_parameters(
         param_value = getattr(params, param_name)
         if param_value is not None and param_value is not False:
             param_buf = Buffer(capacity=65536)
-            if param_type == int:
+            if param_type is int:
                 param_buf.push_uint_var(param_value)
-            elif param_type == bytes:
+            elif param_type is bytes:
                 param_buf.push_bytes(param_value)
-            elif param_type == QuicPreferredAddress:
+            elif param_type is QuicPreferredAddress:
                 push_quic_preferred_address(param_buf, param_value)
-            elif param_type == QuicVersionInformation:
+            elif param_type is QuicVersionInformation:
                 push_quic_version_information(param_buf, param_value)
             buf.push_uint_var(param_id)
             buf.push_uint_var(param_buf.tell())
