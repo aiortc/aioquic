@@ -279,6 +279,7 @@ class QuicConnection:
         self._connect_called = False
         self._cryptos: Dict[tls.Epoch, CryptoPair] = {}
         self._crypto_buffers: Dict[tls.Epoch, Buffer] = {}
+        self._crypto_frame_type: Optional[int] = None
         self._crypto_retransmitted = False
         self._crypto_streams: Dict[tls.Epoch, QuicStream] = {}
         self._events: Deque[events.QuicEvent] = deque()
@@ -321,7 +322,6 @@ class QuicConnection:
         self._network_paths: List[QuicNetworkPath] = []
         self._pacing_at: Optional[float] = None
         self._packet_number = 0
-        self._parameters_received = False
         self._peer_cid = QuicConnectionId(
             cid=os.urandom(configuration.connection_id_length), sequence_number=None
         )
@@ -1124,7 +1124,24 @@ class QuicConnection:
     def _alpn_handler(self, alpn_protocol: str) -> None:
         """
         Callback which is invoked by the TLS engine when ALPN negotiation completes.
+
+        At this point, TLS extensions have been received so we can parse the
+        transport parameters.
         """
+        # Parse the remote transport parameters.
+        for ext_type, ext_data in self.tls.received_extensions:
+            if ext_type == tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS:
+                self._parse_transport_parameters(ext_data)
+                break
+        else:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.CRYPTO_ERROR
+                + tls.AlertDescription.missing_extension,
+                frame_type=self._crypto_frame_type,
+                reason_phrase="No QUIC transport parameters received",
+            )
+
+        # Notify the application.
         self._events.append(events.ProtocolNegotiated(alpn_protocol=alpn_protocol))
 
     def _assert_stream_can_receive(self, frame_type: int, stream_id: int) -> None:
@@ -1530,7 +1547,7 @@ class QuicConnection:
             )
         frame = QuicStreamFrame(offset=offset, data=buf.pull_bytes(length))
 
-        # log frame
+        # Log the frame.
         if self._quic_logger is not None:
             context.quic_logger_frames.append(
                 self._quic_logger.encode_crypto_frame(frame)
@@ -1546,7 +1563,10 @@ class QuicConnection:
             )
         event = stream.receiver.handle_frame(frame)
         if event is not None:
-            # pass data to TLS layer
+            # Pass data to TLS layer, which may cause calls to:
+            # - _alpn_handler
+            # - _update_traffic_key
+            self._crypto_frame_type = frame_type
             try:
                 self.tls.handle_message(event.data, self._crypto_buffers)
                 self._push_crypto_data()
@@ -1557,25 +1577,7 @@ class QuicConnection:
                     reason_phrase=str(exc),
                 )
 
-            # parse transport parameters
-            if (
-                not self._parameters_received
-                and self.tls.received_extensions is not None
-            ):
-                for ext_type, ext_data in self.tls.received_extensions:
-                    if ext_type == tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS:
-                        self._parse_transport_parameters(ext_data)
-                        self._parameters_received = True
-                        break
-                if not self._parameters_received:
-                    raise QuicConnectionError(
-                        error_code=QuicErrorCode.CRYPTO_ERROR
-                        + tls.AlertDescription.missing_extension,
-                        frame_type=frame_type,
-                        reason_phrase="No QUIC transport parameters received",
-                    )
-
-            # update current epoch
+            # Update the current epoch.
             if not self._handshake_complete and self.tls.state in [
                 tls.State.CLIENT_POST_HANDSHAKE,
                 tls.State.SERVER_POST_HANDSHAKE,
@@ -1606,8 +1608,8 @@ class QuicConnection:
                 "Duplicate CRYPTO data received for epoch %s", context.epoch
             )
 
-            # if a server receives duplicate CRYPTO in an INITIAL packet,
-            # it can assume the client did not receive the server's CRYPTO
+            # If a server receives duplicate CRYPTO in an INITIAL packet,
+            # it can assume the client did not receive the server's CRYPTO.
             if (
                 not self._is_client
                 and context.epoch == tls.Epoch.INITIAL
