@@ -62,6 +62,7 @@ Features
    * connection migration and NAT rebinding
    * logging TLS traffic secrets
    * logging QUIC events in QLOG format
+   * version negotiation conforming with `RFC 9368`_
 - HTTP/3 stack conforming with `RFC 9114`_
    * server push support
    * WebSocket bootstrapping conforming with `RFC 9220`_
@@ -156,4 +157,5 @@ License
 .. _RFC 9114: https://datatracker.ietf.org/doc/html/rfc9114
 .. _RFC 9220: https://datatracker.ietf.org/doc/html/rfc9220
 .. _RFC 9297: https://datatracker.ietf.org/doc/html/rfc9297
+.. _RFC 9368: https://datatracker.ietf.org/doc/html/rfc9368
 .. _RFC 9369: https://datatracker.ietf.org/doc/html/rfc9369
