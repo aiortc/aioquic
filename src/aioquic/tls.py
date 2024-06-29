@@ -1691,6 +1691,8 @@ class Context:
         self.alpn_negotiated = encrypted_extensions.alpn_protocol
         self.early_data_accepted = encrypted_extensions.early_data
         self.received_extensions = encrypted_extensions.other_extensions
+
+        # notify application
         if self.alpn_cb:
             self.alpn_cb(self.alpn_negotiated)
 
@@ -1902,13 +1904,15 @@ class Context:
                 peer_hello.alpn_protocols,
                 AlertHandshakeFailure("No common ALPN protocols"),
             )
-        if self.alpn_cb:
-            self.alpn_cb(self.alpn_negotiated)
 
         self.client_random = peer_hello.random
         self.server_random = os.urandom(32)
         self.legacy_session_id = peer_hello.legacy_session_id
         self.received_extensions = peer_hello.other_extensions
+
+        # notify application
+        if self.alpn_cb:
+            self.alpn_cb(self.alpn_negotiated)
 
         # select key schedule
         pre_shared_key = None
