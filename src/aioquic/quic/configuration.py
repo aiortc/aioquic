@@ -100,6 +100,7 @@ class QuicConfiguration:
     .. note:: This is only used by clients.
     """
 
+    # For internal purposes, not guaranteed to be stable.
     cadata: Optional[bytes] = None
     cafile: Optional[str] = None
     capath: Optional[str] = None
@@ -108,11 +109,13 @@ class QuicConfiguration:
     cipher_suites: Optional[List[CipherSuite]] = None
     initial_rtt: float = 0.1
     max_datagram_frame_size: Optional[int] = None
+    original_version: Optional[int] = None
     private_key: Any = None
     quantum_readiness_test: bool = False
     supported_versions: List[int] = field(
         default_factory=lambda: [
             QuicProtocolVersion.VERSION_1,
+            QuicProtocolVersion.VERSION_2,
         ]
     )
     verify_mode: Optional[int] = None

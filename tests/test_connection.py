@@ -46,6 +46,7 @@ from .utils import (
 CLIENT_ADDR = ("1.2.3.4", 1234)
 
 SERVER_ADDR = ("2.3.4.5", 4433)
+SERVER_INITIAL_DATAGRAM_SIZES = [1200, 1200, 986]
 
 TICK = 0.05  # seconds
 
@@ -68,6 +69,7 @@ def client_receive_context(client, epoch=tls.Epoch.ONE_RTT):
         network_path=client._network_paths[0],
         quic_logger_frames=[],
         time=time.time(),
+        version=None,
     )
 
 
@@ -440,7 +442,7 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(datagram_sizes(items), [1200])
         self.assertEqual(client.get_timer(), 0.2)
 
-        # INITIAL is lost
+        # INITIAL is lost and retransmitted
         now = client.get_timer()
         client.handle_timer(now=now)
         items = client.datagrams_to_send(now=now)
@@ -451,7 +453,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
+        self.assertEqual(datagram_sizes(items), SERVER_INITIAL_DATAGRAM_SIZES)
         self.assertAlmostEqual(server.get_timer(), 0.45)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -523,7 +525,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
+        self.assertEqual(datagram_sizes(items), SERVER_INITIAL_DATAGRAM_SIZES)
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -544,7 +546,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
+        self.assertEqual(datagram_sizes(items), SERVER_INITIAL_DATAGRAM_SIZES)
         self.assertAlmostEqual(server.get_timer(), 0.35)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -613,7 +615,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
+        self.assertEqual(datagram_sizes(items), SERVER_INITIAL_DATAGRAM_SIZES)
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -632,7 +634,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
+        self.assertEqual(datagram_sizes(items), SERVER_INITIAL_DATAGRAM_SIZES)
         self.assertEqual(server.get_timer(), 0.45)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -697,7 +699,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
+        self.assertEqual(datagram_sizes(items), SERVER_INITIAL_DATAGRAM_SIZES)
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -735,7 +737,7 @@ class QuicConnectionTest(TestCase):
         now = server.get_timer()
         server.handle_timer(now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 972])
+        self.assertEqual(datagram_sizes(items), [1200, 986])
         self.assertAlmostEqual(server.get_timer(), 0.65)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 0)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 3)
@@ -795,7 +797,7 @@ class QuicConnectionTest(TestCase):
         now += TICK
         server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
         items = server.datagrams_to_send(now=now)
-        self.assertEqual(datagram_sizes(items), [1200, 1200, 972])
+        self.assertEqual(datagram_sizes(items), SERVER_INITIAL_DATAGRAM_SIZES)
         self.assertEqual(server.get_timer(), 0.25)
         self.assertEqual(len(server._loss.spaces[0].sent_packets), 1)
         self.assertEqual(len(server._loss.spaces[1].sent_packets), 2)
@@ -912,6 +914,78 @@ class QuicConnectionTest(TestCase):
                 server._close_event.reason_phrase,
                 "No QUIC transport parameters received",
             )
+
+    def test_connect_with_compatible_version_negotiation_1(self):
+        """
+        The client only supports version 1.
+
+        The server sets the Negotiated Version to version 1.
+        """
+        with client_and_server(
+            client_options={
+                "supported_versions": [QuicProtocolVersion.VERSION_1],
+            },
+        ) as (client, server):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+            self.assertEqual(client._version, QuicProtocolVersion.VERSION_1)
+            self.assertEqual(server._version, QuicProtocolVersion.VERSION_1)
+
+    def test_connect_with_compatible_version_negotiation_1_to_2(self):
+        """
+        The client originally connects using version 1 but prefers version 2.
+
+        The server sets the Negotiated Version to version 2.
+        """
+        with client_and_server(
+            client_options={
+                "original_version": QuicProtocolVersion.VERSION_1,
+                "supported_versions": [
+                    QuicProtocolVersion.VERSION_2,
+                    QuicProtocolVersion.VERSION_1,
+                ],
+            },
+        ) as (client, server):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+            self.assertEqual(client._version, QuicProtocolVersion.VERSION_2)
+            self.assertEqual(server._version, QuicProtocolVersion.VERSION_2)
+
+    def test_connect_with_compatible_version_negotiation_2(self):
+        """
+        The client only supports version 2.
+
+        The server sets the Negotiated Version to version 2.
+        """
+        with client_and_server(
+            client_options={
+                "supported_versions": [QuicProtocolVersion.VERSION_2],
+            },
+        ) as (client, server):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+            self.assertEqual(client._version, QuicProtocolVersion.VERSION_2)
+            self.assertEqual(server._version, QuicProtocolVersion.VERSION_2)
+
+    def test_connect_with_compatible_version_negotiation_2_to_1(self):
+        """
+        The client originally connects using version 2 but prefers version 1.
+
+        The server sets the Negotiated Version to version 1.
+        """
+        with client_and_server(
+            client_options={
+                "original_version": QuicProtocolVersion.VERSION_2,
+                "supported_versions": [
+                    QuicProtocolVersion.VERSION_1,
+                    QuicProtocolVersion.VERSION_2,
+                ],
+            },
+        ) as (client, server):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+            self.assertEqual(client._version, QuicProtocolVersion.VERSION_1)
+            self.assertEqual(server._version, QuicProtocolVersion.VERSION_1)
 
     def test_connect_with_quantum_readiness(self):
         with client_and_server(client_options={"quantum_readiness_test": True}) as (
