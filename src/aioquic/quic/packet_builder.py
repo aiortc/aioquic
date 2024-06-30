@@ -83,6 +83,7 @@ class QuicPacketBuilder:
         self._datagrams: List[bytes] = []
         self._datagram_flight_bytes = 0
         self._datagram_init = True
+        self._datagram_needs_padding = False
         self._packets: List[QuicSentPacket] = []
         self._flight_bytes = 0
         self._total_bytes = 0
@@ -217,6 +218,7 @@ class QuicPacketBuilder:
                     self._flight_capacity = remaining_flight_bytes
             self._datagram_flight_bytes = 0
             self._datagram_init = False
+            self._datagram_needs_padding = False
 
         # calculate header size
         if packet_type != QuicPacketType.ONE_RTT:
@@ -270,15 +272,23 @@ class QuicPacketBuilder:
                 - packet_size
             )
 
-            # Padding for initial packets; see RFC 9000 section
-            # 14.1.
+            # Padding for datagrams containing initial packets; see RFC 9000
+            # section 14.1.
             if (
-                (self._is_client or self._packet.is_ack_eliciting)
-                and self._packet_type == QuicPacketType.INITIAL
-                and self.remaining_flight_space
-                and self.remaining_flight_space > padding_size
+                self._is_client or self._packet.is_ack_eliciting
+            ) and self._packet_type == QuicPacketType.INITIAL:
+                self._datagram_needs_padding = True
+
+            # For datagrams containing 1-RTT data, we *must* apply the padding
+            # inside the packet, we cannot tack bytes onto the end of the
+            # datagram.
+            if (
+                self._datagram_needs_padding
+                and self._packet_type == QuicPacketType.ONE_RTT
             ):
-                padding_size = self.remaining_flight_space
+                if self.remaining_flight_space > padding_size:
+                    padding_size = self.remaining_flight_space
+                self._datagram_needs_padding = False
 
             # write padding
             if padding_size > 0:
@@ -343,7 +353,7 @@ class QuicPacketBuilder:
             if self._packet.in_flight:
                 self._datagram_flight_bytes += self._packet.sent_bytes
 
-            # short header packets cannot be coalesced, we need a new datagram
+            # Short header packets cannot be coalesced, we need a new datagram.
             if self._packet_type == QuicPacketType.ONE_RTT:
                 self._flush_current_datagram()
 
@@ -358,6 +368,15 @@ class QuicPacketBuilder:
     def _flush_current_datagram(self) -> None:
         datagram_bytes = self._buffer.tell()
         if datagram_bytes:
+            # Padding for datagrams containing initial packets; see RFC 9000
+            # section 14.1.
+            if self._datagram_needs_padding:
+                extra_bytes = self._flight_capacity - self._buffer.tell()
+                if extra_bytes > 0:
+                    self._buffer.push_bytes(bytes(extra_bytes))
+                    self._datagram_flight_bytes += extra_bytes
+                    datagram_bytes += extra_bytes
+
             self._datagrams.append(self._buffer.data)
             self._flight_bytes += self._datagram_flight_bytes
             self._total_bytes += datagram_bytes
