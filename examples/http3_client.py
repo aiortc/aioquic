@@ -25,6 +25,7 @@ from aioquic.h3.events import (
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
 from aioquic.quic.logger import QuicFileLogger
+from aioquic.quic.packet import QuicProtocolVersion
 from aioquic.tls import CipherSuite, SessionTicket
 
 try:
@@ -466,6 +467,16 @@ if __name__ == "__main__":
         help="include the HTTP response headers in the output",
     )
     parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="do not validate server certificate",
+    )
+    parser.add_argument(
+        "--legacy-http",
+        action="store_true",
+        help="use HTTP/0.9",
+    )
+    parser.add_argument(
         "--max-data",
         type=int,
         help="connection-wide flow control limit (default: %d)" % defaults.max_data,
@@ -476,12 +487,11 @@ if __name__ == "__main__":
         help="per-stream flow control limit (default: %d)" % defaults.max_stream_data,
     )
     parser.add_argument(
-        "-k",
-        "--insecure",
+        "--negotiate-v2",
         action="store_true",
-        help="do not validate server certificate",
+        help="start with QUIC v1 and try to negotiate QUIC v2",
     )
-    parser.add_argument("--legacy-http", action="store_true", help="use HTTP/0.9")
+
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -558,6 +568,12 @@ if __name__ == "__main__":
         configuration.max_data = args.max_data
     if args.max_stream_data:
         configuration.max_stream_data = args.max_stream_data
+    if args.negotiate_v2:
+        configuration.chosen_version = QuicProtocolVersion.VERSION_1
+        configuration.supported_versions = [
+            QuicProtocolVersion.VERSION_2,
+            QuicProtocolVersion.VERSION_1,
+        ]
     if args.quic_log:
         configuration.quic_logger = QuicFileLogger(args.quic_log)
     if args.secrets_log:
