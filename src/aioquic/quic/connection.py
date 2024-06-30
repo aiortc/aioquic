@@ -1169,7 +1169,7 @@ class QuicConnection:
             )
 
         # For servers, determine the Negotiated Version.
-        if not self._is_client:
+        if not self._is_client and not self._version_negotiated_compatible:
             if self._remote_version_information is not None:
                 # Pick the first version we support in the client's available versions,
                 # which is compatible with the current version.
@@ -1185,6 +1185,14 @@ class QuicConnection:
                         self._version = version
                         self._cryptos[tls.Epoch.INITIAL] = self._cryptos_initial[
                             version
+                        ]
+
+                        # Update our transport parameters to reflect the chosen version.
+                        self.tls.handshake_extensions = [
+                            (
+                                tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                                self._serialize_transport_parameters(),
+                            )
                         ]
                         break
             self._version_negotiated_compatible = True
@@ -2697,25 +2705,6 @@ class QuicConnection:
                         reason_phrase="%s is not allowed for clients" % attr,
                     )
 
-            # If a server receives Version Information where the Chosen Version
-            # is not included in Available Versions, it MUST treat is as a
-            # parsing failure.
-            #
-            # https://datatracker.ietf.org/doc/html/rfc9368#section-4
-            if (
-                quic_transport_parameters.version_information is not None
-                and quic_transport_parameters.version_information.chosen_version
-                not in quic_transport_parameters.version_information.available_versions
-            ):
-                raise QuicConnectionError(
-                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
-                    frame_type=QuicFrameType.CRYPTO,
-                    reason_phrase=(
-                        "version_information's chosen_version is not included "
-                        "in available_versions"
-                    ),
-                )
-
         if not from_session_ticket:
             if (
                 quic_transport_parameters.initial_source_connection_id
@@ -2783,7 +2772,42 @@ class QuicConnection:
                     ),
                 )
 
-        # store remote parameters
+            # Validate Version Information extension.
+            #
+            # https://datatracker.ietf.org/doc/html/rfc9368#section-4
+            if quic_transport_parameters.version_information is not None:
+                version_information = quic_transport_parameters.version_information
+
+                # If a server receives Version Information where the Chosen Version
+                # is not included in Available Versions, it MUST treat is as a
+                # parsing failure.
+                if (
+                    not self._is_client
+                    and version_information.chosen_version
+                    not in version_information.available_versions
+                ):
+                    raise QuicConnectionError(
+                        error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                        frame_type=QuicFrameType.CRYPTO,
+                        reason_phrase=(
+                            "version_information's chosen_version is not included "
+                            "in available_versions"
+                        ),
+                    )
+
+                # Validate that the Chosen Version matches the version in use for the
+                # connection.
+                if version_information.chosen_version != self._crypto_packet_version:
+                    raise QuicConnectionError(
+                        error_code=QuicErrorCode.VERSION_NEGOTIATION_ERROR,
+                        frame_type=QuicFrameType.CRYPTO,
+                        reason_phrase=(
+                            "version_information's chosen_version does not match "
+                            "the version in use"
+                        ),
+                    )
+
+        # Store remote parameters.
         if not from_session_ticket:
             if quic_transport_parameters.ack_delay_exponent is not None:
                 self._remote_ack_delay_exponent = self._remote_ack_delay_exponent

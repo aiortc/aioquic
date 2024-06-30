@@ -2616,7 +2616,7 @@ class QuicConnectionTest(TestCase):
             cm.exception.reason_phrase, "initial_source_connection_id does not match"
         )
 
-    def test_parse_transport_parameters_with_bad_version_information(self):
+    def test_parse_transport_parameters_with_bad_version_information_1(self):
         server = create_standalone_server(self)
         data = encode_transport_parameters(
             QuicTransportParameters(
@@ -2636,6 +2636,31 @@ class QuicConnectionTest(TestCase):
             cm.exception.reason_phrase,
             "version_information's chosen_version is not included in "
             "available_versions",
+        )
+
+    def test_parse_transport_parameters_with_bad_version_information_2(self):
+        server = create_standalone_server(self)
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                version_information=QuicVersionInformation(
+                    chosen_version=QuicProtocolVersion.VERSION_1,
+                    available_versions=[
+                        QuicProtocolVersion.VERSION_1,
+                        QuicProtocolVersion.VERSION_2,
+                    ],
+                )
+            )
+        )
+        server._crypto_packet_version = QuicProtocolVersion.VERSION_2
+        with self.assertRaises(QuicConnectionError) as cm:
+            server._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.VERSION_NEGOTIATION_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "version_information's chosen_version does not match the version in use",
         )
 
     def test_parse_transport_parameters_with_server_only_parameter(self):
