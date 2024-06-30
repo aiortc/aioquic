@@ -438,6 +438,11 @@ if __name__ == "__main__":
         "--ca-certs", type=str, help="load CA certificates from the specified file"
     )
     parser.add_argument(
+        "--certificate",
+        type=str,
+        help="load the TLS certificate from the specified file",
+    )
+    parser.add_argument(
         "--cipher-suites",
         type=str,
         help=(
@@ -481,6 +486,11 @@ if __name__ == "__main__":
         "--output-dir",
         type=str,
         help="write downloaded files to this directory",
+    )
+    parser.add_argument(
+        "--private-key",
+        type=str,
+        help="load the TLS private key from the specified file",
     )
     parser.add_argument(
         "-q",
@@ -558,6 +568,10 @@ if __name__ == "__main__":
                 configuration.session_ticket = pickle.load(fp)
         except FileNotFoundError:
             pass
+
+    # load SSL certificate and key
+    if args.certificate is not None:
+        configuration.load_cert_chain(args.certificate, args.private_key)
 
     if uvloop is not None:
         uvloop.install()
