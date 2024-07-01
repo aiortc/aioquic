@@ -44,6 +44,11 @@ async def connect(
     * ``stream_handler`` is a callback which is invoked whenever a stream is
       created. It must accept two arguments: a :class:`asyncio.StreamReader`
       and a :class:`asyncio.StreamWriter`.
+    * ``wait_connected`` indicates whether the context manager should wait for the
+      connection to be established before yielding the
+      :class:`~aioquic.asyncio.QuicConnectionProtocol`. By default this is `True` but
+      you can set it to `False` if you want to immediately start sending data using
+      0-RTT.
     * ``local_port`` is the UDP port number that this client wants to bind.
     """
     loop = asyncio.get_event_loop()
@@ -83,7 +88,7 @@ async def connect(
     )
     protocol = cast(QuicConnectionProtocol, protocol)
     try:
-        protocol.connect(addr)
+        protocol.connect(addr, transmit=wait_connected)
         if wait_connected:
             await protocol.wait_connected()
         yield protocol

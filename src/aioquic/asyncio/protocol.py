@@ -64,14 +64,15 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         )
         self.transmit()
 
-    def connect(self, addr: NetworkAddress) -> None:
+    def connect(self, addr: NetworkAddress, transmit=True) -> None:
         """
         Initiate the TLS handshake.
 
         This method can only be called for clients and a single time.
         """
         self._quic.connect(addr, now=self._loop.time())
-        self.transmit()
+        if transmit:
+            self.transmit()
 
     async def create_stream(
         self, is_unidirectional: bool = False
