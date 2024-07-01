@@ -227,9 +227,11 @@ def verify_certificate(
 ) -> None:
     # verify dates
     now = utcnow()
-    if now < certificate.not_valid_before_utc:
+    before = getattr(certificate, "not_valid_before_utc", 0) or certificate.not_valid_before.replace(tzinfo=datetime.timezone.utc)
+    if now < before:
         raise AlertCertificateExpired("Certificate is not valid yet")
-    if now > certificate.not_valid_after_utc:
+    after = getattr(certificate, "not_valid_after_utc", 0) or certificate.not_valid_after.replace(tzinfo=datetime.timezone.utc)
+    if now > after:
         raise AlertCertificateExpired("Certificate is no longer valid")
 
     # verify subject
