@@ -31,7 +31,7 @@ class H3ResponseStream(httpx.AsyncByteStream):
 
 
 class H3Transport(QuicConnectionProtocol, httpx.AsyncBaseTransport):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self._http = H3Connection(self._quic)
