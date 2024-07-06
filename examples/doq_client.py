@@ -17,11 +17,11 @@ logger = logging.getLogger("client")
 
 
 class DnsClientProtocol(QuicConnectionProtocol):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._ack_waiter: Optional[asyncio.Future[DNSRecord]] = None
 
-    async def query(self, query_name: str, query_type: str) -> None:
+    async def query(self, query_name: str, query_type: str) -> DNSRecord:
         # serialize query
         query = DNSRecord(
             header=DNSHeader(id=0),

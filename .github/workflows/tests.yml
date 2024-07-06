@@ -30,7 +30,7 @@ jobs:
         run: |
           ruff check .
           ruff format --check --diff .
-          mypy src tests
+          mypy examples src tests
           check-manifest
 
   codespell:

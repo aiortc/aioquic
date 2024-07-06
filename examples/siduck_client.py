@@ -14,7 +14,7 @@ logger = logging.getLogger("client")
 
 
 class SiduckClient(QuicConnectionProtocol):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._ack_waiter: Optional[asyncio.Future[None]] = None
 

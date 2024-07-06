@@ -228,7 +228,7 @@ class WebTransportHandler:
     def __init__(
         self,
         *,
-        connection: HttpConnection,
+        connection: H3Connection,
         scope: Dict,
         stream_id: int,
         transmit: Callable[[], None],
@@ -236,7 +236,7 @@ class WebTransportHandler:
         self.accepted = False
         self.closed = False
         self.connection = connection
-        self.http_event_queue: Deque[DataReceived] = deque()
+        self.http_event_queue: Deque[H3Event] = deque()
         self.queue: asyncio.Queue[Dict] = asyncio.Queue()
         self.scope = scope
         self.stream_id = stream_id
@@ -387,6 +387,9 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     transmit=self.transmit,
                 )
             elif method == "CONNECT" and protocol == "webtransport":
+                assert isinstance(
+                    self._http, H3Connection
+                ), "WebTransport is only supported over HTTP/3"
                 scope = {
                     "client": client,
                     "headers": headers,
