@@ -224,6 +224,17 @@ def roundtrip(sender, receiver):
     return (transfer(sender, receiver), transfer(receiver, sender))
 
 
+def roundtrip_until_done(sender, receiver):
+    """
+    Send datagrams from `sender` to `receiver` and back
+    repeatedly until no more datagrams are exchanged.
+    """
+    rounds = 0
+    while roundtrip(sender, receiver) != (0, 0):
+        rounds += 1
+        assert rounds < 10, "Too many roundtrips!"
+
+
 def transfer(sender, receiver):
     """
     Send datagrams from `sender` to `receiver`.
@@ -2817,7 +2828,7 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(client._local_max_data.value, 2097152)
 
             # MAX_DATA is retransmitted and acked
-            self.assertEqual(roundtrip(client, server), (1, 1))
+            roundtrip_until_done(client, server)
             self.assertEqual(client._local_max_data.sent, 2097152)
             self.assertEqual(client._local_max_data.used, 1048576)
             self.assertEqual(client._local_max_data.value, 2097152)
@@ -2852,8 +2863,7 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(stream.max_stream_data_local_sent, 0)
 
             # MAX_STREAM_DATA is retransmitted and acked
-            for i in range(2):  # allow two round-trips to fix flakiness on Windows
-                roundtrip(client, server)
+            roundtrip_until_done(client, server)
             self.assertEqual(stream.max_stream_data_local, 2097152)
             self.assertEqual(stream.max_stream_data_local_sent, 2097152)
 
@@ -2884,7 +2894,7 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(server._local_max_streams_bidi.value, 256)
 
             # MAX_STREAMS is retransmitted and acked
-            self.assertEqual(roundtrip(server, client), (1, 1))
+            roundtrip_until_done(server, client)
             self.assertEqual(client._remote_max_streams_bidi, 256)
             self.assertEqual(server._local_max_streams_bidi.sent, 256)
             self.assertEqual(server._local_max_streams_bidi.used, 65)
