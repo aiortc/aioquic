@@ -1,6 +1,21 @@
 Changelog
 =========
 
+1.2.0
+-----
+
+* Add support for compatible version handling as defined in :rfc:`9368`.
+* Add support for QUIC Version 2, as defined in :rfc:`9369`.
+* Drop support for draft QUIC versions which were obsoleted by :rfc:`9000`.
+* Improve datagram padding to allow better packet coalescing and reduce the
+  number of roundtrips during connection establishement.
+* Fix server anti-amplification checks during address validation to take into
+  account invalid packets, such as datagram-level padding.
+* Allow asyncio clients to make efficient use of 0-RTT by passing
+  `wait_connected=False` to :meth:`~aioquic.asyncio.connect`.
+* Add command-line arguments to the `http3_client` example for client
+  certificates and negotiating QUIC Version 2.
+
 1.1.0
 -----
 
