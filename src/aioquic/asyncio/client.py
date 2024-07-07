@@ -52,7 +52,7 @@ async def connect(
       0-RTT.
     * ``local_port`` is the UDP port number that this client wants to bind.
     * ``dual_stack`` is a flag which enabled or disabled using IPv4/IPv6 Dual-Stack.
-      The default value is platform specific and similar with socket.has_dualstack_ipv6().
+      The default value is platform specific and similar to socket.has_dualstack_ipv6()
     """
     loop = asyncio.get_event_loop()
 

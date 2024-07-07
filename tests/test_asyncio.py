@@ -100,7 +100,11 @@ class HighLevelTest(TestCase):
         return response
 
     @contextlib.asynccontextmanager
-    async def run_server(self, configuration=None, host="::", **kwargs):
+    async def run_server(self, configuration=None, host=None, **kwargs):
+        if host is None and not socket.has_dualstack_ipv6():
+            host = "127.0.0.1"
+        elif host is None:
+            host = "::"
         if configuration is None:
             configuration = QuicConfiguration(is_client=False)
             configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
