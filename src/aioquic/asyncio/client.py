@@ -1,6 +1,5 @@
 import asyncio
 import socket
-import sys
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Callable, Optional, Tuple, Union, cast
 
@@ -24,6 +23,7 @@ async def connect(
     token_handler: Optional[QuicTokenHandler] = None,
     wait_connected: bool = True,
     local_port: int = 0,
+    dual_stack: bool = socket.has_dualstack_ipv6(),
 ) -> AsyncGenerator[QuicConnectionProtocol, None]:
     """
     Connect to a QUIC server at the given `host` and `port`.
@@ -51,6 +51,8 @@ async def connect(
       you can set it to `False` if you want to immediately start sending data using
       0-RTT.
     * ``local_port`` is the UDP port number that this client wants to bind.
+    * ``dual_stack`` is a flag which enabled or disabled using IPv4/IPv6 Dual-Stack.
+      The default value is platform specific and similar with socket.has_dualstack_ipv6().
     """
     loop = asyncio.get_event_loop()
 
@@ -64,9 +66,6 @@ async def connect(
         session_ticket_handler=session_ticket_handler,
         token_handler=token_handler,
     )
-
-    # OpenBSD well known to not support dual-stack
-    dual_stack = not sys.platform.startswith("openbsd")
 
     # Use AI_ADDRCONFIG on platforms which doesn't support dual-stack
     flags = 0
