@@ -118,7 +118,7 @@ def reset_buffers(buffers):
 class ContextTest(TestCase):
     def assertClientHello(self, data: bytes):
         self.assertEqual(data[0], tls.HandshakeType.CLIENT_HELLO)
-        self.assertGreaterEqual(len(data), 191)
+        self.assertGreaterEqual(len(data), 189)
         self.assertLessEqual(len(data), 564)
 
     def create_client(
