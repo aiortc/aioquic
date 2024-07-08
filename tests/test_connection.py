@@ -2790,7 +2790,7 @@ class QuicConnectionTest(TestCase):
             # window too strictly as its exact value depends on the size
             # of our ACKs, which depends on the execution time.
             self.assertEqual(client._loss.bytes_in_flight, 0)
-            self.assertGreaterEqual(client._loss.congestion_window, 13530)
+            self.assertGreaterEqual(client._loss.congestion_window, 13472)
             self.assertLessEqual(client._loss.congestion_window, 13540)
 
             # artificially raise received data counter
