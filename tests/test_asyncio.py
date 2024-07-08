@@ -196,6 +196,7 @@ class HighLevelTest(TestCase):
             )
         )
 
+    @skipIf("ed448" in SKIP_TESTS, "Skipping ed448 tests")
     @asynctest
     async def test_connect_and_serve_with_ed448_certificate(self):
         await self._test_connect_and_serve_with_certificate(
