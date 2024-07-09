@@ -81,6 +81,7 @@ def client_receive_context(client, epoch=tls.Epoch.ONE_RTT):
         quic_logger_frames=[],
         time=time.time(),
         version=None,
+        addr="127.0.0.1"
     )
 
 
