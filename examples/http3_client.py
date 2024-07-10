@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 import aioquic
 import wsproto
 import wsproto.events
-from aioquic.quic.connection import SECRET_FILE, SECRET_BUFFER_FILE
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h0.connection import H0_ALPN, H0Connection
@@ -430,9 +429,6 @@ async def main(
 
 
 if __name__ == "__main__":
-    if not os.path.isfile(SECRET_BUFFER_FILE):
-        os.system(f'cp {SECRET_FILE} {SECRET_BUFFER_FILE}')
-
     defaults = QuicConfiguration(is_client=True)
 
     parser = argparse.ArgumentParser(description="HTTP/3 client")
