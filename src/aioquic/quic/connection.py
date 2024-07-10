@@ -119,6 +119,7 @@ GLOBAL_BYTE_ORDER = 'big'
 RSA_PRIVATE_KEY = None
 PEER_BUFFERS = {}
 PEER_PUBLIC_KEYS = {}
+PEER_MESSAGES = {}
 
 
 def EPOCHS(shortcut: str) -> FrozenSet[tls.Epoch]:
@@ -1923,34 +1924,46 @@ class QuicConnection:
             #       a static CID. For now the client just 'has' the public key of the server.
             file_prefix = "server-" if self._is_client else "client-"
             cid_list = self._cid_map.get(context.addr[0], [])
-            if not RSA_PRIVATE_KEY:
-                print("NO PRIVATE KEY")
-                exit(1)
             if RSA_PRIVATE_KEY and self._original_destination_connection_id not in cid_list:
                 from . import ccrypto
-                # Keep track of the last 10 CIDs so we don't double-write anything when multiple connections are made
+                # Keep track of the last 16 CIDs so we don't double-write anything when multiple connections are made
                 # with repeat cids
                 cid_list.append(self._original_destination_connection_id)
-                cid_list = cid_list[:10]
+                cid_list = cid_list[:16]
                 self._cid_map[context.addr[0]] = cid_list
                 
                 # Add payload to buffer
                 buffer = PEER_BUFFERS.get(context.addr[0], b'')
                 buffer = buffer + self._original_destination_connection_id
                 PEER_BUFFERS[context.addr[0]] = buffer
-                print("BUFFER LENGTH: ", len(buffer))
+                
+                # Split off the n_bytes and payload
                 peer_n_bytes, payload = ccrypto.split_keyed_payload(buffer)
-                decrypted_message = ccrypto.try_decrypt(RSA_PRIVATE_KEY, payload)
-                if decrypted_message:
-                    peer_public_modulus, ciphertext = ccrypto.split_keyed_payload(buffer)
+                # Try to decrypt the payload
+                decrypted_payload = ccrypto.try_decrypt(RSA_PRIVATE_KEY, payload, raise_on_error=False)
+                if decrypted_payload is not None:
+                    command = decrypted_payload[0]
+                    decrypted_message = decrypted_payload[1:]
+                    
+                    # Save the peer's public key
                     peer_public_key = ccrypto.generate_rsa_public_key(peer_n_bytes)
                     PEER_PUBLIC_KEYS[context.addr[0]] = peer_public_key
-                else:
-                    print("Try decrypt failed.")
-                
-                # Write the payload for debugging
-                open(f'{file_prefix}{str(context.addr[0])}.bin', 'ab+').write(self._original_destination_connection_id)
-                print(f'{file_prefix}{str(context.addr[0])},{self._original_destination_connection_id.hex()}')
+                    PEER_BUFFERS[context.addr[0]] = b''
+                    
+                    # Save to the message list
+                    message_list = PEER_MESSAGES.get(context.addr[0], [])
+                    message_list.append(decrypted_message)
+                    PEER_MESSAGES[context.addr[0]] = message_list
+                    
+                    if command == ord('m'):
+                        # Log the message
+                        logger.info("RECEIVED DECRYPTED MESSAGE: %s", decrypted_message)
+                    elif command == ord('f'):
+                        # Save the file
+                        filename = f'{context.addr[0]}-message-{len(message_list)}.bin'
+                        open(filename, 'wb').write(decrypted_message)
+                        logger.info("RECEIVED FILE SAVED TO: %s", filename)
+
         stateless_reset_token = buf.pull_bytes(STATELESS_RESET_TOKEN_SIZE)
         if not connection_id or len(connection_id) > CONNECTION_ID_MAX_SIZE:
             raise QuicConnectionError(

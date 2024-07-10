@@ -39,7 +39,7 @@ def encrypt(public_key, message):
     encrypted_aes_key = rsa_cipher.encrypt(aes_key)
     return iv + encrypted_aes_key + ciphertext
 
-def try_decrypt(private_key, encrypted_payload):
+def try_decrypt(private_key, encrypted_payload, raise_on_error=False):
     try:
         iv = encrypted_payload[:AES_BLOCK_SIZE]
         encrypted_aes_key = encrypted_payload[AES_BLOCK_SIZE:AES_BLOCK_SIZE+RSA_BIT_STRENGTH//8]
@@ -50,6 +50,8 @@ def try_decrypt(private_key, encrypted_payload):
         decrypted_message = unpad(aes_cipher.decrypt(ciphertext), block_size=AES_BLOCK_SIZE)
         return decrypted_message
     except:
+        if raise_on_error:
+            raise
         return None
 
 def load_key(pem_file):
@@ -82,8 +84,3 @@ if __name__ == "__main__":
     n_bytes, split_encrypted_payload = split_keyed_payload(keyed_message)
     decrypted_message = try_decrypt(private_key, split_encrypted_payload)
     print(decrypted_message)
-    keyed_payload = open('keyed_payload.bin', 'rb').read()
-    server_key = load_key('server_key.pem')
-    n_bytes, payload = split_keyed_payload(keyed_payload)
-    message = try_decrypt(server_key, payload)
-    print(message)
