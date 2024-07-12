@@ -125,6 +125,7 @@ class QuicServer(asyncio.DatagramProtocol):
                 retry_source_connection_id=retry_source_connection_id,
                 session_ticket_fetcher=self._session_ticket_fetcher,
                 session_ticket_handler=self._session_ticket_handler,
+                addr=addr
             )
             protocol = self._create_protocol(
                 connection, stream_handler=self._stream_handler
