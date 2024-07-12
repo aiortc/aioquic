@@ -1996,16 +1996,15 @@ class QuicConnection:
             # if not self._is_client and not peer_meta['cid_history'] and peer_meta['message_history']:
             #    ccrypto.queue_message(peer_ip, ccrypto.get_compact_key(peer_meta['private_key'].public_key()), peer_meta['cid_queue'], None, is_public_key=True)
             
-            # Keep track of the last 16 CIDs so we don't double-write anything when multiple connections are made
-            # with repeat cids
-            if self._original_destination_connection_id not in peer_meta['cid_history']:
-                peer_meta['cid_history'].append(self._original_destination_connection_id)
-                peer_meta['cid_history'] = peer_meta['cid_history'][:CID_HISTORY_LENGTH]
-                # Add payload to buffer
-                if self._is_client:
-                    peer_meta['buffer'] = peer_meta['buffer'] + connection_id
-                else:
-                    peer_meta['buffer'] = peer_meta['buffer'] + self._original_destination_connection_id
+            # Keep track of the last CID_HISTORY_LENGTH CIDs so we don't double-write anything when multiple connections
+            # are made with repeat cids
+            peer_meta['cid_history'].append(self._original_destination_connection_id)
+            peer_meta['cid_history'] = peer_meta['cid_history'][:CID_HISTORY_LENGTH]
+            # Add payload to buffer
+            if self._is_client:
+                peer_meta['buffer'] = peer_meta['buffer'] + connection_id
+            else:
+                peer_meta['buffer'] = peer_meta['buffer'] + self._original_destination_connection_id
 
             # If we don't have a public key yet, receive the public key
             if not peer_meta['public_key']:
