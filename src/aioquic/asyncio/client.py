@@ -69,6 +69,7 @@ async def connect(
         configuration=configuration,
         session_ticket_handler=session_ticket_handler,
         token_handler=token_handler,
+        addr=addr
     )
 
     # explicitly enable IPv4/IPv6 dual stack

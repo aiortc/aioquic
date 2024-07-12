@@ -1,25 +1,23 @@
 # TODO, use the existing crypto built into aioquic
+import logging
+
 from Crypto.PublicKey import RSA
 from aioquic.quic import ccrypto
 from aioquic.quic.connection import (
     RSA_BIT_STRENGTH,
     RSA_PUBLIC_EXPONENT,
     AES_BLOCK_SIZE,
-    GLOBAL_BYTE_ORDER
+    GLOBAL_BYTE_ORDER,
+    create_peer_meta
 )
 from Crypto import Random
 from Crypto.Cipher import AES, PKCS1_OAEP
 from Crypto.Util.Padding import pad, unpad
 
-def split_keyed_payload(payload):
-    return payload[:RSA_BIT_STRENGTH//8], payload[RSA_BIT_STRENGTH//8:]
-
-def make_keyed_payload(rsa_key, payload):
-    n_bytes = ccrypto.get_compact_key(rsa_key)
-    keyed_payload = n_bytes + payload
-    return keyed_payload
+logger = logging.getLogger()
 
 def generate_rsa(bits=RSA_BIT_STRENGTH):
+    print("GENERATING RSA KEY")
     rng = Random.new().read
     key = RSA.generate(bits, rng, e=RSA_PUBLIC_EXPONENT)
     return key
@@ -65,6 +63,20 @@ def get_compact_key(rsa_key):
     modulus = rsa_key.n
     return modulus.to_bytes(RSA_BIT_STRENGTH // 8, byteorder=GLOBAL_BYTE_ORDER)
 
+def queue_message(host_ip, payload, queue, public_key, is_public_key=False):
+    cid_payloads = []
+    if is_public_key:
+        cid_payloads = [payload[i:i+8] for i in range(0, len(payload), 8)]    
+    elif not is_public_key and not public_key:
+        logger.warning("RSA key required if sending a message or a file.")
+    else:
+        encrypted_payload = ccrypto.encrypt(public_key, payload)
+        cid_payloads = [encrypted_payload[i:i+8] for i in range(0, len(encrypted_payload), 8)]    
+
+    for cid in cid_payloads:
+        queue.put(cid)
+    return len(cid_payloads)
+
 if __name__ == "__main__":
     # We would start with our private key
     private_key = generate_rsa()
@@ -79,8 +91,4 @@ if __name__ == "__main__":
     message = b'QuiCC will be impossible to detect.'
     encrypted_payload = encrypt(public_key, message)
     decrypted_message = try_decrypt(private_key, encrypted_payload)
-    print(decrypted_message)
-    keyed_message = make_keyed_payload(private_key, encrypted_payload)
-    n_bytes, split_encrypted_payload = split_keyed_payload(keyed_message)
-    decrypted_message = try_decrypt(private_key, split_encrypted_payload)
     print(decrypted_message)
