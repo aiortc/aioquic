@@ -17,7 +17,6 @@ from Crypto.Util.Padding import pad, unpad
 logger = logging.getLogger()
 
 def generate_rsa(bits=RSA_BIT_STRENGTH):
-    print("GENERATING RSA KEY")
     rng = Random.new().read
     key = RSA.generate(bits, rng, e=RSA_PUBLIC_EXPONENT)
     return key

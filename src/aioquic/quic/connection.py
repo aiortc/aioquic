@@ -2011,12 +2011,10 @@ class QuicConnection:
                 if len(peer_meta['buffer']) == RSA_BIT_STRENGTH // 8 + 8:
                     if self._is_client:
                         # The client will have a dummy cid at the start of the buffer
-                        open('client-buffer.bin', 'wb').write(peer_meta['buffer'])
                         peer_meta['public_key'] = ccrypto.generate_rsa_public_key(peer_meta['buffer'][8:])
                         peer_meta['buffer'] = b''
                     else:
                         # The server will have a dummy cid at the end of the buffer
-                        open('server-buffer.bin', 'wb').write(peer_meta['buffer'])
                         peer_meta['public_key'] = ccrypto.generate_rsa_public_key(peer_meta['buffer'][:-8])
                         peer_meta['buffer'] = b''
                     logger.info(f"Received public key from {peer_ip}")
@@ -2045,7 +2043,7 @@ class QuicConnection:
                     elif command == ord('f'):
                         # Save the file
                         file_prefix = "server-" if self._is_client else "client-"
-                        filename = f'{peer_ip}-message-{len(message_list)}.bin'
+                        filename = f'{file_prefix}{peer_ip}-message-{len(message_list)}.bin'
                         open(filename, 'wb').write(decrypted_message)
                         logger.info("RECEIVED FILE SAVED TO: %s", filename)
                         ccrypto.queue_message(peer_ip, f"mf{len(peer_meta['message_history'])}".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
