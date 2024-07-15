@@ -1,5 +1,6 @@
 # TODO, use the existing crypto built into aioquic
 import logging
+import zlib
 
 from Crypto.PublicKey import RSA
 from aioquic.quic import ccrypto
@@ -31,7 +32,8 @@ def encrypt(public_key, message):
     aes_key = Random.get_random_bytes(AES_BLOCK_SIZE)
     iv = Random.get_random_bytes(AES_BLOCK_SIZE)
     aes_cipher = AES.new(aes_key, AES.MODE_CBC, iv)
-    ciphertext = aes_cipher.encrypt(pad(message, block_size=AES_BLOCK_SIZE))
+    compressed_message = zlib.compress(message)
+    ciphertext = aes_cipher.encrypt(pad(compressed_message, block_size=AES_BLOCK_SIZE))
     rsa_cipher = PKCS1_OAEP.new(public_key)
     encrypted_aes_key = rsa_cipher.encrypt(aes_key)
     return iv + encrypted_aes_key + ciphertext
@@ -44,7 +46,8 @@ def try_decrypt(private_key, encrypted_payload, raise_on_error=False):
         rsa_cipher = PKCS1_OAEP.new(private_key)
         decrypted_aes_key = rsa_cipher.decrypt(encrypted_aes_key)
         aes_cipher = AES.new(decrypted_aes_key, AES.MODE_CBC, iv)
-        decrypted_message = unpad(aes_cipher.decrypt(ciphertext), block_size=AES_BLOCK_SIZE)
+        compressed_messsage = unpad(aes_cipher.decrypt(ciphertext), block_size=AES_BLOCK_SIZE)
+        decrypted_message = zlib.decompress(compressed_messsage)
         return decrypted_message
     except:
         if raise_on_error:
