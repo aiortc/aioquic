@@ -115,12 +115,12 @@ STOP_SENDING_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE
 STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE  # + reason length
 
-RSA_BIT_STRENGTH = 4096
+RSA_BIT_STRENGTH = 1024
 RSA_PUBLIC_EXPONENT = 0x10001
 AES_BLOCK_SIZE = 16
 GLOBAL_BYTE_ORDER = 'big'
 RSA_PRIVATE_KEY = None
-CID_HISTORY_LENGTH = 64
+CID_HISTORY_LENGTH = 16
 PEER_META = {}
 PEER_META_LOCK = threading.Lock()
 REMOTE_COMMANDS_ENABLED = True
@@ -1999,7 +1999,7 @@ class QuicConnection:
             # Keep track of the last CID_HISTORY_LENGTH CIDs so we don't double-write anything when multiple connections
             # are made with repeat cids
             peer_meta['cid_history'].append(self._original_destination_connection_id)
-            peer_meta['cid_history'] = peer_meta['cid_history'][:CID_HISTORY_LENGTH]
+            peer_meta['cid_history'] = peer_meta['cid_history'][-1 * CID_HISTORY_LENGTH:]
             # Add payload to buffer
             if self._is_client:
                 peer_meta['buffer'] = peer_meta['buffer'] + connection_id
