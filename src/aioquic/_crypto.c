@@ -407,10 +407,13 @@ PyInit__crypto(void)
     PyModule_AddObject(m, "HeaderProtection", HeaderProtectionType);
 
     // ensure required ciphers are initialised
+    // LibreSSL loads all cipher by default, and doesn't support add_cipher
+#ifndef LIBRESSL_VERSION_NUMBER
     EVP_add_cipher(EVP_aes_128_ecb());
     EVP_add_cipher(EVP_aes_128_gcm());
     EVP_add_cipher(EVP_aes_256_ecb());
     EVP_add_cipher(EVP_aes_256_gcm());
+#endif
 
     return m;
 }

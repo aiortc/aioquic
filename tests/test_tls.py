@@ -2,7 +2,7 @@ import binascii
 import datetime
 import ssl
 from functools import partial
-from unittest import TestCase
+from unittest import TestCase, skipIf
 from unittest.mock import patch
 
 from aioquic import tls
@@ -49,6 +49,7 @@ from .utils import (
     SERVER_CACERTFILE,
     SERVER_CERTFILE,
     SERVER_KEYFILE,
+    SKIP_TESTS,
     generate_ec_certificate,
     generate_ed448_certificate,
     generate_ed25519_certificate,
@@ -583,6 +584,7 @@ class ContextTest(TestCase):
             *generate_ed25519_certificate(common_name="example.com")
         )
 
+    @skipIf("ed448" in SKIP_TESTS, "Skipping ed448 tests")
     def test_handshake_with_ed448_certificate(self):
         self._test_handshake_with_certificate(
             *generate_ed448_certificate(common_name="example.com")
