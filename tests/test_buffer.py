@@ -152,6 +152,11 @@ class UintVarTest(TestCase):
         buf.push_uint_var(value)
         self.assertEqual(buf.data, data)
 
+    def test_foo(self):
+        buf = Buffer(capacity=8)
+        print(buf.data.hex())
+        self.assertEqual(buf.data, b"\x00")
+
     def test_uint_var(self):
         # 1 byte
         self.roundtrip(b"\x00", 0)
