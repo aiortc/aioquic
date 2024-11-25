@@ -1,9 +1,11 @@
+from enum import Enum
 from typing import Optional
 
 from . import events
 from .packet import (
     QuicErrorCode,
     QuicResetStreamFrame,
+    QuicResetStreamAtFrame,
     QuicStopSendingFrame,
     QuicStreamFrame,
 )
@@ -15,8 +17,19 @@ class FinalSizeError(Exception):
     pass
 
 
+class ReliableSizeError(Exception):
+    pass
+
+
 class StreamFinishedError(Exception):
     pass
+
+
+class ResetStreamAtState(Enum):
+    NONE = 0
+    PENDING = 1
+    WAITING_ACK = 2
+    ACKED = 3
 
 
 class QuicStreamReceiver:
@@ -186,6 +199,10 @@ class QuicStreamSender:
         self._reset_error_code: Optional[int] = None
         self._stream_id = stream_id
 
+        self._reset_at_state: ResetStreamAtState = ResetStreamAtState.NONE
+        self._reset_at_error_code: Optional[int] = None
+        self._buffer_reliable_size: Optional[int] = None
+
     @property
     def next_offset(self) -> int:
         """
@@ -197,6 +214,10 @@ class QuicStreamSender:
             return self._pending[0].start
         except IndexError:
             return self._buffer_stop
+
+    @property
+    def reset_at_pending(self) -> bool:
+        return self._reset_at_state == ResetStreamAtState.PENDING
 
     def get_frame(
         self, max_size: int, max_offset: Optional[int] = None
@@ -254,6 +275,15 @@ class QuicStreamSender:
             stream_id=self._stream_id,
         )
 
+    def get_reset_at_frame(self) -> QuicResetStreamAtFrame:
+        self._reset_at_state = ResetStreamAtState.WAITING_ACK
+        return QuicResetStreamAtFrame(
+            error_code=self._reset_at_error_code,
+            final_size=self.highest_offset,
+            stream_id=self._stream_id,
+            reliable_size=self._buffer_reliable_size,
+        )
+
     def on_data_delivery(
         self, delivery: QuicDeliveryState, start: int, stop: int, fin: bool
     ) -> None:
@@ -287,8 +317,16 @@ class QuicStreamSender:
                 # The FIN has been ACK'd.
                 self._acked_fin = True
 
+            # TODO: Refactoring needed.
             if self._buffer_start == self._buffer_fin and self._acked_fin:
-                # All data and the FIN have been ACK'd, we're done sending.
+                if self._reset_at_state == ResetStreamAtState.NONE:
+                    # All data and the FIN have been ACK'd, we're done sending.
+                    self.is_finished = True
+
+            if (self._reset_at_state == ResetStreamAtState.ACKED
+                and self._buffer_start >= self._buffer_reliable_size
+                ):
+                self.buffer_is_empty = True
                 self.is_finished = True
         else:
             if stop > start:
@@ -312,16 +350,54 @@ class QuicStreamSender:
             # The reset has been lost, reschedule it.
             self.reset_pending = True
 
+    def on_reset_at_delivery(self, delivery: QuicDeliveryState) -> None:
+        """
+        Callback when a RESET_STREAM_AT is ACK'd.
+        """
+        if delivery == QuicDeliveryState.ACKED:
+            self._reset_at_state = ResetStreamAtState.ACKED
+            if self._buffer_start >= self._buffer_reliable_size:
+                self.is_finished = True
+        else:
+            # The RESET_STREAM_AT has been lost, reschedule it.
+            self._reset_at_state = ResetStreamAtState.PENDING
+
     def reset(self, error_code: int) -> None:
         """
         Abruptly terminate the sending part of the QUIC stream.
         """
         assert self._reset_error_code is None, "cannot call reset() more than once"
+        assert (self._reset_at_error_code is None
+                or self._reset_at_error_code == error_code), "cannot call reset() with different error code"
         self._reset_error_code = error_code
         self.reset_pending = True
 
         # Prevent any more data from being sent or re-sent.
         self.buffer_is_empty = True
+
+    def reset_at(self, error_code: int, reliable_size: int) -> None:
+        """
+        Abrupty terminate the sending part of the QUIC stream at a specific offset.
+        """
+        assert (self._reset_at_error_code is None
+                or self._reset_at_error_code == error_code), "cannot call reset_at() with different error code"
+        self._reset_at_error_code = error_code
+        if (self._buffer_reliable_size is not None
+            and self._buffer_reliable_size > reliable_size
+            ):
+            raise ReliableSizeError("reliable_size must not increase")
+
+        self._buffer_reliable_size = reliable_size
+        self._reset_at_state = ResetStreamAtState.PENDING
+
+        if self._buffer_stop > reliable_size:
+            old_stop = self._buffer_stop
+            self._buffer_stop = reliable_size
+            self._pending.subtract(reliable_size, old_stop)
+
+        # Prevent any more data from being sent or re-sent.
+        if self.next_offset >= reliable_size:
+            self.buffer_is_empty = True
 
     def write(self, data: bytes, end_stream: bool = False) -> None:
         """
@@ -329,6 +405,7 @@ class QuicStreamSender:
         """
         assert self._buffer_fin is None, "cannot call write() after FIN"
         assert self._reset_error_code is None, "cannot call write() after reset()"
+        assert self._reset_at_error_code is None, "cannot call write() after reset_at()"
         size = len(data)
 
         if size:

@@ -598,6 +598,14 @@ class QuicResetStreamFrame:
 
 
 @dataclass
+class QuicResetStreamAtFrame:
+    error_code: int
+    final_size: int
+    stream_id: int
+    reliable_size: int
+
+
+@dataclass
 class QuicStopSendingFrame:
     error_code: int
     stream_id: int

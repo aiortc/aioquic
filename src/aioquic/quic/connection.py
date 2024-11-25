@@ -105,6 +105,7 @@ PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
 PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
 PING_FRAME_CAPACITY = 1
 RESET_STREAM_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE
+RESET_STREAM_AT_FRAME_CAPACITY = 1 + 4 * UINT_VAR_MAX_SIZE
 RETIRE_CONNECTION_ID_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 STOP_SENDING_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE
 STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
@@ -3124,6 +3125,11 @@ class QuicConnection:
                         # STOP_SENDING
                         self._write_stop_sending_frame(builder=builder, stream=stream)
 
+                    if stream.sender.reset_at_pending:
+                        # RESET_STREAM_AT
+                        self._write_reset_stream_at_frame(
+                            builder=builder, stream=stream)
+
                     if stream.sender.reset_pending:
                         # RESET_STREAM
                         self._write_reset_stream_frame(builder=builder, stream=stream)
@@ -3475,6 +3481,23 @@ class QuicConnection:
                     stream_id=frame.stream_id,
                 )
             )
+
+    def _write_reset_stream_at_frame(
+        self,
+        builder: QuicPacketBuilder,
+        stream: QuicStream,
+    ) -> None:
+        buf = builder.start_frame(
+            frame_type=QuicFrameType.RESET_STREAM_AT,
+            capacity=RESET_STREAM_AT_FRAME_CAPACITY,
+            handler=stream.sender.on_reset_at_delivery,
+        )
+        frame = stream.sender.get_reset_at_frame()
+        buf.push_uint_var(frame.stream_id)
+        buf.push_uint_var(frame.error_code)
+        buf.push_uint_var(frame.final_size)
+        buf.push_uint_var(frame.reliable_size)
+        # TODO: log frame
 
     def _write_retire_connection_id_frame(
         self, builder: QuicPacketBuilder, sequence_number: int
