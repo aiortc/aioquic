@@ -17,11 +17,11 @@ class FinalSizeError(Exception):
     pass
 
 
-class ReliableSizeError(Exception):
+class StreamFinishedError(Exception):
     pass
 
 
-class StreamFinishedError(Exception):
+class StreamStateError(Exception):
     pass
 
 
@@ -53,6 +53,9 @@ class QuicStreamReceiver:
         self._ranges = RangeSet()
         self._stream_id = stream_id
         self._stop_error_code: Optional[int] = None
+        # set when a RESET_STREAM_AT is received and the stream is not finished
+        self._pending_reset_event: Optional[events.StreamReset] = None
+        self._reliable_size: Optional[int] = None
 
     def get_stop_frame(self) -> QuicStopSendingFrame:
         self.stop_pending = False
@@ -60,6 +63,18 @@ class QuicStreamReceiver:
             error_code=self._stop_error_code,
             stream_id=self._stream_id,
         )
+
+    def get_pending_reset_event(self) -> Optional[events.StreamReset]:
+        if (self._reliable_size is not None
+            and not self.is_finished
+            and self._buffer_start >= self._reliable_size
+            ):
+            # we are done receiving
+            self.is_finished = True
+            event = self._pending_reset_event
+            self._pending_reset_event = None
+            return event
+        return None
 
     def starting_offset(self) -> int:
         return self._buffer_start
@@ -137,7 +152,42 @@ class QuicStreamReceiver:
         # we are done receiving
         self._final_size = final_size
         self.is_finished = True
+        self._pending_reset_event = None
         return events.StreamReset(error_code=error_code, stream_id=self._stream_id)
+
+    def handle_reset_at(
+        self, final_size: int,
+        error_code: int = QuicErrorCode.NO_ERROR,
+        reliable_size: int = 0,
+    ) -> Optional[events.StreamReset]:
+        """Handle an abrupt termination of the receiving part of the QUIC stream
+        at a specific offset.
+        """
+        if self._final_size is not None and final_size != self._final_size:
+            raise FinalSizeError("Cannot change final size")
+        if reliable_size > final_size:
+            raise StreamStateError("reliable size must not exceed final size")
+        if (self._pending_reset_event is not None
+            and self._pending_reset_event.error_code != error_code
+            ):
+            raise StreamStateError("error_code must not change")
+
+        if self._reliable_size is not None and reliable_size > self._reliable_size:
+            # ignore the frame if the reliable size is increasing
+            return None
+
+        self._final_size = final_size
+        self._reliable_size = reliable_size
+
+        event = events.StreamReset(
+            error_code=error_code, stream_id=self._stream_id)
+        if self._buffer_start >= reliable_size:
+            # we are done receiving
+            self.is_finished = True
+            return event
+
+        self._pending_reset_event = event
+        return None
 
     def on_stop_sending_delivery(self, delivery: QuicDeliveryState) -> None:
         """
@@ -385,7 +435,7 @@ class QuicStreamSender:
         if (self._buffer_reliable_size is not None
             and self._buffer_reliable_size > reliable_size
             ):
-            raise ReliableSizeError("reliable_size must not increase")
+            raise StreamStateError("reliable_size must not increase")
 
         self._buffer_reliable_size = reliable_size
         self._reset_at_state = ResetStreamAtState.PENDING

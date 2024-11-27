@@ -56,7 +56,7 @@ from .packet import (
 )
 from .packet_builder import QuicDeliveryState, QuicPacketBuilder, QuicPacketBuilderStop
 from .recovery import QuicPacketRecovery, QuicPacketSpace
-from .stream import FinalSizeError, QuicStream, StreamFinishedError
+from .stream import FinalSizeError, QuicStream, StreamFinishedError, StreamStateError
 
 logger = logging.getLogger("quic")
 
@@ -451,6 +451,7 @@ class QuicConnection:
             0x1C: (self._handle_connection_close_frame, EPOCHS("IH01")),
             0x1D: (self._handle_connection_close_frame, EPOCHS("01")),
             0x1E: (self._handle_handshake_done_frame, EPOCHS("1")),
+            0x24: (self._handle_reset_stream_frame, EPOCHS("01")),
             0x30: (self._handle_datagram_frame, EPOCHS("01")),
             0x31: (self._handle_datagram_frame, EPOCHS("01")),
         }
@@ -2089,6 +2090,10 @@ class QuicConnection:
         stream_id = buf.pull_uint_var()
         error_code = buf.pull_uint_var()
         final_size = buf.pull_uint_var()
+        if frame_type == QuicFrameType.RESET_STREAM_AT:
+            reliable_size = buf.pull_uint_var()
+        else:
+            reliable_size = None
 
         # log frame
         if self._quic_logger is not None:
@@ -2125,12 +2130,24 @@ class QuicConnection:
             final_size,
         )
         try:
-            event = stream.receiver.handle_reset(
-                error_code=error_code, final_size=final_size
-            )
+            if frame_type == QuicFrameType.RESET_STREAM:
+                event = stream.receiver.handle_reset(
+                    error_code=error_code, final_size=final_size
+                )
+            else:
+                assert frame_type == QuicFrameType.RESET_STREAM_AT
+                event = stream.receiver.handle_reset_at(
+                    error_code=error_code, final_size=final_size, reliable_size=reliable_size
+                )
         except FinalSizeError as exc:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.FINAL_SIZE_ERROR,
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
+        except StreamStateError as exc:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.STREAM_STATE_ERROR,
                 frame_type=frame_type,
                 reason_phrase=str(exc),
             )
@@ -2269,8 +2286,19 @@ class QuicConnection:
                 frame_type=frame_type,
                 reason_phrase=str(exc),
             )
+        except StreamStateError as exc:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.STREAM_STATE_ERROR,
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
         if event is not None:
             self._events.append(event)
+
+        pending_reset_event = stream.receiver.get_pending_reset_event()
+        if pending_reset_event is not None:
+            self._events.append(pending_reset_event)
+
         self._local_max_data.used += newly_received
 
     def _handle_stream_data_blocked_frame(
