@@ -2916,6 +2916,7 @@ class QuicConnection:
                 chosen_version=self._version,
                 available_versions=self._configuration.supported_versions,
             ),
+            reliable_stream_reset=self._configuration.reliable_stream_reset,
         )
         if not self._is_client:
             quic_transport_parameters.original_destination_connection_id = (

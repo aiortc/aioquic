@@ -112,6 +112,7 @@ class QuicConfiguration:
     original_version: Optional[int] = None
     private_key: Any = None
     quantum_readiness_test: bool = False
+    reliable_stream_reset: bool = False
     supported_versions: List[int] = field(
         default_factory=lambda: [
             QuicProtocolVersion.VERSION_1,
