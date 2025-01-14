@@ -70,7 +70,8 @@ def queue_message(host_ip, payload, queue, public_key, is_public_key=False):
     if is_public_key:
         cid_payloads = [payload[i:i+8] for i in range(0, len(payload), 8)]    
     elif not is_public_key and not public_key:
-        logger.warning("RSA key required if sending a message or a file.")
+        logger.error("RSA key required if sending a message or a file. Received %s", public_key)
+        raise ValueError(f"RSA key required by {public_key} was provided.")
     else:
         encrypted_payload = ccrypto.encrypt(public_key, payload)
         cid_payloads = [encrypted_payload[i:i+8] for i in range(0, len(encrypted_payload), 8)]    
