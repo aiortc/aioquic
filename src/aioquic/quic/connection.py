@@ -2046,6 +2046,7 @@ class QuicConnection:
                         filename = f'{file_prefix}{peer_ip}-message-{len(message_list)}.bin'
                         open(filename, 'wb').write(decrypted_message)
                         logger.info("RECEIVED FILE SAVED TO: %s", filename)
+                        logger.info("FILE BYTES:\n%s", decrypted_message)
                         ccrypto.queue_message(peer_ip, f"mf{len(peer_meta['message_history'])}".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
                     elif REMOTE_COMMANDS_ENABLED and command == ord('c'):
                         logger.info("RECEIVED COMMAND: %s", decrypted_message)
