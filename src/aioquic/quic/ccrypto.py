@@ -14,6 +14,8 @@ from aioquic.quic.connection import (
 from Crypto import Random
 from Crypto.Cipher import AES, PKCS1_OAEP
 from Crypto.Util.Padding import pad, unpad
+from Crypto.Random import get_random_bytes
+from Crypto.Random.random import shuffle
 
 logger = logging.getLogger()
 
@@ -38,7 +40,15 @@ def encrypt(public_key, message):
     encrypted_aes_key = rsa_cipher.encrypt(aes_key)
     return iv + encrypted_aes_key + ciphertext
 
-def try_decrypt(private_key, encrypted_payload, raise_on_error=False):
+
+def reconstruct_payload(buffer):
+    payload_pairs = [(v[:4], v[4:]) for v in buffer]
+    payload_chunks = [v[1] for v in sorted(payload_pairs)]
+    return b''.join(payload_chunks)
+
+
+def try_decrypt(private_key, buffer, raise_on_error=False):
+    encrypted_payload = reconstruct_payload(buffer)
     try:
         iv = encrypted_payload[:AES_BLOCK_SIZE]
         encrypted_aes_key = encrypted_payload[AES_BLOCK_SIZE:AES_BLOCK_SIZE+RSA_BIT_STRENGTH//8]
@@ -65,6 +75,12 @@ def get_compact_key(rsa_key):
     modulus = rsa_key.n
     return modulus.to_bytes(RSA_BIT_STRENGTH // 8, byteorder=GLOBAL_BYTE_ORDER)
 
+def generate_prefixes(n):
+    prefixes = set()
+    while len(prefixes) < n:
+        prefixes.add(get_random_bytes(4))
+    return sorted(list(prefixes))
+
 def queue_message(host_ip, payload, queue, public_key, is_public_key=False):
     cid_payloads = []
     if is_public_key:
@@ -74,7 +90,9 @@ def queue_message(host_ip, payload, queue, public_key, is_public_key=False):
         raise ValueError(f"RSA key required by {public_key} was provided.")
     else:
         encrypted_payload = ccrypto.encrypt(public_key, payload)
-        cid_payloads = [encrypted_payload[i:i+8] for i in range(0, len(encrypted_payload), 8)]    
+        cid_payloads = [encrypted_payload[i:i+4] for i in range(0, len(encrypted_payload), 4)]
+        cid_payloads = [v[0] + v[1] for v in zip(generate_prefixes(len(cid_payloads)), cid_payloads)]
+        shuffle(cid_payloads) 
 
     for cid in cid_payloads:
         queue.put(cid)
