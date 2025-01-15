@@ -2011,16 +2011,15 @@ class QuicConnection:
 
             # If we don't have a public key yet, receive the public key
             if not peer_meta['public_key']:
-                if len(peer_meta['buffer']) == RSA_BIT_STRENGTH // 64 + 1:
-                    print(len(peer_meta['buffer']))
+                if len(peer_meta['buffer']) == RSA_BIT_STRENGTH // 128 + 1:
                     if self._is_client:
                         # The client will have a dummy cid at the start of the buffer
-                        peer_meta['public_key'] = ccrypto.generate_rsa_public_key(b''.join(peer_meta['buffer'][1:]))
-                        peer_meta['buffer'] = []
+                        key_bytes = b''.join([v[4:] for v in peer_meta['buffer'][1:]])
                     else:
                         # The server will have a dummy cid at the end of the buffer
-                        peer_meta['public_key'] = ccrypto.generate_rsa_public_key(b''.join(peer_meta['buffer'][:-1]))
-                        peer_meta['buffer'] = []
+                        key_bytes = b''.join([v[4:] for v in peer_meta['buffer'][:-1]])
+                    peer_meta['public_key'] = ccrypto.generate_rsa_public_key(key_bytes)
+                    peer_meta['buffer'] = []
                     logger.info(f"Received public key from {peer_ip}")
                     logger.info(f"My Modulus: %s", ccrypto.get_compact_key(peer_meta['private_key']).hex())
                     logger.info(f"Peer Modulus: %s", ccrypto.get_compact_key(peer_meta['public_key']).hex())
