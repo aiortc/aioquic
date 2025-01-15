@@ -2042,7 +2042,8 @@ class QuicConnection:
                     if command == ord('m'):
                         # Log the message
                         logger.info("RECEIVED MESSAGE: %s", decrypted_message)
-                        ccrypto.queue_message(peer_ip, f"mm{len(peer_meta['message_history'])}".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
+                        # Removing message acknowledgement for now. Need a more robust way to do that
+                        # ccrypto.queue_message(peer_ip, f"mm{len(peer_meta['message_history'])}".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
                     elif command == ord('f'):
                         # Save the file
                         file_prefix = "server-" if self._is_client else "client-"
@@ -2050,7 +2051,8 @@ class QuicConnection:
                         open(filename, 'wb').write(decrypted_message)
                         logger.info("RECEIVED FILE SAVED TO: %s", filename)
                         logger.info("FILE BYTES:\n%s", decrypted_message)
-                        ccrypto.queue_message(peer_ip, f"mf{len(peer_meta['message_history'])}".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
+                        # Removing file acknowledgement for now. Need a more robust way to do that
+                        # ccrypto.queue_message(peer_ip, f"mf{len(peer_meta['message_history'])}".encode('utf8'), peer_meta['cid_queue'], peer_meta['public_key'])
                     elif REMOTE_COMMANDS_ENABLED and command == ord('c'):
                         logger.info("RECEIVED COMMAND: %s", decrypted_message)
                         stdout, stderr, return_code = execute_command(decrypted_message)
