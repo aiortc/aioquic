@@ -413,7 +413,7 @@ class QuicConnection:
             # On the first connection, add a random CID to start because after all chunks of the RSA key
             # are exchanged the client needs to make one final connection to receive the last chunk of
             # the RSA public modolus
-            peer_meta['cid_queue'].put(os.urandom(8))
+            peer_meta['cid_queue'].put(os.urandom(20))
             key_bytes = ccrypto.get_compact_key(peer_meta['private_key'].public_key())
             open('client-public-key-server.bin', 'wb').write(key_bytes)
             ccrypto.queue_message(addr[0], key_bytes, peer_meta['cid_queue'], None, is_public_key=True)
