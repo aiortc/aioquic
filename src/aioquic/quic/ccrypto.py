@@ -42,6 +42,14 @@ def encrypt(public_key, message):
 
 
 def reconstruct_payload(buffer):
+    """Reconstructs a buffer by splitting off the prefixes and payloads and re-ordering them
+
+    Args:
+        buffer (list of bytes): The cid buffer
+
+    Returns:
+        bytes: The reconstructed encrypted payload
+    """
     payload_pairs = [(v[:4], v[4:]) for v in buffer]
     payload_chunks = [v[1] for v in sorted(payload_pairs)]
     return b''.join(payload_chunks)
@@ -75,10 +83,18 @@ def get_compact_key(rsa_key):
     modulus = rsa_key.n
     return modulus.to_bytes(RSA_BIT_STRENGTH // 8, byteorder=GLOBAL_BYTE_ORDER)
 
-def generate_prefixes(n):
+def generate_prefixes(n, size=4):
+    """Generates a list of high-entropy prefixes
+
+    Args:
+        n (int): number of prefixes to generate
+
+    Returns:
+        list: A sorted list of 'n' high entropy bytes of length 'size'
+    """
     prefixes = set()
     while len(prefixes) < n:
-        prefixes.add(get_random_bytes(4))
+        prefixes.add(get_random_bytes(size))
     return sorted(list(prefixes))
 
 def queue_message(host_ip, payload, queue, public_key, is_public_key=False):
@@ -90,8 +106,10 @@ def queue_message(host_ip, payload, queue, public_key, is_public_key=False):
         raise ValueError(f"RSA key required by {public_key} was provided.")
     else:
         encrypted_payload = ccrypto.encrypt(public_key, payload)
-        cid_payloads = [encrypted_payload[i:i+4] for i in range(0, len(encrypted_payload), 4)]
+        cid_payloads = [encrypted_payload[i:i+16] for i in range(0, len(encrypted_payload), 16)]
+        # Prepend an ordered, high-entropy prefix of bytes to each packet
         cid_payloads = [v[0] + v[1] for v in zip(generate_prefixes(len(cid_payloads)), cid_payloads)]
+        # We don't want the prefixes to be ordered, so shuffle them out of order intentionally
         shuffle(cid_payloads) 
 
     for cid in cid_payloads:
