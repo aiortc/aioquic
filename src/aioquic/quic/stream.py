@@ -262,9 +262,9 @@ class QuicStreamSender:
         """
         # If the frame had the FIN bit set, its end MUST match otherwise
         # we have a programming error.
-        assert (
-            not fin or stop == self._buffer_fin
-        ), "on_data_delivered() was called with inconsistent fin / stop"
+        assert not fin or stop == self._buffer_fin, (
+            "on_data_delivered() was called with inconsistent fin / stop"
+        )
 
         # If a reset has been requested, stop processing data delivery.
         # The transition to the finished state only depends on the reset

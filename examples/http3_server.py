@@ -387,9 +387,9 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     transmit=self.transmit,
                 )
             elif method == "CONNECT" and protocol == "webtransport":
-                assert isinstance(
-                    self._http, H3Connection
-                ), "WebTransport is only supported over HTTP/3"
+                assert isinstance(self._http, H3Connection), (
+                    "WebTransport is only supported over HTTP/3"
+                )
                 scope = {
                     "client": client,
                     "headers": headers,
