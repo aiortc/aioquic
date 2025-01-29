@@ -263,8 +263,7 @@ def verify_certificate(
             else:
                 patterns_repr = ", ".join(repr(pattern) for pattern in patterns)
                 errmsg = (
-                    f"hostname {server_name!r} doesn't match "
-                    f"either of {patterns_repr}"
+                    f"hostname {server_name!r} doesn't match either of {patterns_repr}"
                 )
 
             raise AlertBadCertificate(errmsg) from exc

@@ -64,5 +64,8 @@ select = [
     "I",  # isort
 ]
 
+[tool.ruff.lint.isort]
+known-third-party = ["aioquic"]
+
 [tool.setuptools.dynamic]
 version = {attr = "aioquic.__version__"}

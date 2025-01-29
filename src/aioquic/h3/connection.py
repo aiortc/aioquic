@@ -4,7 +4,6 @@ from enum import Enum, IntEnum
 from typing import Dict, FrozenSet, List, Optional, Set
 
 import pylsqpack
-
 from aioquic.buffer import UINT_VAR_MAX_SIZE, Buffer, BufferReadError, encode_uint_var
 from aioquic.h3.events import (
     DatagramReceived,
