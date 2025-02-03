@@ -49,7 +49,7 @@ async def main(
     session_ticket_store: SessionTicketStore,
     retry: bool,
 ) -> None:
-    await serve(
+    async with serve(
         host,
         port,
         configuration=configuration,
@@ -57,8 +57,8 @@ async def main(
         session_ticket_fetcher=session_ticket_store.pop,
         session_ticket_handler=session_ticket_store.add,
         retry=retry,
-    )
-    await asyncio.Future()
+    ):
+        await asyncio.Future()
 
 
 if __name__ == "__main__":
