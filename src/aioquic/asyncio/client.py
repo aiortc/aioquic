@@ -1,7 +1,7 @@
 import asyncio
 import socket
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Callable, Optional, cast
+from typing import AsyncGenerator, Callable, Optional, Tuple, Union, cast
 
 from ..quic.configuration import QuicConfiguration
 from ..quic.connection import QuicConnection, QuicTokenHandler
@@ -23,6 +23,7 @@ async def connect(
     token_handler: Optional[QuicTokenHandler] = None,
     wait_connected: bool = True,
     local_port: int = 0,
+    dual_stack: bool = socket.has_dualstack_ipv6(),
 ) -> AsyncGenerator[QuicConnectionProtocol, None]:
     """
     Connect to a QUIC server at the given `host` and `port`.
@@ -50,15 +51,10 @@ async def connect(
       you can set it to `False` if you want to immediately start sending data using
       0-RTT.
     * ``local_port`` is the UDP port number that this client wants to bind.
+    * ``dual_stack`` is a flag which enabled or disabled using IPv4/IPv6 Dual-Stack.
+      The default value is platform specific and similar to socket.has_dualstack_ipv6()
     """
     loop = asyncio.get_event_loop()
-    local_host = "::"
-
-    # lookup remote address
-    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
-    addr = infos[0][4]
-    if len(addr) == 2:
-        addr = ("::ffff:" + addr[0], addr[1], 0, 0)
 
     # prepare QUIC connection
     if configuration is None:
@@ -71,16 +67,40 @@ async def connect(
         token_handler=token_handler,
     )
 
-    # explicitly enable IPv4/IPv6 dual stack
-    sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    # Use AI_ADDRCONFIG on platforms which doesn't support dual-stack
+    flags = 0
+    if not dual_stack:
+        flags = socket.AI_ADDRCONFIG
+
+    # lookup remote address
+    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM, flags=flags)
+
+    local_tuple: Union[Tuple[str, int], Tuple[str, int, int, int]]
+    addr = infos[0][4]
+    # addr is 2-tuple for AF_INET and 4-tuple for AF_INET6
+    if dual_stack and len(addr) == 2:
+        addr = ("::ffff:" + addr[0], addr[1], 0, 0)
+        local_tuple = ("::", local_port, 0, 0)
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    elif len(addr) == 2:
+        local_tuple = ("0.0.0.0", local_port)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    elif len(addr) == 4:
+        local_tuple = ("::", local_port, 0, 0)
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    else:
+        raise Exception("Unsupported response from getaddrinfo")
+
     completed = False
     try:
-        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-        sock.bind((local_host, local_port, 0, 0))
+        if dual_stack:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        sock.bind(local_tuple)
         completed = True
     finally:
         if not completed:
             sock.close()
+
     # connect
     transport, protocol = await loop.create_datagram_endpoint(
         lambda: create_protocol(connection, stream_handler=stream_handler),
