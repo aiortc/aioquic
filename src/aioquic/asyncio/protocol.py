@@ -13,7 +13,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
     def __init__(
         self, quic: QuicConnection, stream_handler: Optional[QuicStreamHandler] = None
     ):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         self._closed = asyncio.Event()
         self._connected = False
