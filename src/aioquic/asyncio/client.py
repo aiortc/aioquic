@@ -51,7 +51,7 @@ async def connect(
       0-RTT.
     * ``local_port`` is the UDP port number that this client wants to bind.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     local_host = "::"
 
     # lookup remote address

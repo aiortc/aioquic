@@ -348,7 +348,7 @@ async def test_nat_rebinding(server: Server, configuration: QuicConfiguration):
 
         # replace transport
         protocol._transport.close()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.create_datagram_endpoint(lambda: protocol, local_addr=("::", 0))
 
         # cause more traffic
@@ -379,7 +379,7 @@ async def test_address_mobility(server: Server, configuration: QuicConfiguration
 
         # replace transport
         protocol._transport.close()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.create_datagram_endpoint(lambda: protocol, local_addr=("::", 0))
 
         # change connection ID

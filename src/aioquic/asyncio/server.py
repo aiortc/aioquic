@@ -32,7 +32,7 @@ class QuicServer(asyncio.DatagramProtocol):
     ) -> None:
         self._configuration = configuration
         self._create_protocol = create_protocol
-        self._loop = asyncio.get_event_loop()
+        self._loop = asyncio.get_running_loop()
         self._protocols: Dict[bytes, QuicConnectionProtocol] = {}
         self._session_ticket_fetcher = session_ticket_fetcher
         self._session_ticket_handler = session_ticket_handler
@@ -199,7 +199,7 @@ async def serve(
       and a :class:`asyncio.StreamWriter`.
     """
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     _, protocol = await loop.create_datagram_endpoint(
         lambda: QuicServer(
