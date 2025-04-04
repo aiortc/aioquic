@@ -70,7 +70,7 @@ class QuicConfiguration:
     The :class:`~aioquic.quic.logger.QuicLogger` instance to log events to.
     """
 
-    secrets_log_file: TextIO = None
+    secrets_log_file: Optional[TextIO] = None
     """
     A file-like object in which to log traffic secrets.
 
