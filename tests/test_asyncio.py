@@ -3,6 +3,7 @@ import binascii
 import contextlib
 import random
 import socket
+from typing import AsyncGenerator, Optional
 from unittest import TestCase, skipIf
 from unittest.mock import patch
 
@@ -72,7 +73,7 @@ class HighLevelTest(TestCase):
         configuration=None,
         request=b"ping",
         **kwargs,
-    ):
+    ) -> bytes:
         if host is None:
             host = self.server_host
         if configuration is None:
@@ -100,7 +101,9 @@ class HighLevelTest(TestCase):
         return response
 
     @contextlib.asynccontextmanager
-    async def run_server(self, configuration=None, host="::", **kwargs):
+    async def run_server(
+        self, configuration: Optional[QuicConfiguration] = None, host="::", **kwargs
+    ) -> AsyncGenerator[int, None]:
         if configuration is None:
             configuration = QuicConfiguration(is_client=False)
             configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
@@ -117,13 +120,13 @@ class HighLevelTest(TestCase):
             server.close()
 
     @asynctest
-    async def test_connect_and_serve(self):
+    async def test_connect_and_serve(self) -> None:
         async with self.run_server() as server_port:
             response = await self.run_client(port=server_port)
             self.assertEqual(response, b"gnip")
 
     @asynctest
-    async def test_connect_and_serve_ipv4(self):
+    async def test_connect_and_serve_ipv4(self) -> None:
         certificate, private_key = generate_rsa_certificate(
             alternative_names=["localhost", "127.0.0.1"], common_name="localhost"
         )
@@ -145,7 +148,7 @@ class HighLevelTest(TestCase):
 
     @skipIf("ipv6" in SKIP_TESTS, "Skipping IPv6 tests")
     @asynctest
-    async def test_connect_and_serve_ipv6(self):
+    async def test_connect_and_serve_ipv6(self) -> None:
         certificate, private_key = generate_rsa_certificate(
             alternative_names=["localhost", "::1"], common_name="localhost"
         )
@@ -165,7 +168,9 @@ class HighLevelTest(TestCase):
             )
             self.assertEqual(response, b"gnip")
 
-    async def _test_connect_and_serve_with_certificate(self, certificate, private_key):
+    async def _test_connect_and_serve_with_certificate(
+        self, certificate, private_key
+    ) -> None:
         async with self.run_server(
             configuration=QuicConfiguration(
                 certificate=certificate,
@@ -250,7 +255,7 @@ class HighLevelTest(TestCase):
     @skipIf("loss" in SKIP_TESTS, "Skipping loss tests")
     @patch("socket.socket.sendto", new_callable=lambda: sendto_with_loss)
     @asynctest
-    async def test_connect_and_serve_with_packet_loss(self, mock_sendto):
+    async def test_connect_and_serve_with_packet_loss(self, mock_sendto) -> None:
         """
         This test ensures handshake success and stream data is successfully sent
         and received in the presence of packet loss (randomized 25% in each direction).
@@ -346,7 +351,7 @@ class HighLevelTest(TestCase):
 
     @patch("aioquic.quic.retry.QuicRetryTokenHandler.validate_token")
     @asynctest
-    async def test_connect_and_serve_with_retry_bad_token(self, mock_validate):
+    async def test_connect_and_serve_with_retry_bad_token(self, mock_validate) -> None:
         mock_validate.side_effect = ValueError("Decryption failed.")
 
         async with self.run_server(retry=True) as server_port:
@@ -357,7 +362,7 @@ class HighLevelTest(TestCase):
                 )
 
     @asynctest
-    async def test_connect_and_serve_with_version_negotiation(self):
+    async def test_connect_and_serve_with_version_negotiation(self) -> None:
         async with self.run_server() as server_port:
             # force version negotiation
             configuration = QuicConfiguration(is_client=True, quic_logger=QuicLogger())
@@ -369,7 +374,7 @@ class HighLevelTest(TestCase):
             self.assertEqual(response, b"gnip")
 
     @asynctest
-    async def test_connect_timeout(self):
+    async def test_connect_timeout(self) -> None:
         with self.assertRaises(ConnectionError):
             await self.run_client(
                 port=self.bogus_port,
@@ -377,7 +382,7 @@ class HighLevelTest(TestCase):
             )
 
     @asynctest
-    async def test_connect_timeout_no_wait_connected(self):
+    async def test_connect_timeout_no_wait_connected(self) -> None:
         with self.assertRaises(ConnectionError):
             configuration = QuicConfiguration(is_client=True, idle_timeout=5)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
@@ -390,18 +395,18 @@ class HighLevelTest(TestCase):
                 await client.ping()
 
     @asynctest
-    async def test_connect_local_port(self):
+    async def test_connect_local_port(self) -> None:
         async with self.run_server() as server_port:
             response = await self.run_client(local_port=3456, port=server_port)
             self.assertEqual(response, b"gnip")
 
     @asynctest
-    async def test_connect_local_port_bind(self):
+    async def test_connect_local_port_bind(self) -> None:
         with self.assertRaises(OverflowError):
             await self.run_client(local_port=-1, port=self.bogus_port)
 
     @asynctest
-    async def test_change_connection_id(self):
+    async def test_change_connection_id(self) -> None:
         async with self.run_server() as server_port:
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
@@ -413,7 +418,7 @@ class HighLevelTest(TestCase):
                 await client.ping()
 
     @asynctest
-    async def test_key_update(self):
+    async def test_key_update(self) -> None:
         async with self.run_server() as server_port:
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
@@ -425,7 +430,7 @@ class HighLevelTest(TestCase):
                 await client.ping()
 
     @asynctest
-    async def test_ping(self):
+    async def test_ping(self) -> None:
         async with self.run_server() as server_port:
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
@@ -436,7 +441,7 @@ class HighLevelTest(TestCase):
                 await client.ping()
 
     @asynctest
-    async def test_ping_parallel(self):
+    async def test_ping_parallel(self) -> None:
         async with self.run_server() as server_port:
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
@@ -447,7 +452,7 @@ class HighLevelTest(TestCase):
                 await asyncio.gather(*coros)
 
     @asynctest
-    async def test_server_receives_garbage(self):
+    async def test_server_receives_garbage(self) -> None:
         configuration = QuicConfiguration(is_client=False)
         configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
         server = await serve(
@@ -459,7 +464,7 @@ class HighLevelTest(TestCase):
         server.close()
 
     @asynctest
-    async def test_combined_key(self):
+    async def test_combined_key(self) -> None:
         config1 = QuicConfiguration()
         config2 = QuicConfiguration()
         config1.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
