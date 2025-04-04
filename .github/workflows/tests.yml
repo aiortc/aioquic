@@ -139,10 +139,10 @@ jobs:
           CIBW_BEFORE_BUILD_WINDOWS: python scripts\fetch-vendor.py C:\cibw\vendor
           CIBW_ENVIRONMENT: AIOQUIC_SKIP_TESTS=ipv6,loss CFLAGS=-I/tmp/vendor/include LDFLAGS=-L/tmp/vendor/lib
           CIBW_ENVIRONMENT_WINDOWS: AIOQUIC_SKIP_TESTS=ipv6,loss INCLUDE=C:\\cibw\\vendor\\include LIB=C:\\cibw\\vendor\\lib
-          CIBW_SKIP: '*-musllinux* pp*'
+          CIBW_SKIP: 'pp*'
           CIBW_TEST_COMMAND: python -m unittest discover -t {project} -s {project}/tests
           # There are no binary wheels for cryptography on 32-bit platforms.
-          CIBW_TEST_SKIP: "*-{manylinux_i686,win32}"
+          CIBW_TEST_SKIP: "*-{manylinux_i686,musllinux_i686,win32}"
         run: |
           pip install cibuildwheel
           cibuildwheel --output-dir dist
