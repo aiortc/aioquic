@@ -45,7 +45,10 @@ class QuicServer(asyncio.DatagramProtocol):
         else:
             self._retry = None
 
-    def close(self):
+    def close(self) -> None:
+        """
+        Close any ongoing connections and stop listening.
+        """
         for protocol in set(self._protocols.values()):
             protocol.close()
         self._protocols.clear()
