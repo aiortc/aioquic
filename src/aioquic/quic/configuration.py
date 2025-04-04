@@ -122,8 +122,8 @@ class QuicConfiguration:
 
     def load_cert_chain(
         self,
-        certfile: PathLike,
-        keyfile: Optional[PathLike] = None,
+        certfile: Union[str, PathLike],
+        keyfile: Optional[Union[str, PathLike]] = None,
         password: Optional[Union[bytes, str]] = None,
     ) -> None:
         """
