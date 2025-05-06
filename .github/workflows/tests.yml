@@ -127,6 +127,8 @@ jobs:
             arch: AMD64
           - os: windows-latest
             arch: x86
+          - os: windows-11-arm
+            arch: ARM64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
