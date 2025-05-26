@@ -109,7 +109,7 @@ async def ws(websocket):
 
 async def upload_file(request):
     # These imports are fine here as they are specific to this function's logic
-    import cgi
+    # import cgi # No longer needed
     import os
     import time
     import uuid
@@ -117,23 +117,16 @@ async def upload_file(request):
     from starlette.responses import PlainTextResponse # ensure PlainTextResponse is available
     from starlette.exceptions import HTTPException # ensure HTTPException is available
 
-    filename_to_save = None
-    content_disposition_header = request.headers.get("content-disposition")
+    # Always generate a unique filename
+    generated_filename = f"upload_{int(time.time())}_{uuid.uuid4().hex[:8]}.dat"
+    # Sanitize generated filename (good practice)
+    sanitized_filename = os.path.basename(generated_filename)
 
-    if content_disposition_header:
-        _, params = cgi.parse_header(content_disposition_header)
-        if "filename" in params:
-            # It's important to sanitize this filename
-            filename_to_save = os.path.basename(params["filename"])
+    # Final safety check for empty filename after basename (e.g. if input was just "/" or similar)
+    if not sanitized_filename:
+        sanitized_filename = f"default_{int(time.time())}_{uuid.uuid4().hex[:8]}.dat"
 
-    if not filename_to_save: # If no header, no filename in header, or basename resulted in empty
-        filename_to_save = f"upload_{int(time.time())}_{uuid.uuid4().hex[:8]}.dat"
-    
-    # Final safety check for empty filename after basename (e.g. if input was just "/")
-    if not filename_to_save:
-        filename_to_save = f"default_{int(time.time())}_{uuid.uuid4().hex[:8]}.dat"
-
-    save_path = os.path.join(UPLOAD_DIR, filename_to_save)
+    save_path = os.path.join(UPLOAD_DIR, sanitized_filename)
     
     # Security check: ensure the final save_path is still within UPLOAD_DIR
     # This is a redundant check if os.path.basename() is used correctly and UPLOAD_DIR is absolute,
@@ -152,9 +145,11 @@ async def upload_file(request):
                 await f.write(chunk)
         
         file_size = os.path.getsize(save_path)
-        return PlainTextResponse(f"File '{filename_to_save}' uploaded successfully ({file_size} bytes).\nSaved at: {save_path}", status_code=200)
+        # Update response message to reflect generated filename
+        return PlainTextResponse(f"File uploaded successfully and saved as '{sanitized_filename}' ({file_size} bytes).\nSaved at: {save_path}", status_code=200)
     except Exception as e:
-        print(f"Error during file upload for {filename_to_save}: {e}")
+        # Use sanitized_filename in the error message for consistency
+        print(f"Error during file upload for {sanitized_filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
 
 

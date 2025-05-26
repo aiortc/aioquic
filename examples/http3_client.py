@@ -163,10 +163,10 @@ class HttpClient(QuicConnectionProtocol):
         # Keep 'headers: Optional[Dict] = None' for compatibility, but ignore it for now.
         
         # os module should be imported at the top of the file.
-        basename = os.path.basename(file_path)
+        # basename = os.path.basename(file_path) # This line is no longer needed for headers
         minimal_headers = {
-            "Content-Type": "application/octet-stream",
-            "Content-Disposition": f'attachment; filename="{basename}"'
+            # No "Content-Type"
+            # No "Content-Disposition"
         }
         # The 'headers' input parameter is deliberately ignored.
         
