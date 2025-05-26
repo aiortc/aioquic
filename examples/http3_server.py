@@ -329,6 +329,12 @@ class HttpServerProtocol(QuicConnectionProtocol):
         self._http: Optional[HttpConnection] = None
 
     def http_event_received(self, event: H3Event) -> None:
+        if isinstance(event, HeadersReceived):
+            # Log raw headers for diagnostic purposes
+            self._quic._logger.info(
+                f"Raw headers received on stream {event.stream_id}: {event.headers}"
+            )
+
         if isinstance(event, HeadersReceived) and event.stream_id not in self._handlers:
             authority = None
             headers = []

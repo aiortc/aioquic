@@ -160,12 +160,16 @@ class HttpClient(QuicConnectionProtocol):
         """
         Perform a POST request to upload a file.
         """
-        if headers is None:
-            headers = {}
-        headers["Content-Type"] = "application/octet-stream"
-
+        # Keep 'headers: Optional[Dict] = None' for compatibility, but ignore it for now.
+        
+        # Create a new, minimal dictionary for headers for this request
+        minimal_headers = {
+            "Content-Type": "application/octet-stream"
+        }
+        # The 'headers' input parameter is deliberately ignored to simplify.
+        
         request = HttpRequest(
-            method="POST", url=URL(url), content=b"", headers=headers
+            method="POST", url=URL(url), content=b"", headers=minimal_headers
         )
         return await self._request(request, file_path=file_path)
 

@@ -4,6 +4,8 @@
 
 import datetime
 import os
+import time
+import aiofiles
 from urllib.parse import urlencode
 
 from starlette.applications import Starlette
@@ -21,6 +23,10 @@ LOGS_PATH = os.path.join(STATIC_ROOT, "logs")
 QVIS_URL = "https://qvis.quictools.info/"
 
 templates = Jinja2Templates(directory=os.path.join(ROOT, "templates"))
+
+# Define UPLOAD_DIR and create it
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 async def homepage(request):
@@ -98,6 +104,38 @@ async def ws(websocket):
         pass
 
 
+async def upload_file(request):
+    import time # ensure time is available
+    import os # ensure os is available
+    import aiofiles # ensure aiofiles is available
+
+    # Define UPLOAD_DIR inside or ensure it's accessible (global preferred)
+    # For safety in subtask, redefine it or ensure it's passed/global
+    # This path assumes UPLOAD_DIR was defined globally as per instructions
+    CURRENT_ROOT = os.path.dirname(__file__)
+    UPLOAD_DIR_FUNC_SCOPE = os.path.join(CURRENT_ROOT, "uploads")
+    os.makedirs(UPLOAD_DIR_FUNC_SCOPE, exist_ok=True) # Ensure it exists
+
+    filename = f"upload_{int(time.time())}.dat"
+    save_path = os.path.join(UPLOAD_DIR_FUNC_SCOPE, filename)
+    
+    received_headers = dict(request.headers) # Get headers for debugging
+
+    try:
+        async with aiofiles.open(save_path, "wb") as f:
+            async for chunk in request.stream():
+                await f.write(chunk)
+        
+        # After successful write, try to get file size with standard os.stat
+        file_size = os.path.getsize(save_path)
+
+        return PlainTextResponse(f"File '{filename}' uploaded successfully ({file_size} bytes).\nSaved at: {save_path}\nReceived Headers: {received_headers}", status_code=200)
+    except Exception as e:
+        # Basic server-side logging
+        print(f"Error during file upload for {filename}: {e}") 
+        return PlainTextResponse(f"Error uploading file '{filename}': {str(e)}\nReceived Headers: {received_headers}", status_code=500)
+
+
 async def wt(scope: Scope, receive: Receive, send: Send) -> None:
     """
     WebTransport echo endpoint.
@@ -133,6 +171,7 @@ starlette = Starlette(
         Route("/{size:int}", padding),
         Route("/echo", echo, methods=["POST"]),
         Route("/logs", logs),
+        Route("/upload", upload_file, methods=["POST"]),
         WebSocketRoute("/ws", ws),
         Mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True)),
     ]
