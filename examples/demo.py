@@ -6,6 +6,8 @@ import datetime
 import os
 import time
 import aiofiles
+import cgi
+import uuid
 from urllib.parse import urlencode
 
 from starlette.applications import Starlette
@@ -25,8 +27,8 @@ QVIS_URL = "https://qvis.quictools.info/"
 
 templates = Jinja2Templates(directory=os.path.join(ROOT, "templates"))
 
-# Define UPLOAD_DIR and create it
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+# Define UPLOAD_DIR using environment variable AIOQUIC_UPLOAD_DIR or default, and create it
+UPLOAD_DIR = os.environ.get("AIOQUIC_UPLOAD_DIR", os.path.join(ROOT, "uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -105,55 +107,54 @@ async def ws(websocket):
         pass
 
 
-async def handle_dynamic_upload(request):
-    import os # ensure os is available
+async def upload_file(request):
+    # These imports are fine here as they are specific to this function's logic
+    import cgi
+    import os
+    import time
+    import uuid
     import aiofiles # ensure aiofiles is available
     from starlette.responses import PlainTextResponse # ensure PlainTextResponse is available
     from starlette.exceptions import HTTPException # ensure HTTPException is available
 
-    # UPLOAD_DIR should be globally defined and created
-    # For robustness in subtask, re-reference or ensure it's accessible
-    CURRENT_ROOT = os.path.dirname(__file__)
-    _UPLOAD_DIR = os.path.join(CURRENT_ROOT, "uploads") # Use a local alias to avoid modifying global UPLOAD_DIR if any scope issues
+    filename_to_save = None
+    content_disposition_header = request.headers.get("content-disposition")
 
-    filepath = request.path_params["filepath"]
+    if content_disposition_header:
+        _, params = cgi.parse_header(content_disposition_header)
+        if "filename" in params:
+            # It's important to sanitize this filename
+            filename_to_save = os.path.basename(params["filename"])
 
-    # Sanitize filepath: remove leading slashes to prevent absolute paths if filepath somehow captures them
-    # (though Starlette's :path usually doesn't include the leading slash of its capture)
-    filepath = filepath.lstrip("/")
+    if not filename_to_save: # If no header, no filename in header, or basename resulted in empty
+        filename_to_save = f"upload_{int(time.time())}_{uuid.uuid4().hex[:8]}.dat"
+    
+    # Final safety check for empty filename after basename (e.g. if input was just "/")
+    if not filename_to_save:
+        filename_to_save = f"default_{int(time.time())}_{uuid.uuid4().hex[:8]}.dat"
 
-    # Construct the full path
-    # os.path.join will correctly handle concatenating _UPLOAD_DIR and filepath
-    # even if filepath is multi-level (e.g., "some/folder/file.txt")
-    full_path = os.path.join(_UPLOAD_DIR, filepath)
+    save_path = os.path.join(UPLOAD_DIR, filename_to_save)
+    
+    # Security check: ensure the final save_path is still within UPLOAD_DIR
+    # This is a redundant check if os.path.basename() is used correctly and UPLOAD_DIR is absolute,
+    # but defense in depth is good.
+    abs_upload_dir = os.path.abspath(UPLOAD_DIR)
+    abs_save_path = os.path.abspath(save_path)
 
-    # Security Check: Normalize the path and ensure it's within UPLOAD_DIR
-    # os.path.abspath resolves '..' and other relative components
-    abs_upload_dir = os.path.abspath(_UPLOAD_DIR)
-    abs_full_path = os.path.abspath(full_path)
-
-    if os.path.commonprefix([abs_full_path, abs_upload_dir]) != abs_upload_dir:
-        # Path traversal attempt
-        raise HTTPException(status_code=403, detail="Forbidden: Path traversal attempt.")
+    if os.path.commonprefix([abs_save_path, abs_upload_dir]) != abs_upload_dir:
+        # This should ideally not be reached if basename and UPLOAD_DIR are handled correctly
+        print(f"Security alert: Attempted save path '{abs_save_path}' is outside UPLOAD_DIR '{abs_upload_dir}'")
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid save path.")
 
     try:
-        # Create parent directories if they don't exist
-        parent_dir = os.path.dirname(abs_full_path)
-        if not os.path.exists(parent_dir):
-            os.makedirs(parent_dir, exist_ok=True)
-        
-        async with aiofiles.open(abs_full_path, "wb") as f:
+        async with aiofiles.open(save_path, "wb") as f:
             async for chunk in request.stream():
                 await f.write(chunk)
         
-        file_size = os.path.getsize(abs_full_path)
-        return PlainTextResponse(f"File '{filepath}' uploaded successfully ({file_size} bytes).\nSaved at: {abs_full_path}", status_code=200)
-    except HTTPException:
-        raise # Re-raise HTTPException (like the 403)
+        file_size = os.path.getsize(save_path)
+        return PlainTextResponse(f"File '{filename_to_save}' uploaded successfully ({file_size} bytes).\nSaved at: {save_path}", status_code=200)
     except Exception as e:
-        # Log the exception on the server for debugging
-        print(f"Error during dynamic file upload for {filepath}: {e}")
-        # Return a generic server error to the client
+        print(f"Error during file upload for {filename_to_save}: {e}")
         raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
 
 
@@ -192,9 +193,8 @@ starlette = Starlette(
         Route("/{size:int}", padding),
         Route("/echo", echo, methods=["POST"]),
         Route("/logs", logs),
-        # The old /upload route is removed as per instructions
-        # Route("/upload", upload_file, methods=["POST"]), 
-        Route("/files/{filepath:path}", handle_dynamic_upload, methods=["POST"]),
+        Route("/upload", upload_file, methods=["POST"]),
+        # Route("/files/{filepath:path}", handle_dynamic_upload, methods=["POST"]), # Removed
         WebSocketRoute("/ws", ws),
         Mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True)),
     ]

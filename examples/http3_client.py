@@ -162,9 +162,12 @@ class HttpClient(QuicConnectionProtocol):
         """
         # Keep 'headers: Optional[Dict] = None' for compatibility, but ignore it for now.
         
-        # Create an empty dictionary for headers for this request,
-        # effectively removing the Content-Type header.
-        minimal_headers = {}
+        # os module should be imported at the top of the file.
+        basename = os.path.basename(file_path)
+        minimal_headers = {
+            "Content-Type": "application/octet-stream",
+            "Content-Disposition": f'attachment; filename="{basename}"'
+        }
         # The 'headers' input parameter is deliberately ignored.
         
         request = HttpRequest(
