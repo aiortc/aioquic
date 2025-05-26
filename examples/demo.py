@@ -15,6 +15,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.types import Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
+from starlette.exceptions import HTTPException
 
 ROOT = os.path.dirname(__file__)
 STATIC_ROOT = os.environ.get("STATIC_ROOT", os.path.join(ROOT, "htdocs"))
@@ -104,36 +105,56 @@ async def ws(websocket):
         pass
 
 
-async def upload_file(request):
-    import time # ensure time is available
+async def handle_dynamic_upload(request):
     import os # ensure os is available
     import aiofiles # ensure aiofiles is available
+    from starlette.responses import PlainTextResponse # ensure PlainTextResponse is available
+    from starlette.exceptions import HTTPException # ensure HTTPException is available
 
-    # Define UPLOAD_DIR inside or ensure it's accessible (global preferred)
-    # For safety in subtask, redefine it or ensure it's passed/global
-    # This path assumes UPLOAD_DIR was defined globally as per instructions
+    # UPLOAD_DIR should be globally defined and created
+    # For robustness in subtask, re-reference or ensure it's accessible
     CURRENT_ROOT = os.path.dirname(__file__)
-    UPLOAD_DIR_FUNC_SCOPE = os.path.join(CURRENT_ROOT, "uploads")
-    os.makedirs(UPLOAD_DIR_FUNC_SCOPE, exist_ok=True) # Ensure it exists
+    _UPLOAD_DIR = os.path.join(CURRENT_ROOT, "uploads") # Use a local alias to avoid modifying global UPLOAD_DIR if any scope issues
 
-    filename = f"upload_{int(time.time())}.dat"
-    save_path = os.path.join(UPLOAD_DIR_FUNC_SCOPE, filename)
-    
-    received_headers = dict(request.headers) # Get headers for debugging
+    filepath = request.path_params["filepath"]
+
+    # Sanitize filepath: remove leading slashes to prevent absolute paths if filepath somehow captures them
+    # (though Starlette's :path usually doesn't include the leading slash of its capture)
+    filepath = filepath.lstrip("/")
+
+    # Construct the full path
+    # os.path.join will correctly handle concatenating _UPLOAD_DIR and filepath
+    # even if filepath is multi-level (e.g., "some/folder/file.txt")
+    full_path = os.path.join(_UPLOAD_DIR, filepath)
+
+    # Security Check: Normalize the path and ensure it's within UPLOAD_DIR
+    # os.path.abspath resolves '..' and other relative components
+    abs_upload_dir = os.path.abspath(_UPLOAD_DIR)
+    abs_full_path = os.path.abspath(full_path)
+
+    if os.path.commonprefix([abs_full_path, abs_upload_dir]) != abs_upload_dir:
+        # Path traversal attempt
+        raise HTTPException(status_code=403, detail="Forbidden: Path traversal attempt.")
 
     try:
-        async with aiofiles.open(save_path, "wb") as f:
+        # Create parent directories if they don't exist
+        parent_dir = os.path.dirname(abs_full_path)
+        if not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+        
+        async with aiofiles.open(abs_full_path, "wb") as f:
             async for chunk in request.stream():
                 await f.write(chunk)
         
-        # After successful write, try to get file size with standard os.stat
-        file_size = os.path.getsize(save_path)
-
-        return PlainTextResponse(f"File '{filename}' uploaded successfully ({file_size} bytes).\nSaved at: {save_path}\nReceived Headers: {received_headers}", status_code=200)
+        file_size = os.path.getsize(abs_full_path)
+        return PlainTextResponse(f"File '{filepath}' uploaded successfully ({file_size} bytes).\nSaved at: {abs_full_path}", status_code=200)
+    except HTTPException:
+        raise # Re-raise HTTPException (like the 403)
     except Exception as e:
-        # Basic server-side logging
-        print(f"Error during file upload for {filename}: {e}") 
-        return PlainTextResponse(f"Error uploading file '{filename}': {str(e)}\nReceived Headers: {received_headers}", status_code=500)
+        # Log the exception on the server for debugging
+        print(f"Error during dynamic file upload for {filepath}: {e}")
+        # Return a generic server error to the client
+        raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
 
 
 async def wt(scope: Scope, receive: Receive, send: Send) -> None:
@@ -171,7 +192,9 @@ starlette = Starlette(
         Route("/{size:int}", padding),
         Route("/echo", echo, methods=["POST"]),
         Route("/logs", logs),
-        Route("/upload", upload_file, methods=["POST"]),
+        # The old /upload route is removed as per instructions
+        # Route("/upload", upload_file, methods=["POST"]), 
+        Route("/files/{filepath:path}", handle_dynamic_upload, methods=["POST"]),
         WebSocketRoute("/ws", ws),
         Mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True)),
     ]
