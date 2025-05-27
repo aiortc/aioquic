@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import importlib
 import logging
+import os
 import time
 from collections import deque
 from email.utils import formatdate
@@ -329,6 +330,12 @@ class HttpServerProtocol(QuicConnectionProtocol):
         self._http: Optional[HttpConnection] = None
 
     def http_event_received(self, event: H3Event) -> None:
+        if isinstance(event, HeadersReceived):
+            # Log raw headers for diagnostic purposes
+            self._quic._logger.info(
+                f"Raw headers received on stream {event.stream_id}: {event.headers}"
+            )
+
         if isinstance(event, HeadersReceived) and event.stream_id not in self._handlers:
             authority = None
             headers = []
@@ -567,7 +574,32 @@ if __name__ == "__main__":
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="increase logging verbosity"
     )
+    parser.add_argument(
+        "--upload-dir",
+        type=str,
+        default=None,
+        help="Directory to save uploaded files (influences AIOQUIC_UPLOAD_DIR in demo.py)"
+    )
+    parser.add_argument(
+        "--static-dir",
+        type=str,
+        default=None,
+        help="Root directory for serving static files (influences STATIC_ROOT in demo.py)"
+    )
     args = parser.parse_args()
+
+    # Set environment variables based on command-line arguments
+    if args.upload_dir is not None:
+        abs_upload_dir = os.path.abspath(args.upload_dir)
+        os.environ["AIOQUIC_UPLOAD_DIR"] = abs_upload_dir
+        # Use logging if available and configured, otherwise print
+        # Assuming logger might not be configured yet, print for simplicity as per instructions
+        print(f"INFO: Uploads will be saved to directory: {abs_upload_dir}")
+
+    if args.static_dir is not None:
+        abs_static_dir = os.path.abspath(args.static_dir)
+        os.environ["STATIC_ROOT"] = abs_static_dir
+        print(f"INFO: Static files will be served from directory: {abs_static_dir}")
 
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
