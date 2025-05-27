@@ -108,66 +108,40 @@ async def ws(websocket):
 
 
 async def handle_root_post_upload(request):
-    import os 
-    import aiofiles 
-    from starlette.responses import PlainTextResponse 
-    from starlette.exceptions import HTTPException 
+    # Local imports are removed as os, aiofiles, PlainTextResponse, HTTPException
+    # are available at module level.
 
-    # Ensure UPLOAD_DIR is accessible (it's a global in demo.py)
-    # Print statements will be used for logging as per plan.
-
-    print(f"HRP_UPLOAD: Entered handle_root_post_upload.")
-    
     filepath = request.path_params["filepath"]
-    print(f"HRP_UPLOAD: filepath from URL = '{filepath}'")
-    print(f"HRP_UPLOAD: Global UPLOAD_DIR = '{UPLOAD_DIR}'")
-
     filepath = filepath.lstrip("/")
-    print(f"HRP_UPLOAD: Sanitized filepath = '{filepath}'")
 
     abs_upload_dir = os.path.abspath(UPLOAD_DIR)
-    print(f"HRP_UPLOAD: Absolute UPLOAD_DIR = '{abs_upload_dir}'")
     
-    save_path = os.path.join(abs_upload_dir, filepath) # Use abs_upload_dir to ensure join is safe if filepath is somehow absolute (though lstrip should prevent)
+    save_path = os.path.join(abs_upload_dir, filepath)
     abs_save_path = os.path.abspath(save_path)
-    print(f"HRP_UPLOAD: Calculated absolute save_path = '{abs_save_path}'")
 
     # Security Check
     if os.path.commonprefix([abs_save_path, abs_upload_dir]) != abs_upload_dir:
-        print(f"HRP_UPLOAD: Security check FAILED. Common prefix mismatch.")
-        print(f"HRP_UPLOAD: commonprefix is '{os.path.commonprefix([abs_save_path, abs_upload_dir])}'")
         raise HTTPException(status_code=403, detail="Forbidden: Path traversal attempt.")
-    print(f"HRP_UPLOAD: Security check PASSED.")
 
     try:
         parent_dir = os.path.dirname(abs_save_path)
-        print(f"HRP_UPLOAD: Parent directory for save_path = '{parent_dir}'")
         if parent_dir and not os.path.exists(parent_dir):
-            print(f"HRP_UPLOAD: Creating parent directory: '{parent_dir}'")
             os.makedirs(parent_dir, exist_ok=True)
-        else:
-            print(f"HRP_UPLOAD: Parent directory '{parent_dir}' already exists or is not needed.")
         
-        print(f"HRP_UPLOAD: Attempting to open file for writing: '{abs_save_path}'")
         async with aiofiles.open(abs_save_path, "wb") as f:
-            print(f"HRP_UPLOAD: File opened successfully. Streaming content...")
             async for chunk in request.stream():
                 await f.write(chunk)
-            print(f"HRP_UPLOAD: Content streamed successfully.")
         
         file_size = os.path.getsize(abs_save_path)
-        print(f"HRP_UPLOAD: File size: {file_size} bytes.")
         response_text = f"File '{filepath}' uploaded successfully ({file_size} bytes).\nSaved at: {abs_save_path}"
-        print(f"HRP_UPLOAD: Sending success response: '{response_text}'")
         return PlainTextResponse(response_text, status_code=200)
     except HTTPException:
-        print(f"HRP_UPLOAD: Re-raising HTTPException.")
         raise 
     except Exception as e:
-        print(f"HRP_UPLOAD: Exception during file upload for '{filepath}': {e}")
+        print(f"Error during root dynamic file upload for {filepath}: {e}") # KEEP THIS
         # Log the full traceback for server-side debugging
-        import traceback
-        traceback.print_exc()
+        import traceback # KEEP THIS (if not already module level)
+        traceback.print_exc() # KEEP THIS
         raise HTTPException(status_code=500, detail=f"Error uploading file '{filepath}': {str(e)}")
 
 
