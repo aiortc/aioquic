@@ -108,37 +108,23 @@ async def ws(websocket):
 
 
 async def handle_root_post_upload(request):
-    import os # ensure os is available
-    import aiofiles # ensure aiofiles is available
-    from starlette.responses import PlainTextResponse # ensure PlainTextResponse is available
-    from starlette.exceptions import HTTPException # ensure HTTPException is available
-
-    # UPLOAD_DIR is globally defined and configured via environment variable AIOQUIC_UPLOAD_DIR
-    # It defaults to examples/uploads if the env var is not set.
-    # os.makedirs(UPLOAD_DIR, exist_ok=True) is also called globally.
+    # Local imports are removed as os, aiofiles, PlainTextResponse, HTTPException
+    # are available at module level.
 
     filepath = request.path_params["filepath"]
-
-    # Sanitize filepath: remove leading slashes to prevent issues with os.path.join if filepath is absolute
-    # (though Starlette's :path usually gives a relative path from the mount point)
     filepath = filepath.lstrip("/")
 
-    # Construct the full, absolute path for saving
-    # UPLOAD_DIR itself should be an absolute path or resolved to one for reliable security check
     abs_upload_dir = os.path.abspath(UPLOAD_DIR)
     
-    # Create the prospective save path
     save_path = os.path.join(abs_upload_dir, filepath)
-    abs_save_path = os.path.abspath(save_path) # Normalize the path (resolves .., ., etc.)
+    abs_save_path = os.path.abspath(save_path)
 
-    # Security Check: Ensure the normalized save_path is still within abs_upload_dir
+    # Security Check
     if os.path.commonprefix([abs_save_path, abs_upload_dir]) != abs_upload_dir:
         raise HTTPException(status_code=403, detail="Forbidden: Path traversal attempt.")
 
     try:
-        # Create parent directories if they don't exist
         parent_dir = os.path.dirname(abs_save_path)
-        # os.makedirs needs to be robust for when parent_dir is empty (i.e. saving to UPLOAD_DIR root)
         if parent_dir and not os.path.exists(parent_dir):
             os.makedirs(parent_dir, exist_ok=True)
         
@@ -146,12 +132,16 @@ async def handle_root_post_upload(request):
             async for chunk in request.stream():
                 await f.write(chunk)
         
-        file_size = os.path.getsize(abs_save_path) # Use abs_save_path as it's normalized
-        return PlainTextResponse(f"File '{filepath}' uploaded successfully ({file_size} bytes).\nSaved at: {abs_save_path}", status_code=200)
-    except HTTPException: # Re-raise HTTPExceptions (like 403)
-        raise
+        file_size = os.path.getsize(abs_save_path)
+        response_text = f"File '{filepath}' uploaded successfully ({file_size} bytes).\nSaved at: {abs_save_path}"
+        return PlainTextResponse(response_text, status_code=200)
+    except HTTPException:
+        raise 
     except Exception as e:
-        print(f"Error during root dynamic file upload for {filepath}: {e}") # Server-side log
+        print(f"Error during root dynamic file upload for {filepath}: {e}") # KEEP THIS
+        # Log the full traceback for server-side debugging
+        import traceback # KEEP THIS (if not already module level)
+        traceback.print_exc() # KEEP THIS
         raise HTTPException(status_code=500, detail=f"Error uploading file '{filepath}': {str(e)}")
 
 
@@ -192,7 +182,7 @@ starlette = Starlette(
         Route("/logs", logs),
         WebSocketRoute("/ws", ws),
         # Add the new root-level POST handler here
-        Route("/{filepath:path}", handle_root_post_upload, methods=["POST"]),
+        Route("/{filepath:path}", handle_root_post_upload, methods=["POST", "PUT"]),
         Mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True)), # Catch-all for GET (and others if not matched)
     ]
 )
