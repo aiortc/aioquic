@@ -171,7 +171,7 @@ class HttpClient(QuicConnectionProtocol):
         # The 'headers' input parameter is deliberately ignored.
         
         request = HttpRequest(
-            method="POST", url=URL(url), content=b"", headers=minimal_headers
+            method="PUT", url=URL(url), content=b"", headers=minimal_headers
         )
         return await self._request(request, file_path=file_path)
 
@@ -316,7 +316,7 @@ async def perform_http_request(
         # Pass empty headers for now, as per instruction.
         # The `upload` method itself sets Content-Type to application/octet-stream.
         http_events = await client.upload(url, file_path=upload_file_path, headers={})
-        method = "UPLOAD"
+        method = "PUT"
     elif data is not None:
         data_bytes = data.encode()
         http_events = await client.post(
