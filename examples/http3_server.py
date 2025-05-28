@@ -358,8 +358,11 @@ class HttpServerProtocol(QuicConnectionProtocol):
 
             # Handle HTTP/0.9 PUT/POST attempts
             if isinstance(self._http, H0Connection) and method in ("PUT", "POST"):
+                log_path_display = raw_path.decode('ascii', errors='replace')
+                if len(log_path_display) > 100: # Arbitrary length, e.g., 100 chars
+                    log_path_display = log_path_display[:100] + "..."
                 self._quic._logger.warning(
-                    f"HTTP/0.9 {method} request for path {raw_path.decode('ascii', errors='replace')} on stream {event.stream_id} is not supported. Sending error and closing stream."
+                    f"HTTP/0.9 {method} request for path starting with '{log_path_display}' on stream {event.stream_id} is not supported. Sending error and closing stream."
                 )
                 error_body = b"Error: Method Not Allowed for HTTP/0.9 requests.\r\n"
                 self._http.send_data(stream_id=event.stream_id, data=error_body, end_stream=True)
