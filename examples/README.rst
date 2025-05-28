@@ -41,6 +41,48 @@ You can also open a WebSocket over HTTP/3:
 
   python examples/http3_client.py --ca-certs tests/pycacert.pem wss://localhost:4433/ws
 
+File Uploads (using PUT)
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The example client can also upload files to the server using the `PUT` method.
+The server must be configured with an upload directory, and the path in the URL
+will dictate where the file is saved within that directory.
+
+First, ensure the server is running and configured with an upload directory.
+For example, to save uploaded files into a directory named `my_server_uploads`
+(created in your current working directory):
+
+.. code-block:: console
+
+   python examples/http3_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem --upload-dir ./my_server_uploads
+
+Then, use `http3_client.py` with the `--upload-file` option to send a file.
+The URL path will determine the save location and name on the server, relative
+to the server's configured upload directory.
+
+.. code-block:: console
+
+  python examples/http3_client.py --ca-certs tests/ssl_cert.pem --upload-file ./localfile.txt https://localhost:4433/path/on_server/remote_filename.txt
+
+This command will upload `./localfile.txt` from your machine, and the server
+will save it as `path/on_server/remote_filename.txt` inside the
+`./my_server_uploads` directory (creating subdirectories like `path/on_server/`
+if they don't exist).
+
+*Important Note on Headers:* Currently, `http3_client.py` sends no `Content-Type`
+or `Content-Disposition` headers for uploads. This is a workaround for a
+suspected issue in the underlying `aioquic` library's H3 header processing.
+The server uses the URL path for the filename and infers the content type if needed.
+
+You can also upload files using `curl` with the `PUT` method (which `curl -T` uses):
+
+.. code-block:: console
+
+  curl -T ./localfile.txt https://localhost:4433/path/on_server/remote_filename.txt --http3 -k
+
+(The `-k` flag for `curl` allows it to work with self-signed certificates like the
+example `ssl_cert.pem`.)
+
 Chromium and Chrome usage
 .........................
 
