@@ -112,16 +112,13 @@ async def handle_root_post_upload(request):
     # are available at module level.
 
     filepath = request.path_params["filepath"]
-    # print(f"DEMO_UPLOAD: Initial filepath from URL = '{filepath}'") # DELETED
     if filepath.startswith("upload/"):
-        # original_filepath_for_log = filepath # DELETED (no longer used)
         filepath = filepath[len("upload/"):]
         # Ensure filepath is not empty after stripping, or handle if it could be just "upload/"
         if not filepath: # e.g. if original path was "upload/"
             # Decide behavior: reject, or treat as upload to UPLOAD_DIR root with generated name (current logic handles empty sanitized name)
             # For now, an empty filepath after stripping will be handled by later sanitization.
             pass
-        # print(f"DEMO_UPLOAD: Stripped 'upload/' prefix from '{original_filepath_for_log}'. New filepath = '{filepath}'") # DELETED
     
     filepath = filepath.lstrip("/") # This line remains as per instructions
 
