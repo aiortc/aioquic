@@ -332,8 +332,34 @@ class HttpServerProtocol(QuicConnectionProtocol):
     def http_event_received(self, event: H3Event) -> None:
         if isinstance(event, HeadersReceived):
             # Log raw headers for diagnostic purposes
+            logged_headers = []
+            for name, value in event.headers:
+                max_value_len = 100  # General max length for a header value
+                if isinstance(self._http, H0Connection) and name == b':path':
+                    # For H0Connection, the path can contain the body for PUT/POST
+                    # Truncate path more aggressively if it looks like binary data.
+                    # For simplicity, always truncate to a shorter length for logging.
+                    max_value_len = 100 
+                    prefix = value[:max_value_len]
+                    try:
+                        # Attempt to decode a small prefix to see if it's text-like
+                        prefix.decode('utf-8')
+                        # If decodable, log its prefix (still truncated)
+                        display_value = prefix.decode('ascii', errors='replace')
+                        if len(value) > max_value_len:
+                            display_value += "..."
+                        logged_headers.append((name, display_value))
+                    except UnicodeDecodeError:
+                        # If not decodable as UTF-8, it's likely binary.
+                        logged_headers.append((name, f"<binary data, {len(value)} bytes>"))
+                else:
+                    # For other headers or H3 connections
+                    display_value = value[:max_value_len].decode('ascii', errors='replace')
+                    if len(value) > max_value_len:
+                        display_value += "..."
+                    logged_headers.append((name, display_value))
             self._quic._logger.info(
-                f"Raw headers received on stream {event.stream_id}: {event.headers}"
+                f"Raw headers received on stream {event.stream_id}: {logged_headers}"
             )
 
         if isinstance(event, HeadersReceived) and event.stream_id not in self._handlers:
@@ -358,9 +384,11 @@ class HttpServerProtocol(QuicConnectionProtocol):
 
             # Handle HTTP/0.9 PUT/POST attempts
             if isinstance(self._http, H0Connection) and method in ("PUT", "POST"):
-                log_path_display = raw_path.decode('ascii', errors='replace')
-                if len(log_path_display) > 100: # Arbitrary length, e.g., 100 chars
-                    log_path_display = log_path_display[:100] + "..."
+                # Truncate raw_path before decoding to limit length of binary data representation
+                truncated_raw_path = raw_path[:100] # Max 100 bytes
+                log_path_display = truncated_raw_path.decode('ascii', errors='replace')
+                if len(raw_path) > 100:
+                    log_path_display += "..."
                 self._quic._logger.warning(
                     f"HTTP/0.9 {method} request for path starting with '{log_path_display}' on stream {event.stream_id} is not supported. Sending error and closing stream."
                 )
