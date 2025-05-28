@@ -32,6 +32,29 @@ try:
 except ImportError:
     uvloop = None
 
+
+def is_likely_text(data_bytes: bytes, max_len: int = 100) -> bool:
+    '''Check if the first max_len bytes of data_bytes is likely printable text.'''
+    prefix = data_bytes[:max_len]
+    if not prefix:
+        return True # Empty is fine
+    try:
+        # Try decoding as UTF-8; if it works, it's likely text.
+        prefix.decode('utf-8')
+        # Additionally, check for excessive non-printable ASCII or too many replacement chars
+        # For simplicity, we'll rely on utf-8 decode for now, but this could be enhanced.
+        # Count non-printable characters (excluding common whitespace like space, tab, cr, lf)
+        non_printable_count = 0
+        for b_char in prefix:
+            if not (32 <= b_char <= 126 or b_char in (9, 10, 13)): # space to ~, tab, lf, cr
+                non_printable_count += 1
+        # If more than 20% of characters are non-printable, consider it not text-like for logging
+        if non_printable_count > len(prefix) * 0.2:
+            return False
+        return True
+    except UnicodeDecodeError:
+        return False
+
 AsgiApplication = Callable
 HttpConnection = Union[H0Connection, H3Connection]
 
@@ -384,11 +407,16 @@ class HttpServerProtocol(QuicConnectionProtocol):
 
             # Handle HTTP/0.9 PUT/POST attempts
             if isinstance(self._http, H0Connection) and method in ("PUT", "POST"):
-                # Truncate raw_path before decoding to limit length of binary data representation
-                truncated_raw_path = raw_path[:100] # Max 100 bytes
-                log_path_display = truncated_raw_path.decode('ascii', errors='replace')
-                if len(raw_path) > 100:
-                    log_path_display += "..."
+                log_path_display: str
+                # Check if raw_path is likely text using the helper
+                if is_likely_text(raw_path):
+                    truncated_raw_path = raw_path[:100]
+                    log_path_display = truncated_raw_path.decode('ascii', errors='replace')
+                    if len(raw_path) > 100:
+                        log_path_display += "..."
+                else:
+                    log_path_display = f"<binary path data, {len(raw_path)} bytes>"
+                
                 self._quic._logger.warning(
                     f"HTTP/0.9 {method} request for path starting with '{log_path_display}' on stream {event.stream_id} is not supported. Sending error and closing stream."
                 )
