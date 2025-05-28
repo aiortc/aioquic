@@ -334,10 +334,18 @@ async def perform_http_request(
     elapsed = time.time() - start
 
     # print speed
-    octets = 0
-    for http_event in http_events:
-        if isinstance(http_event, DataReceived):
-            octets += len(http_event.data)
+    if method == "PUT" and upload_file_path: # Check method and ensure upload_file_path is available
+        try:
+            octets = os.path.getsize(upload_file_path)
+        except OSError as e:
+            logger.error(f"Could not get size of uploaded file {upload_file_path}: {e}")
+            octets = 0 # Fallback if file size can't be read (e.g. deleted post-send start)
+    else: # For GET, POST, or if PUT somehow didn't have upload_file_path
+        octets = 0
+        for http_event in http_events:
+            if isinstance(http_event, DataReceived):
+                octets += len(http_event.data)
+    
     logger.info(
         "Response received for %s %s : %d bytes in %.1f s (%.3f Mbps)"
         % (method, urlparse(url).path, octets, elapsed, octets * 8 / elapsed / 1000000)
