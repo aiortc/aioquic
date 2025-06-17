@@ -112,10 +112,10 @@ async def handle_root_post_upload(request):
 
     filepath = request.path_params["filepath"]
     if filepath.startswith("upload/"):
-        filepath = filepath[len("upload/"):]
+        filepath = filepath[len("upload/") :]
         # Ensure filepath is not empty after stripping, or handle if it
         # could be just "upload/"
-        if not filepath: # e.g. if original path was "upload/"
+        if not filepath:  # e.g. if original path was "upload/"
             # Decide behavior: reject, or treat as upload to UPLOAD_DIR root
             # with generated name (current logic handles empty sanitized name)
             # For now, an empty filepath after stripping will be handled by
@@ -194,7 +194,7 @@ starlette = Starlette(
     routes=[
         Route("/", homepage),
         Route("/{size:int}", padding),
-        Route("/echo", echo, methods=["POST"]), # Specific POST
+        Route("/echo", echo, methods=["POST"]),  # Specific POST
         Route("/logs", logs),
         WebSocketRoute("/ws", ws),
         # Add the new root-level POST handler here
