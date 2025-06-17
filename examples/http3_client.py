@@ -160,16 +160,17 @@ class HttpClient(QuicConnectionProtocol):
         """
         Perform a POST request to upload a file.
         """
-        # Keep 'headers: Optional[Dict] = None' for compatibility, but ignore it for now.
-        
+        # Keep 'headers: Optional[Dict] = None' for compatibility,
+        # but ignore it for now.
+
         # os module should be imported at the top of the file.
-        # basename = os.path.basename(file_path) # This line is no longer needed for headers
+        # basename = os.path.basename(file_path)  # No longer needed for headers
         minimal_headers = {
             # No "Content-Type"
             # No "Content-Disposition"
         }
         # The 'headers' input parameter is deliberately ignored.
-        
+
         request = HttpRequest(
             method="PUT", url=URL(url), content=b"", headers=minimal_headers
         )
@@ -268,7 +269,8 @@ class HttpClient(QuicConnectionProtocol):
                         self._http.send_data(
                             stream_id=stream_id, data=chunk, end_stream=False
                         )
-                # After all chunks are sent, send an empty data frame with end_stream=True
+                # After all chunks are sent, send an empty data frame
+                # with end_stream=True
                 self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
             except FileNotFoundError:
                 # Handle file not found error appropriately.
@@ -286,7 +288,8 @@ class HttpClient(QuicConnectionProtocol):
             self._http.send_headers(
                 stream_id=stream_id,
                 headers=common_headers,
-                end_stream=not request.content, # True if no content, False if content follows
+                # True if no content, False if content follows
+                end_stream=not request.content,
             )
             if request.content:
                 self._http.send_data(
@@ -334,18 +337,20 @@ async def perform_http_request(
     elapsed = time.time() - start
 
     # print speed
-    if method == "PUT" and upload_file_path: # Check method and ensure upload_file_path is available
+    # Check method and ensure upload_file_path is available
+    if method == "PUT" and upload_file_path:
         try:
             octets = os.path.getsize(upload_file_path)
         except OSError as e:
             logger.error(f"Could not get size of uploaded file {upload_file_path}: {e}")
-            octets = 0 # Fallback if file size can't be read (e.g. deleted post-send start)
-    else: # For GET, POST, or if PUT somehow didn't have upload_file_path
+            # Fallback if file size can't be read (e.g. deleted post-send start)
+            octets = 0
+    else:  # For GET, POST, or if PUT somehow didn't have upload_file_path
         octets = 0
         for http_event in http_events:
             if isinstance(http_event, DataReceived):
                 octets += len(http_event.data)
-    
+
     logger.info(
         "Response received for %s %s : %d bytes in %.1f s (%.3f Mbps)"
         % (method, urlparse(url).path, octets, elapsed, octets * 8 / elapsed / 1000000)
@@ -489,7 +494,8 @@ async def main(
                 perform_http_request(
                     client=client,
                     url=url,
-                    data=data, # This data is already None if upload_file was specified (handled in __main__)
+                    # data is None if upload_file was specified (handled in __main__)
+                    data=data,
                     include=include,
                     output_dir=output_dir,
                     upload_file_path=upload_file,
