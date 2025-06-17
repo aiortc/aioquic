@@ -37,6 +37,7 @@ dynamic = ["version"]
 [project.optional-dependencies]
 dev = [
     "coverage[toml]>=7.2.2",
+    "types-aiofiles",
     "typing_extensions; python_version < '3.10'",
 ]
 

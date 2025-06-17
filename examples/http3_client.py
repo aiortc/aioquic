@@ -165,7 +165,7 @@ class HttpClient(QuicConnectionProtocol):
 
         # os module should be imported at the top of the file.
         # basename = os.path.basename(file_path)  # No longer needed for headers
-        minimal_headers = {
+        minimal_headers: dict[str, str] = {
             # No "Content-Type"
             # No "Content-Disposition"
         }
