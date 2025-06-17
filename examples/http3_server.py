@@ -34,13 +34,13 @@ except ImportError:
 
 
 def is_likely_text(data_bytes: bytes, max_len: int = 100) -> bool:
-    '''Check if the first max_len bytes of data_bytes is likely printable text.'''
+    """Check if the first max_len bytes of data_bytes is likely printable text."""
     prefix = data_bytes[:max_len]
     if not prefix:
-        return True # Empty is fine
+        return True  # Empty is fine
     try:
         # Try decoding as UTF-8; if it works, it's likely text.
-        prefix.decode('utf-8')
+        prefix.decode("utf-8")
         # Additionally, check for excessive non-printable ASCII or too many
         # replacement chars.
         # For simplicity, we'll rely on utf-8 decode for now, but this could
@@ -59,6 +59,7 @@ def is_likely_text(data_bytes: bytes, max_len: int = 100) -> bool:
         return True
     except UnicodeDecodeError:
         return False
+
 
 AsgiApplication = Callable
 HttpConnection = Union[H0Connection, H3Connection]
@@ -363,7 +364,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
             logged_headers = []
             for name, value in event.headers:
                 max_value_len = 100  # General max length for a header value
-                if isinstance(self._http, H0Connection) and name == b':path':
+                if isinstance(self._http, H0Connection) and name == b":path":
                     # For H0Connection, the path can contain the body for PUT/POST
                     # Truncate path more aggressively if it looks like binary data.
                     # For simplicity, always truncate to a shorter length for logging.
@@ -371,9 +372,9 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     prefix = value[:max_value_len]
                     try:
                         # Attempt to decode a small prefix to see if it's text-like
-                        prefix.decode('utf-8')
+                        prefix.decode("utf-8")
                         # If decodable, log its prefix (still truncated)
-                        display_value = prefix.decode('ascii', errors='replace')
+                        display_value = prefix.decode("ascii", errors="replace")
                         if len(value) > max_value_len:
                             display_value += "..."
                         logged_headers.append((name, display_value))
@@ -385,7 +386,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                 else:
                     # For other headers or H3 connections
                     display_value = value[:max_value_len].decode(
-                        'ascii', errors='replace'
+                        "ascii", errors="replace"
                     )
                     if len(value) > max_value_len:
                         display_value += "..."
@@ -421,7 +422,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                 if is_likely_text(raw_path):
                     truncated_raw_path = raw_path[:100]
                     log_path_display = truncated_raw_path.decode(
-                        'ascii', errors='replace'
+                        "ascii", errors="replace"
                     )
                     if len(raw_path) > 100:
                         log_path_display += "..."
@@ -666,14 +667,14 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Directory to save uploaded files (influences AIOQUIC_UPLOAD_DIR "
-             "in demo.py)",
+        "in demo.py)",
     )
     parser.add_argument(
         "--static-dir",
         type=str,
         default=None,
         help="Root directory for serving static files (influences STATIC_ROOT "
-             "in demo.py)",
+        "in demo.py)",
     )
     args = parser.parse_args()
 
