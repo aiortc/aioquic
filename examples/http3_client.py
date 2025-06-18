@@ -3,9 +3,11 @@ import asyncio
 import logging
 import os
 import pickle
+import socket
 import ssl
 import time
 from collections import deque
+from contextlib import asynccontextmanager
 from typing import (
     AsyncGenerator,
     BinaryIO,
@@ -18,8 +20,6 @@ from typing import (
     cast,
 )
 from urllib.parse import urlparse
-import socket
-from contextlib import asynccontextmanager
 
 import aioquic
 import wsproto
@@ -34,11 +34,11 @@ from aioquic.h3.events import (
     PushPromiseReceived,
 )
 from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import QuicEvent
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.quic.packet import QuicProtocolVersion
 from aioquic.tls import CipherSuite, SessionTicket, SessionTicketHandler
-from aioquic.quic.connection import QuicConnection
 
 try:
     import uvloop
@@ -412,7 +412,8 @@ async def custom_connect(
             await protocol.wait_closed()
         if transport is not None:
             transport.close()  # This should close the socket
-        elif sock is not None:  # Fallback if transport wasn't established but socket was
+        # Fallback if transport wasn't established but socket was
+        elif sock is not None:
             sock.close()
 
 
