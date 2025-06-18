@@ -6,7 +6,17 @@ import pickle
 import ssl
 import time
 from collections import deque
-from typing import AsyncGenerator, BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
+from typing import (
+    AsyncGenerator,
+    BinaryIO,
+    Callable,
+    Deque,
+    Dict,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 from urllib.parse import urlparse
 import socket
 from contextlib import asynccontextmanager
@@ -328,7 +338,6 @@ async def custom_connect(
     # Prepare QUIC connection object
     if configuration.server_name is None:
         configuration.server_name = host
-    
     quic_connection = QuicConnection(
         configuration=configuration,
         session_ticket_handler=session_ticket_handler
@@ -340,37 +349,41 @@ async def custom_connect(
     protocol = None
     try:
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-        
+
         bind_addr_tuple = None
         if local_address is None:
             # Default: bind to "::" (all interfaces for AF_INET6)
             bind_addr_tuple = ("::", local_port_to_bind, 0, 0)
         else:
             # Check if local_address is likely an IPv4 literal
-            # A more robust check would involve ipaddress.ip_address() but this is simpler for an example
+            # Robust check: ipaddress.ip_address(), simpler for example
             is_ipv4_literal = "." in local_address and ":" not in local_address
-            
+
             if is_ipv4_literal:
-                # For an IPv4 literal, construct the IPv4-mapped IPv6 address tuple directly
+                # For IPv4 literal, construct IPv4-mapped IPv6 addr tuple
                 # This is for binding to an AF_INET6 socket with IPV6_V6ONLY set to 0
                 mapped_ipv4_host = f"::ffff:{local_address}"
                 bind_addr_tuple = (mapped_ipv4_host, local_port_to_bind, 0, 0)
                 logger.debug(f"Binding to IPv4-mapped address: {bind_addr_tuple}")
             else:
-                # For IPv6 literals or hostnames (that should resolve to IPv6), use getaddrinfo
-                # This also handles the case where local_address might be "::" if passed explicitly
+                # For IPv6 literals or hostnames, use getaddrinfo
+                # Handles local_address="::" if passed explicitly
                 try:
                     bind_infos = await loop.getaddrinfo(
-                        local_address, 
-                        local_port_to_bind, 
-                        family=socket.AF_INET6, 
+                        local_address,
+                        local_port_to_bind,
+                        family=socket.AF_INET6,
                         type=socket.SOCK_DGRAM,
-                        flags=socket.AI_PASSIVE 
+                        flags=socket.AI_PASSIVE
                     )
                     bind_addr_tuple = bind_infos[0][4]
-                    logger.debug(f"Binding to resolved IPv6/hostname address: {bind_addr_tuple}")
+                    logger.debug(
+                        f"Binding to resolved IPv6/hostname: {bind_addr_tuple}"
+                    )
                 except socket.gaierror:
-                    logger.error(f"Error resolving local bind address {local_address} for AF_INET6 socket.")
+                    logger.error(
+                        f"Error resolving {local_address} for AF_INET6 socket."
+                    )
                     raise
 
         if bind_addr_tuple is None:
@@ -380,16 +393,17 @@ async def custom_connect(
 
         sock.bind(bind_addr_tuple)
 
+        # HttpClient takes 'connection'
         transport, protocol_instance = await loop.create_datagram_endpoint(
-            lambda: HttpClient(connection=quic_connection), # HttpClient takes 'connection'
+            lambda: HttpClient(connection=quic_connection),
             sock=sock,
         )
         protocol = cast(HttpClient, protocol_instance)
-        
-        protocol.connect(addr) # No 'transmit' argument
+
+        protocol.connect(addr)  # No 'transmit' argument
         if wait_connected:
             await protocol.wait_connected()
-        
+
         yield protocol
 
     finally:
@@ -397,8 +411,8 @@ async def custom_connect(
             protocol.close()
             await protocol.wait_closed()
         if transport is not None:
-            transport.close() # This should close the socket
-        elif sock is not None: # Fallback if transport wasn't established but socket was
+            transport.close()  # This should close the socket
+        elif sock is not None:  # Fallback if transport wasn't established but socket was
             sock.close()
 
 
@@ -568,8 +582,9 @@ async def main(
         configuration=configuration,
         wait_connected=not zero_rtt, # zero_rtt is an existing arg in main
         local_address=bind_address,  # bind_address is an existing arg in main
-        local_port_to_bind=local_port, # local_port is an existing arg in main
-        session_ticket_handler=save_session_ticket # save_session_ticket is a global func
+    local_port_to_bind=local_port,  # local_port is an existing arg in main
+    # save_session_ticket is a global func
+    session_ticket_handler=save_session_ticket
     ) as client:
         # client = cast(HttpClient, client) # client is already typed by custom_connect
 
@@ -618,7 +633,7 @@ if __name__ == "__main__":
         "--ca-certs", type=str, help="load CA certificates from the specified file"
     )
     parser.add_argument(
-        "--bind-address", type=str, default=None, help="local IP address to bind to for connections"
+        "--bind-address", type=str, default=None, help="local IP address to bind to"
     )
     parser.add_argument(
         "--certificate",
