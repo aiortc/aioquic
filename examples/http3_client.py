@@ -6,13 +6,14 @@ import pickle
 import ssl
 import time
 from collections import deque
-from typing import BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
+from typing import AsyncGenerator, BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
 from urllib.parse import urlparse
+import socket
+from contextlib import asynccontextmanager
 
 import aioquic
 import wsproto
 import wsproto.events
-from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.connection import H3_ALPN, ErrorCode, H3Connection
@@ -26,7 +27,8 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import QuicEvent
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.quic.packet import QuicProtocolVersion
-from aioquic.tls import CipherSuite, SessionTicket
+from aioquic.tls import CipherSuite, SessionTicket, SessionTicketHandler
+from aioquic.quic.connection import QuicConnection
 
 try:
     import uvloop
@@ -122,8 +124,8 @@ class WebSocket:
 
 
 class HttpClient(QuicConnectionProtocol):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, connection: QuicConnection, **kwargs) -> None:
+        super().__init__(connection, **kwargs)
 
         self.pushes: Dict[int, Deque[H3Event]] = {}
         self._http: Optional[HttpConnection] = None
@@ -305,6 +307,101 @@ class HttpClient(QuicConnectionProtocol):
         return await asyncio.shield(waiter)
 
 
+@asynccontextmanager
+async def custom_connect(
+    host: str,
+    port: int,
+    configuration: QuicConfiguration,
+    wait_connected: bool = True,
+    local_address: Optional[str] = None,
+    local_port_to_bind: int = 0,
+    session_ticket_handler: Optional[SessionTicketHandler] = None,
+) -> AsyncGenerator[HttpClient, None]:
+    loop = asyncio.get_running_loop()
+
+    # Address resolution for the remote host
+    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
+    addr = infos[0][4]
+    if len(addr) == 2:  # IPv4
+        addr = ("::ffff:" + addr[0], addr[1], 0, 0)
+
+    # Prepare QUIC connection object
+    if configuration.server_name is None:
+        configuration.server_name = host
+    
+    quic_connection = QuicConnection(
+        configuration=configuration,
+        session_ticket_handler=session_ticket_handler
+    )
+
+    # Socket creation, binding, and endpoint creation
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    transport = None
+    protocol = None
+    try:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        
+        bind_addr_tuple = None
+        if local_address is None:
+            # Default: bind to "::" (all interfaces for AF_INET6)
+            bind_addr_tuple = ("::", local_port_to_bind, 0, 0)
+        else:
+            # Check if local_address is likely an IPv4 literal
+            # A more robust check would involve ipaddress.ip_address() but this is simpler for an example
+            is_ipv4_literal = "." in local_address and ":" not in local_address
+            
+            if is_ipv4_literal:
+                # For an IPv4 literal, construct the IPv4-mapped IPv6 address tuple directly
+                # This is for binding to an AF_INET6 socket with IPV6_V6ONLY set to 0
+                mapped_ipv4_host = f"::ffff:{local_address}"
+                bind_addr_tuple = (mapped_ipv4_host, local_port_to_bind, 0, 0)
+                logger.debug(f"Binding to IPv4-mapped address: {bind_addr_tuple}")
+            else:
+                # For IPv6 literals or hostnames (that should resolve to IPv6), use getaddrinfo
+                # This also handles the case where local_address might be "::" if passed explicitly
+                try:
+                    bind_infos = await loop.getaddrinfo(
+                        local_address, 
+                        local_port_to_bind, 
+                        family=socket.AF_INET6, 
+                        type=socket.SOCK_DGRAM,
+                        flags=socket.AI_PASSIVE 
+                    )
+                    bind_addr_tuple = bind_infos[0][4]
+                    logger.debug(f"Binding to resolved IPv6/hostname address: {bind_addr_tuple}")
+                except socket.gaierror:
+                    logger.error(f"Error resolving local bind address {local_address} for AF_INET6 socket.")
+                    raise
+
+        if bind_addr_tuple is None:
+            # This case should ideally not be reached if logic above is correct
+            logger.error("Failed to determine bind_addr_tuple.")
+            raise ValueError("Could not determine local bind address tuple.")
+
+        sock.bind(bind_addr_tuple)
+
+        transport, protocol_instance = await loop.create_datagram_endpoint(
+            lambda: HttpClient(connection=quic_connection), # HttpClient takes 'connection'
+            sock=sock,
+        )
+        protocol = cast(HttpClient, protocol_instance)
+        
+        protocol.connect(addr) # No 'transmit' argument
+        if wait_connected:
+            await protocol.wait_connected()
+        
+        yield protocol
+
+    finally:
+        if protocol is not None:
+            protocol.close()
+            await protocol.wait_closed()
+        if transport is not None:
+            transport.close() # This should close the socket
+        elif sock is not None: # Fallback if transport wasn't established but socket was
+            sock.close()
+
+
 async def perform_http_request(
     client: HttpClient,
     url: str,
@@ -432,6 +529,7 @@ async def main(
     local_port: int,
     zero_rtt: bool,
     upload_file: Optional[str] = None,
+    bind_address: Optional[str] = None,
 ) -> None:
     # parse URL
     parsed = urlparse(urls[0])
@@ -464,16 +562,16 @@ async def main(
         _p = urlparse(_p.geturl())
         urls[i] = _p.geturl()
 
-    async with connect(
+    async with custom_connect(
         host,
         port,
         configuration=configuration,
-        create_protocol=HttpClient,
-        session_ticket_handler=save_session_ticket,
-        local_port=local_port,
-        wait_connected=not zero_rtt,
+        wait_connected=not zero_rtt, # zero_rtt is an existing arg in main
+        local_address=bind_address,  # bind_address is an existing arg in main
+        local_port_to_bind=local_port, # local_port is an existing arg in main
+        session_ticket_handler=save_session_ticket # save_session_ticket is a global func
     ) as client:
-        client = cast(HttpClient, client)
+        # client = cast(HttpClient, client) # client is already typed by custom_connect
 
         if parsed.scheme == "wss":
             ws = await client.websocket(urls[0], subprotocols=["chat", "superchat"])
@@ -518,6 +616,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--ca-certs", type=str, help="load CA certificates from the specified file"
+    )
+    parser.add_argument(
+        "--bind-address", type=str, default=None, help="local IP address to bind to for connections"
     )
     parser.add_argument(
         "--certificate",
@@ -694,5 +795,6 @@ if __name__ == "__main__":
             local_port=args.local_port,
             zero_rtt=args.zero_rtt,
             upload_file=args.upload_file,
+            bind_address=args.bind_address,
         )
     )
