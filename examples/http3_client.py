@@ -339,8 +339,7 @@ async def custom_connect(
     if configuration.server_name is None:
         configuration.server_name = host
     quic_connection = QuicConnection(
-        configuration=configuration,
-        session_ticket_handler=session_ticket_handler
+        configuration=configuration, session_ticket_handler=session_ticket_handler
     )
 
     # Socket creation, binding, and endpoint creation
@@ -374,7 +373,7 @@ async def custom_connect(
                         local_port_to_bind,
                         family=socket.AF_INET6,
                         type=socket.SOCK_DGRAM,
-                        flags=socket.AI_PASSIVE
+                        flags=socket.AI_PASSIVE,
                     )
                     bind_addr_tuple = bind_infos[0][4]
                     logger.debug(
@@ -581,11 +580,11 @@ async def main(
         host,
         port,
         configuration=configuration,
-        wait_connected=not zero_rtt, # zero_rtt is an existing arg in main
+        wait_connected=not zero_rtt,  # zero_rtt is an existing arg in main
         local_address=bind_address,  # bind_address is an existing arg in main
-    local_port_to_bind=local_port,  # local_port is an existing arg in main
-    # save_session_ticket is a global func
-    session_ticket_handler=save_session_ticket
+        local_port_to_bind=local_port,  # local_port is an existing arg in main
+        # save_session_ticket is a global func
+        session_ticket_handler=save_session_ticket,
     ) as client:
         # client = cast(HttpClient, client) # client is already typed by custom_connect
 
