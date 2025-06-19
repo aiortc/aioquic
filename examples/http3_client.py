@@ -432,6 +432,7 @@ async def main(
     local_port: int,
     zero_rtt: bool,
     upload_file: Optional[str] = None,
+    bind_address: Optional[str] = None,
 ) -> None:
     # parse URL
     parsed = urlparse(urls[0])
@@ -471,6 +472,7 @@ async def main(
         create_protocol=HttpClient,
         session_ticket_handler=save_session_ticket,
         local_port=local_port,
+        local_ip=bind_address,
         wait_connected=not zero_rtt,
     ) as client:
         client = cast(HttpClient, client)
@@ -624,6 +626,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--zero-rtt", action="store_true", help="try to send requests using 0-RTT"
     )
+    parser.add_argument(
+        "--bind-address",
+        type=str,
+        help="IP address to bind the client socket to",
+    )
 
     args = parser.parse_args()
 
@@ -694,5 +701,6 @@ if __name__ == "__main__":
             local_port=args.local_port,
             zero_rtt=args.zero_rtt,
             upload_file=args.upload_file,
+            bind_address=args.bind_address,
         )
     )
