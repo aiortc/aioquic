@@ -842,15 +842,13 @@ class AsyncioClientConnectBindTest(TestCase):
         Test connect() with IPv4 local_ip and non-IPv4-mapped IPv6 remote.
         Expect ValueError and ensure sock.close() is called.
         """
-        mock_socket_instance = MagicMock()  # Changed to MagicMock
+        mock_socket_instance = AsyncMock()
         # Simulate a successfully bound AF_INET socket
-        mock_socket_instance.bind = MagicMock()  # Changed to MagicMock
+        mock_socket_instance.bind = AsyncMock()
         mock_socket_instance.family = socket.AF_INET
         # getsockname() needs to return a valid tuple for AF_INET
         # for the error message formatting
-        mock_socket_instance.getsockname = MagicMock( # Changed to MagicMock
-            return_value=("127.0.0.1", 12345)
-        )
+        mock_socket_instance.getsockname = AsyncMock(return_value=("127.0.0.1", 12345))
 
         with (
             patch("asyncio.get_running_loop") as mock_get_loop,
@@ -895,8 +893,7 @@ class AsyncioClientConnectBindTest(TestCase):
         socket creation but before 'completed = True' in the binding phase.
         This tests the 'finally' block within the binding try-except.
         """
-        # Use MagicMock for the socket instance as its methods (setsockopt, close) are sync
-        mock_socket_instance = MagicMock()
+        mock_socket_instance = AsyncMock()
         # We want socket creation to succeed.
         # setsockopt will be made to raise an unexpected error.
         # setsockopt is synchronous.
@@ -978,7 +975,7 @@ class AsyncioClientConnectBindTest(TestCase):
         with (
             patch("asyncio.get_running_loop") as mock_get_loop,
             patch("socket.socket") as mock_socket_constructor,
-            # Removed patch("ipaddress.ip_address")
+            patch("ipaddress.ip_address"),
         ):
             mock_loop = AsyncMock()
             # Remote address is AF_INET
@@ -989,7 +986,7 @@ class AsyncioClientConnectBindTest(TestCase):
             )
 
             # Mock the socket instance that will be created
-            mock_socket_instance = MagicMock() # Changed to MagicMock
+            mock_socket_instance = AsyncMock()
             # Default local binding attempts AF_INET6 first.
             # Let's assume this succeeds for setting up sock.family.
             mock_socket_instance.family = socket.AF_INET6
