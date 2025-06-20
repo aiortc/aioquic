@@ -5,7 +5,7 @@ import random
 import socket
 from typing import AsyncGenerator, Optional
 from unittest import TestCase, skipIf
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
@@ -471,3 +471,546 @@ class HighLevelTest(TestCase):
         config2.load_cert_chain(SERVER_COMBINEDFILE)
 
         self.assertEqual(config1.certificate, config2.certificate)
+
+
+class AsyncioClientConnectBindTest(TestCase):
+    @asynctest
+    async def test_connect_bind_address_ipv4(self):
+        captured_sock = None
+
+        async def mock_create_datagram_endpoint(protocol_factory, sock=None, **kwargs):
+            nonlocal captured_sock
+            captured_sock = sock  # Capture the socket
+
+            transport_mock = AsyncMock()
+            protocol_mock = AsyncMock()
+            protocol_mock.wait_connected = AsyncMock(return_value=None)
+            protocol_mock.wait_closed = AsyncMock(return_value=None)
+            # Simulate protocol creation if necessary, or ensure it's handled
+            # by connect's create_protocol default or a passed mock.
+            # For this test, the focus is on sock.bind, not the protocol itself.
+            return transport_mock, protocol_mock
+
+        with patch("asyncio.get_running_loop") as mock_get_loop:
+            mock_loop = AsyncMock()
+            mock_loop.create_datagram_endpoint = AsyncMock(
+                side_effect=mock_create_datagram_endpoint
+            )
+            mock_get_loop.return_value = mock_loop
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+            test_ip = "127.0.0.1"
+
+            try:
+                async with connect(
+                    "example.com",
+                    4433,
+                    configuration=config,
+                    local_ip=test_ip,
+                    wait_connected=False,
+                ):
+                    pass  # Connection setup and teardown is handled by async with
+            except Exception:
+                # We want to assert on the socket even if connect fails later
+                pass
+
+            self.assertIsNotNone(captured_sock, "Socket was not captured")
+            self.assertEqual(
+                captured_sock.family,
+                socket.AF_INET,
+                "Socket family should be AF_INET for IPv4 bind address",
+            )
+            # getsockname() returns (ip, port) for AF_INET
+            self.assertEqual(
+                captured_sock.getsockname()[0],
+                test_ip,
+                "Socket bind address mismatch for IPv4",
+            )
+
+    @asynctest
+    async def test_connect_bind_address_ipv6(self):
+        captured_sock = None
+
+        async def mock_create_datagram_endpoint(protocol_factory, sock=None, **kwargs):
+            nonlocal captured_sock
+            captured_sock = sock
+            transport_mock = AsyncMock()
+            protocol_mock = AsyncMock()
+            protocol_mock.wait_connected = AsyncMock(return_value=None)
+            protocol_mock.wait_closed = AsyncMock(return_value=None)
+            return transport_mock, protocol_mock
+
+        with (
+            patch("asyncio.get_running_loop") as mock_get_loop,
+            patch("socket.socket") as mock_socket_constructor,
+        ):
+            mock_created_socket = MagicMock()  # Removed spec=socket.socket
+            mock_created_socket.family = socket.AF_INET6
+            mock_created_socket.bind = MagicMock()
+            # Ensure getsockname returns a tuple of the correct length for AF_INET6
+            mock_created_socket.getsockname = MagicMock(
+                return_value=("::1", 12345, 0, 0)
+            )
+            mock_created_socket.setsockopt = MagicMock()
+            mock_created_socket.close = MagicMock()
+            mock_socket_constructor.return_value = mock_created_socket
+
+            mock_loop = AsyncMock()
+            mock_loop.create_datagram_endpoint = AsyncMock(
+                side_effect=mock_create_datagram_endpoint
+            )
+            # Simulate getaddrinfo for the remote host
+            mock_loop.getaddrinfo = AsyncMock(
+                return_value=[
+                    (
+                        socket.AF_INET6,
+                        socket.SOCK_DGRAM,
+                        0,
+                        "",
+                        ("remote_ipv6", 4433, 0, 0),
+                    )
+                ]
+            )
+            mock_get_loop.return_value = mock_loop
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+            test_ip = "::1"
+
+            try:
+                async with connect(
+                    "example.com",  # Remote hostname
+                    4433,
+                    configuration=config,
+                    local_ip=test_ip,  # local IPv6
+                    wait_connected=False,
+                ):
+                    pass
+            except Exception:
+                pass  # Allow test to proceed to assertions even if connect fails later
+
+            self.assertIsNotNone(captured_sock, "Socket was not captured")
+            mock_socket_constructor.assert_called_once_with(
+                socket.AF_INET6, socket.SOCK_DGRAM
+            )
+            mock_created_socket.bind.assert_called_once_with(
+                (test_ip, 0, 0, 0)
+            )  # local_port defaults to 0
+            self.assertEqual(
+                captured_sock.family,
+                socket.AF_INET6,
+                "Socket family should be AF_INET6 for IPv6 bind address",
+            )
+            # getsockname() returns (ip, port, flowinfo, scopeid) for AF_INET6
+            self.assertEqual(
+                captured_sock.getsockname()[0],
+                test_ip,
+                "Socket bind address mismatch for IPv6",
+            )
+
+    @asynctest
+    async def test_connect_bind_default(self):
+        captured_sock = None
+
+        async def mock_create_datagram_endpoint(protocol_factory, sock=None, **kwargs):
+            nonlocal captured_sock
+            captured_sock = sock
+            transport_mock = AsyncMock()
+            protocol_mock = AsyncMock()
+            protocol_mock.wait_connected = AsyncMock(return_value=None)
+            protocol_mock.wait_closed = AsyncMock(return_value=None)
+            return transport_mock, protocol_mock
+
+        with (
+            patch("asyncio.get_running_loop") as mock_get_loop,
+            patch("socket.socket") as mock_socket_constructor,
+        ):
+            mock_created_socket = MagicMock()  # Removed spec=socket.socket
+            # Default binding attempts AF_INET6.
+            mock_created_socket.family = socket.AF_INET6
+            mock_created_socket.bind = MagicMock()
+            # getsockname for ("াইল", 0, 0, 0) default bind
+            mock_created_socket.getsockname = MagicMock(
+                return_value=("::", 12345, 0, 0)
+            )
+            mock_created_socket.setsockopt = MagicMock()
+            mock_created_socket.close = MagicMock()
+            mock_socket_constructor.return_value = mock_created_socket
+
+            mock_loop = AsyncMock()
+            mock_loop.create_datagram_endpoint = AsyncMock(
+                side_effect=mock_create_datagram_endpoint
+            )
+            # Simulate getaddrinfo for the remote host
+            mock_loop.getaddrinfo = AsyncMock(
+                return_value=[
+                    (
+                        socket.AF_INET6,
+                        socket.SOCK_DGRAM,
+                        0,
+                        "",
+                        ("remote_ipv6", 4433, 0, 0),
+                    )
+                ]
+            )
+            mock_get_loop.return_value = mock_loop
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+
+            try:
+                async with connect(
+                    "example.com",  # Remote hostname
+                    4433,
+                    configuration=config,
+                    local_ip=None,  # Default local_ip
+                    wait_connected=False,
+                ):
+                    pass
+            except Exception:
+                pass  # Allow test to proceed to assertions
+
+            self.assertIsNotNone(
+                captured_sock, "Socket was not captured for default bind"
+            )
+            # Assert that socket.socket was called to create an AF_INET6 socket
+            mock_socket_constructor.assert_called_once_with(
+                socket.AF_INET6, socket.SOCK_DGRAM
+            )
+            # Assert that bind was called with "::" and default port 0
+            mock_created_socket.bind.assert_called_once_with(("::", 0, 0, 0))
+            self.assertEqual(
+                captured_sock.family,
+                socket.AF_INET6,
+                "Default bind socket family should be AF_INET6",
+            )
+            # For an AF_INET6 socket bound to ("::", port, 0, 0)
+            # getsockname()[0] should be "::" on most systems.
+            # Some systems might return "0.0.0.0" if IPV6_V6ONLY=0 is very effective,
+            # but given the bind call, "::" is the direct expectation.
+            self.assertEqual(
+                captured_sock.getsockname()[0],
+                "::",
+                "Default bind address should be '::'",
+            )
+
+    @asynctest
+    async def test_connect_invalid_local_ip_string(self):
+        """
+        Test connect() when local_ip is an invalid IP address string.
+        Expect ValueError.
+        """
+        config = QuicConfiguration(is_client=True, server_name="example.com")
+        with self.assertRaisesRegex(
+            ValueError, "Invalid IP address format for local_ip"
+        ):
+            async with connect(
+                "example.com",
+                4433,
+                configuration=config,
+                local_ip="not.an.ip",
+            ):
+                pass  # Should not reach here
+
+    @asynctest
+    async def test_connect_getaddrinfo_gaierror(self):
+        """
+        Test connect() when loop.getaddrinfo raises socket.gaierror.
+        Expect ValueError.
+        """
+        with patch("asyncio.get_running_loop") as mock_get_loop:
+            mock_loop = AsyncMock()
+            mock_loop.getaddrinfo = AsyncMock(
+                side_effect=socket.gaierror("Test gaierror")
+            )
+            mock_get_loop.return_value = mock_loop
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+            with self.assertRaisesRegex(ValueError, "Error resolving remote host"):
+                async with connect("example.com", 4433, configuration=config):
+                    pass  # Should not reach here
+
+    @asynctest
+    async def test_connect_getaddrinfo_empty_list(self):
+        """
+        Test connect() when loop.getaddrinfo returns an empty list for infos.
+        Expect ValueError.
+        """
+        with patch("asyncio.get_running_loop") as mock_get_loop:
+            mock_loop = AsyncMock()
+            mock_loop.getaddrinfo = AsyncMock(return_value=[])  # Empty list
+            mock_get_loop.return_value = mock_loop
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+            with self.assertRaisesRegex(
+                ValueError, "No address information found for remote host"
+            ):
+                async with connect("example.com", 4433, configuration=config):
+                    pass  # Should not reach here
+
+    @asynctest
+    async def test_connect_bind_oserror_ipv4(self):
+        """
+        Test connect() when socket.bind() raises OSError for an IPv4 local_ip.
+        Ensure sock.close() is called.
+        """
+        mock_socket_instance = AsyncMock()
+        # bind is synchronous, so use MagicMock
+        mock_socket_instance.bind = MagicMock(side_effect=OSError("Bind error"))
+        # Used in finally block if error happens after assignment
+        mock_socket_instance.family = socket.AF_INET
+
+        with (
+            patch("asyncio.get_running_loop") as mock_get_loop,
+            patch("socket.socket") as mock_socket_constructor,
+        ):
+            mock_loop = AsyncMock()
+            # Simulate successful getaddrinfo for remote host
+            mock_loop.getaddrinfo = AsyncMock(
+                return_value=[
+                    (socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("remote_ip", 4433))
+                ]
+            )
+            # loop.create_datagram_endpoint should also be an AsyncMock for this
+            # test's purpose, but we will assert it's not called.
+            mock_loop.create_datagram_endpoint = AsyncMock()
+            mock_get_loop.return_value = mock_loop
+            mock_socket_constructor.return_value = mock_socket_instance
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+            with self.assertRaises(OSError):
+                async with connect(
+                    "example.com",
+                    4433,
+                    configuration=config,
+                    local_ip="127.0.0.1",  # IPv4 local_ip
+                ):
+                    pass  # Should not reach here
+
+            # Called in except and finally
+            self.assertEqual(mock_socket_instance.close.call_count, 2)
+            mock_loop.create_datagram_endpoint.assert_not_called()
+
+    @asynctest
+    async def test_connect_bind_oserror_ipv6(self):
+        """
+        Test connect() when socket.bind() raises OSError for an IPv6 local_ip.
+        Ensure sock.close() is called.
+        """
+        mock_socket_instance = AsyncMock()
+        # bind is synchronous, so use MagicMock
+        mock_socket_instance.bind = MagicMock(side_effect=OSError("Bind error"))
+        mock_socket_instance.family = socket.AF_INET6  # Used in finally block
+
+        with (
+            patch("asyncio.get_running_loop") as mock_get_loop,
+            patch("socket.socket") as mock_socket_constructor,
+        ):
+            mock_loop = AsyncMock()
+            mock_loop.getaddrinfo = AsyncMock(
+                return_value=[
+                    (
+                        socket.AF_INET6,
+                        socket.SOCK_DGRAM,
+                        0,
+                        "",
+                        ("::remote", 4433, 0, 0),
+                    )
+                ]
+            )
+            # loop.create_datagram_endpoint should also be an AsyncMock for this
+            # test's purpose, but we will assert it's not called.
+            mock_loop.create_datagram_endpoint = AsyncMock()
+            mock_get_loop.return_value = mock_loop
+            mock_socket_constructor.return_value = mock_socket_instance
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+            with self.assertRaises(OSError):
+                async with connect(
+                    "example.com",  # Hostname, getaddrinfo will be mocked
+                    4433,
+                    configuration=config,
+                    local_ip="::1",  # IPv6 local_ip
+                ):
+                    pass  # Should not reach here
+
+            # Called in except and finally
+            self.assertEqual(mock_socket_instance.close.call_count, 2)
+            mock_loop.create_datagram_endpoint.assert_not_called()
+
+    @asynctest
+    async def test_connect_ipv4_local_ipv6_remote_mismatch(self):
+        """
+        Test connect() with IPv4 local_ip and non-IPv4-mapped IPv6 remote.
+        Expect ValueError and ensure sock.close() is called.
+        """
+        mock_socket_instance = AsyncMock()
+        # Simulate a successfully bound AF_INET socket
+        mock_socket_instance.bind = AsyncMock()
+        mock_socket_instance.family = socket.AF_INET
+        # getsockname() needs to return a valid tuple for AF_INET
+        # for the error message formatting
+        mock_socket_instance.getsockname = AsyncMock(return_value=("127.0.0.1", 12345))
+
+        with (
+            patch("asyncio.get_running_loop") as mock_get_loop,
+            patch("socket.socket") as mock_socket_constructor,
+        ):
+            mock_loop = AsyncMock()
+            # Remote address is pure IPv6
+            mock_loop.getaddrinfo = AsyncMock(
+                return_value=[
+                    (
+                        socket.AF_INET6,
+                        socket.SOCK_DGRAM,
+                        0,
+                        "",
+                        ("::1", 4433, 0, 0),
+                    )
+                ]
+            )
+            mock_get_loop.return_value = mock_loop
+            mock_socket_constructor.return_value = mock_socket_instance
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+            expected_error_msg = (
+                "Cannot connect to IPv6 remote host ::1 "
+                "from a locally bound IPv4 address 127.0.0.1"
+            )
+            with self.assertRaisesRegex(ValueError, expected_error_msg):
+                async with connect(
+                    "::1",  # Remote host, matching getaddrinfo
+                    4433,
+                    configuration=config,
+                    local_ip="127.0.0.1",  # IPv4 local_ip
+                ):
+                    pass  # Should not reach here
+
+            mock_socket_instance.close.assert_called_once()
+
+    @asynctest
+    async def test_connect_unexpected_error_during_bind_phase_closes_socket(self):
+        """
+        Test that sock.close() is called if an unexpected error occurs after
+        socket creation but before 'completed = True' in the binding phase.
+        This tests the 'finally' block within the binding try-except.
+        """
+        mock_socket_instance = AsyncMock()
+        # We want socket creation to succeed.
+        # setsockopt will be made to raise an unexpected error.
+        # setsockopt is synchronous.
+        mock_socket_instance.setsockopt = MagicMock(
+            side_effect=RuntimeError("Unexpected setsockopt error")
+        )
+        # family needs to be set for the error path in connect() if setsockopt fails.
+        mock_socket_instance.family = socket.AF_INET6
+
+        # ipaddress.ip_address is not patched here, allowing the real one to be called.
+        with (
+            patch("asyncio.get_running_loop") as mock_get_loop,
+            patch("socket.socket") as mock_socket_constructor,
+        ):
+            mock_loop = AsyncMock()
+            # getaddrinfo must succeed. We'll use an IPv6 remote to match local_ip="::1"
+            mock_loop.getaddrinfo = AsyncMock(
+                return_value=[
+                    (
+                        socket.AF_INET6,
+                        socket.SOCK_DGRAM,
+                        0,
+                        "",
+                        ("::remote", 4433, 0, 0),
+                    )
+                ]
+            )
+            mock_get_loop.return_value = mock_loop
+
+            mock_socket_constructor.return_value = mock_socket_instance
+            # ip_address parsing should succeed for "::1"
+            # We need to ensure that the actual ipaddress.ip_address is used,
+            # not a default AsyncMock, so we don't mock its return_value here
+            # unless necessary for other paths.
+            # For this test, we let it pass through or mock it to succeed.
+            # If ipaddress.ip_address itself is the source of error,
+            # it's a different test. Here, we assume ipaddress.ip_address("::1") works.
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+            with self.assertRaisesRegex(RuntimeError, "Unexpected setsockopt error"):
+                async with connect(
+                    "example.com",  # remote host
+                    4433,
+                    configuration=config,
+                    # IPv6 local_ip to trigger setsockopt for IPV6_V6ONLY
+                    local_ip="::1",
+                ):
+                    pass  # Should not reach here
+
+            # Crucial assertion: socket was created, then an error occurred,
+            # so the finally block should close it.
+            mock_socket_constructor.assert_called_once_with(
+                socket.AF_INET6, socket.SOCK_DGRAM
+            )
+            # Ensure setsockopt was called
+            mock_socket_instance.setsockopt.assert_called_once()
+            mock_socket_instance.close.assert_called_once()
+
+    @asynctest
+    async def test_connect_error_post_endpoint_creation_cleans_up(self):
+        """
+        Test that protocol.close(), protocol.wait_closed(), and transport.close()
+        are called if an exception occurs after create_datagram_endpoint
+        but before the protocol is yielded.
+        """
+        mock_transport = AsyncMock()
+        mock_transport.close = MagicMock()  # Synchronous call
+
+        mock_protocol = AsyncMock(spec=QuicConnectionProtocol)
+        # protocol.connect is synchronous
+        mock_protocol.connect = MagicMock(
+            side_effect=RuntimeError("Protocol connect error")
+        )
+        # protocol.close is synchronous
+        mock_protocol.close = MagicMock()
+        # protocol.wait_closed is asynchronous
+        mock_protocol.wait_closed = AsyncMock(return_value=None)
+
+        with (
+            patch("asyncio.get_running_loop") as mock_get_loop,
+            patch("socket.socket") as mock_socket_constructor,
+            patch("ipaddress.ip_address"),
+        ):
+            mock_loop = AsyncMock()
+            # Remote address is AF_INET
+            mock_loop.getaddrinfo = AsyncMock(
+                return_value=[
+                    (socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("127.0.0.1", 4433))
+                ]
+            )
+
+            # Mock the socket instance that will be created
+            mock_socket_instance = AsyncMock()
+            # Default local binding attempts AF_INET6 first.
+            # Let's assume this succeeds for setting up sock.family.
+            mock_socket_instance.family = socket.AF_INET6
+            mock_socket_constructor.return_value = mock_socket_instance
+
+            # create_datagram_endpoint should succeed and return our mocks
+            mock_loop.create_datagram_endpoint = AsyncMock(
+                return_value=(mock_transport, mock_protocol)
+            )
+            mock_get_loop.return_value = mock_loop
+
+            config = QuicConfiguration(is_client=True, server_name="example.com")
+
+            with self.assertRaisesRegex(RuntimeError, "Protocol connect error"):
+                async with connect(
+                    "127.0.0.1",
+                    4433,
+                    configuration=config,
+                    # local_ip=None, # Default behavior
+                    wait_connected=True,  # Ensure protocol.connect is called
+                ):
+                    pass  # Should not reach here
+
+            # Assertions for cleanup
+            mock_protocol.close.assert_called_once()
+            mock_protocol.wait_closed.assert_called_once()
+            mock_transport.close.assert_called_once()
