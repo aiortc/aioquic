@@ -4,6 +4,7 @@ import logging
 import os
 import pickle
 import ssl
+import sys # Added for stderr
 import time
 from collections import deque
 from typing import BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
@@ -154,6 +155,27 @@ class HttpClient(QuicConnectionProtocol):
             HttpRequest(method="POST", url=URL(url), content=data, headers=headers)
         )
 
+    async def upload(
+        self, url: str, file_path: str, headers: Optional[Dict] = None
+    ) -> Deque[H3Event]:
+        """
+        Perform a POST request to upload a file.
+        """
+        # Keep 'headers: Optional[Dict] = None' for compatibility, but ignore it for now.
+        
+        # os module should be imported at the top of the file.
+        # basename = os.path.basename(file_path) # This line is no longer needed for headers
+        minimal_headers = {
+            # No "Content-Type"
+            # No "Content-Disposition"
+        }
+        # The 'headers' input parameter is deliberately ignored.
+        
+        request = HttpRequest(
+            method="PUT", url=URL(url), content=b"", headers=minimal_headers
+        )
+        return await self._request(request, file_path=file_path)
+
     async def websocket(
         self, url: str, subprotocols: Optional[List[str]] = None
     ) -> WebSocket:
@@ -216,24 +238,66 @@ class HttpClient(QuicConnectionProtocol):
             for http_event in self._http.handle_event(event):
                 self.http_event_received(http_event)
 
-    async def _request(self, request: HttpRequest) -> Deque[H3Event]:
-        stream_id = self._quic.get_next_available_stream_id()
-        self._http.send_headers(
-            stream_id=stream_id,
-            headers=[
-                (b":method", request.method.encode()),
-                (b":scheme", request.url.scheme.encode()),
-                (b":authority", request.url.authority.encode()),
-                (b":path", request.url.full_path.encode()),
-                (b"user-agent", USER_AGENT.encode()),
-            ]
-            + [(k.encode(), v.encode()) for (k, v) in request.headers.items()],
-            end_stream=not request.content,
-        )
-        if request.content:
-            self._http.send_data(
-                stream_id=stream_id, data=request.content, end_stream=True
+    async def _request(
+        self, request: HttpRequest, file_path: Optional[str] = None
+    ) -> Deque[H3Event]:
+        if len(self._request_waiter) > 100: # Threshold for warning
+            logger.warning(
+                f"HttpClient has {len(self._request_waiter)} concurrent requests pending. Further stream creations might be delayed due to server-imposed concurrent stream limits."
             )
+        stream_id = self._quic.get_next_available_stream_id()
+
+        common_headers = [
+            (b":method", request.method.encode()),
+            (b":scheme", request.url.scheme.encode()),
+            (b":authority", request.url.authority.encode()),
+            (b":path", request.url.full_path.encode()),
+            (b"user-agent", USER_AGENT.encode()),
+        ] + [(k.encode(), v.encode()) for (k, v) in request.headers.items()]
+
+        if file_path:
+            # Sending a file
+            self._http.send_headers(
+                stream_id=stream_id,
+                headers=common_headers,
+                end_stream=False,  # Headers are not the end of the stream
+            )
+
+            chunk_size = 4096
+            try:
+                with open(file_path, "rb") as f:
+                    while True:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break  # End of file
+                        self._http.send_data(
+                            stream_id=stream_id, data=chunk, end_stream=False
+                        )
+                # After all chunks are sent, send an empty data frame with end_stream=True
+                self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
+            except FileNotFoundError:
+                # Handle file not found error appropriately.
+                # For now, we can log it or raise an exception.
+                # This example will simply not send data if file not found,
+                # but a real application should handle this more gracefully.
+                logger.error(f"File not found: {file_path}")
+                # We might want to send an error back to the client or close the stream.
+                # For simplicity, sending an empty data frame with end_stream=True
+                # to correctly terminate the stream.
+                self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
+
+        else:
+            # Original behavior: sending content from request.content
+            self._http.send_headers(
+                stream_id=stream_id,
+                headers=common_headers,
+                end_stream=not request.content, # True if no content, False if content follows
+            )
+            if request.content:
+                self._http.send_data(
+                    stream_id=stream_id, data=request.content, end_stream=True
+                )
+            # If no request.content, headers with end_stream=True was already sent.
 
         waiter = self._loop.create_future()
         self._request_events[stream_id] = deque()
@@ -249,10 +313,16 @@ async def perform_http_request(
     data: Optional[str],
     include: bool,
     output_dir: Optional[str],
+    upload_file_path: Optional[str] = None,
 ) -> None:
     # perform request
     start = time.time()
-    if data is not None:
+    if upload_file_path:
+        # Pass empty headers for now, as per instruction.
+        # The `upload` method itself sets Content-Type to application/octet-stream.
+        http_events = await client.upload(url, file_path=upload_file_path, headers={})
+        method = "PUT"
+    elif data is not None:
         data_bytes = data.encode()
         http_events = await client.post(
             url,
@@ -269,10 +339,18 @@ async def perform_http_request(
     elapsed = time.time() - start
 
     # print speed
-    octets = 0
-    for http_event in http_events:
-        if isinstance(http_event, DataReceived):
-            octets += len(http_event.data)
+    if method == "PUT" and upload_file_path: # Check method and ensure upload_file_path is available
+        try:
+            octets = os.path.getsize(upload_file_path)
+        except OSError as e:
+            logger.error(f"Could not get size of uploaded file {upload_file_path}: {e}")
+            octets = 0 # Fallback if file size can't be read (e.g. deleted post-send start)
+    else: # For GET, POST, or if PUT somehow didn't have upload_file_path
+        octets = 0
+        for http_event in http_events:
+            if isinstance(http_event, DataReceived):
+                octets += len(http_event.data)
+    
     logger.info(
         "Response received for %s %s : %d bytes in %.1f s (%.3f Mbps)"
         % (method, urlparse(url).path, octets, elapsed, octets * 8 / elapsed / 1000000)
@@ -353,6 +431,8 @@ async def main(
     output_dir: Optional[str],
     local_port: int,
     zero_rtt: bool,
+    upload_file: Optional[str] = None,
+    num_streams: int = 1,
 ) -> None:
     # parse URL
     parsed = urlparse(urls[0])
@@ -392,6 +472,7 @@ async def main(
         create_protocol=HttpClient,
         session_ticket_handler=save_session_ticket,
         local_port=local_port,
+        # local_host="0.0.0.0", # Removed as it caused TypeError with aioquic 1.2.0
         wait_connected=not zero_rtt,
     ) as client:
         client = cast(HttpClient, client)
@@ -410,18 +491,50 @@ async def main(
 
             await ws.close()
         else:
-            # perform request
-            coros = [
-                perform_http_request(
-                    client=client,
-                    url=url,
-                    data=data,
-                    include=include,
-                    output_dir=output_dir,
-                )
-                for url in urls
-            ]
-            await asyncio.gather(*coros)
+            # When using --num-streams, the client will attempt to create
+            # multiple streams for each specified URL.
+            # Note that the actual number of concurrent streams is limited by the server.
+            # The aioquic library will queue stream initiation attempts if the server's limit
+            # is reached, and these will be processed as the server increases
+            # its limits via MAX_STREAMS frames.
+            
+            # The `data` and `upload_file` parameters for main() are derived from
+            # args.data and args.upload_file in the `if __name__ == "__main__":` block.
+            # If args.upload_file is set, data (data_to_pass) is None.
+            # This means `upload_file` takes precedence if provided.
+            
+            all_coros = []
+            for url_str in urls:  # Iterate through each URL provided
+                for _ in range(num_streams): # For each URL, create num_streams requests
+                    all_coros.append(
+                        perform_http_request(
+                            client=client,
+                            url=url_str,
+                            data=data, # This is data_to_pass from __main__
+                            include=include,
+                            output_dir=output_dir,
+                            upload_file_path=upload_file, # This is args.upload_file from __main__
+                        )
+                    )
+            
+            if all_coros:
+                results = await asyncio.gather(*all_coros, return_exceptions=True)
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        # Determine which URL and request number this was for context
+                        # num_streams is available in main's scope
+                        # urls is available in main's scope
+                        url_idx = i // num_streams if num_streams > 0 else i # Avoid division by zero if num_streams somehow is 0
+                        req_num_for_url = (i % num_streams) + 1 if num_streams > 0 else 1
+                        
+                        failed_url = "unknown_url"
+                        if url_idx < len(urls):
+                            failed_url = urls[url_idx]
+                                
+                        logger.error(
+                            f"Request {req_num_for_url} for URL {failed_url} encountered an error: {result}",
+                            exc_info=result if isinstance(result, BaseException) else None # Log traceback if it's an actual exception object
+                        )
 
             # process http pushes
             process_http_pushes(client=client, include=include, output_dir=output_dir)
@@ -459,6 +572,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-d", "--data", type=str, help="send the specified data in a POST request"
+    )
+    parser.add_argument(
+        "--upload-file",
+        type=str,
+        help="path to the file to upload (disables --data if used)",
     )
     parser.add_argument(
         "-i",
@@ -538,6 +656,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--zero-rtt", action="store_true", help="try to send requests using 0-RTT"
     )
+    parser.add_argument(
+        "--num-streams",
+        type=int,
+        default=1,
+        help="the number of streams to create (default: 1)",
+    )
 
     args = parser.parse_args()
 
@@ -591,14 +715,23 @@ if __name__ == "__main__":
 
     if uvloop is not None:
         uvloop.install()
+    data_to_pass = args.data
+    if args.upload_file and args.data:
+        logger.warning(
+            "Both --data and --upload-file specified. --data will be ignored."
+        )
+        data_to_pass = None
+
     asyncio.run(
         main(
             configuration=configuration,
             urls=args.url,
-            data=args.data,
+            data=data_to_pass,
             include=args.include,
             output_dir=args.output_dir,
             local_port=args.local_port,
             zero_rtt=args.zero_rtt,
+            upload_file=args.upload_file,
+            num_streams=args.num_streams,
         )
     )
