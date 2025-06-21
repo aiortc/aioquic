@@ -335,7 +335,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
             logged_headers = []
             for name, value in event.headers:
                 max_value_len = 100  # General max length for a header value
-                if isinstance(self._http, H0Connection) and name == b':path':
+                if isinstance(self._http, H0Connection) and name == b":path":
                     # For H0Connection, the path can contain the body for PUT/POST
                     # Truncate path more aggressively if it looks like binary data.
                     # For simplicity, always truncate to a shorter length for logging.
@@ -343,9 +343,9 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     prefix = value[:max_value_len]
                     try:
                         # Attempt to decode a small prefix to see if it's text-like
-                        prefix.decode('utf-8')
+                        prefix.decode("utf-8")
                         # If decodable, log its prefix (still truncated)
-                        display_value = prefix.decode('ascii', errors='replace')
+                        display_value = prefix.decode("ascii", errors="replace")
                         if len(value) > max_value_len:
                             display_value += "..."
                         logged_headers.append((name, display_value))
