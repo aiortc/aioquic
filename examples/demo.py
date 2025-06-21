@@ -6,7 +6,7 @@ import datetime
 import os
 from urllib.parse import urlencode
 
-import aiofiles
+import aiofiles  # type: ignore
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.responses import PlainTextResponse, Response
