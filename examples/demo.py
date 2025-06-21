@@ -4,20 +4,17 @@
 
 import datetime
 import os
-import time
-import aiofiles
-import cgi
-import uuid
 from urllib.parse import urlencode
 
+import aiofiles
 from starlette.applications import Starlette
+from starlette.exceptions import HTTPException
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.types import Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
-from starlette.exceptions import HTTPException
 
 ROOT = os.path.dirname(__file__)
 STATIC_ROOT = os.environ.get("STATIC_ROOT", os.path.join(ROOT, "htdocs"))
@@ -27,7 +24,8 @@ QVIS_URL = "https://qvis.quictools.info/"
 
 templates = Jinja2Templates(directory=os.path.join(ROOT, "templates"))
 
-# Define UPLOAD_DIR using environment variable AIOQUIC_UPLOAD_DIR or default, and create it
+# Define UPLOAD_DIR using environment variable AIOQUIC_UPLOAD_DIR or a
+# default, and create it.
 UPLOAD_DIR = os.environ.get("AIOQUIC_UPLOAD_DIR", os.path.join(ROOT, "uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -114,43 +112,50 @@ async def handle_root_post_upload(request):
     filepath = request.path_params["filepath"]
     if filepath.startswith("upload/"):
         filepath = filepath[len("upload/"):]
-        # Ensure filepath is not empty after stripping, or handle if it could be just "upload/"
-        if not filepath: # e.g. if original path was "upload/"
-            # Decide behavior: reject, or treat as upload to UPLOAD_DIR root with generated name (current logic handles empty sanitized name)
-            # For now, an empty filepath after stripping will be handled by later sanitization.
+        # Handle case where path is just "upload/".
+        if not filepath:  # e.g. if original path was "upload/"
+            # An empty filepath is handled by later sanitization.
             pass
-    
-    filepath = filepath.lstrip("/") # This line remains as per instructions
+
+    filepath = filepath.lstrip("/")  # This line remains as per instructions
 
     abs_upload_dir = os.path.abspath(UPLOAD_DIR)
-    
+
     save_path = os.path.join(abs_upload_dir, filepath)
     abs_save_path = os.path.abspath(save_path)
 
     # Security Check
     if os.path.commonprefix([abs_save_path, abs_upload_dir]) != abs_upload_dir:
-        raise HTTPException(status_code=403, detail="Forbidden: Path traversal attempt.")
+        raise HTTPException(
+            status_code=403, detail="Forbidden: Path traversal attempt."
+        )
 
     try:
         parent_dir = os.path.dirname(abs_save_path)
         if parent_dir and not os.path.exists(parent_dir):
             os.makedirs(parent_dir, exist_ok=True)
-        
+
         async with aiofiles.open(abs_save_path, "wb") as f:
             async for chunk in request.stream():
                 await f.write(chunk)
-        
+
         file_size = os.path.getsize(abs_save_path)
-        response_text = f"File '{filepath}' uploaded successfully ({file_size} bytes).\nSaved at: {abs_save_path}"
+        response_text = (
+            f"File '{filepath}' uploaded successfully ({file_size} bytes).\n"
+            f"Saved at: {abs_save_path}"
+        )
         return PlainTextResponse(response_text, status_code=200)
     except HTTPException:
-        raise 
+        raise
     except Exception as e:
-        print(f"Error during root dynamic file upload for {filepath}: {e}") # KEEP THIS
+        print(f"Error during root dynamic file upload for {filepath}: {e}")  # KEEP THIS
         # Log the full traceback for server-side debugging
-        import traceback # KEEP THIS (if not already module level)
-        traceback.print_exc() # KEEP THIS
-        raise HTTPException(status_code=500, detail=f"Error uploading file '{filepath}': {str(e)}")
+        import traceback  # KEEP THIS (if not already module level)
+
+        traceback.print_exc()  # KEEP THIS
+        raise HTTPException(
+            status_code=500, detail=f"Error uploading file '{filepath}': {str(e)}"
+        )
 
 
 async def wt(scope: Scope, receive: Receive, send: Send) -> None:
@@ -186,12 +191,13 @@ starlette = Starlette(
     routes=[
         Route("/", homepage),
         Route("/{size:int}", padding),
-        Route("/echo", echo, methods=["POST"]), # Specific POST
+        Route("/echo", echo, methods=["POST"]),  # Specific POST
         Route("/logs", logs),
         WebSocketRoute("/ws", ws),
         # Add the new root-level POST handler here
         Route("/{filepath:path}", handle_root_post_upload, methods=["POST", "PUT"]),
-        Mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True)), # Catch-all for GET (and others if not matched)
+        # Catch-all for GET (and others if not matched)
+        Mount(STATIC_URL, StaticFiles(directory=STATIC_ROOT, html=True)),
     ]
 )
 
