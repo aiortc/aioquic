@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import importlib
 import logging
+import os
 import time
 from collections import deque
 from email.utils import formatdate
@@ -329,6 +330,42 @@ class HttpServerProtocol(QuicConnectionProtocol):
         self._http: Optional[HttpConnection] = None
 
     def http_event_received(self, event: H3Event) -> None:
+        if isinstance(event, HeadersReceived):
+            # Log raw headers for diagnostic purposes
+            logged_headers = []
+            for name, value in event.headers:
+                max_value_len = 100  # General max length for a header value
+                if isinstance(self._http, H0Connection) and name == b":path":
+                    # For H0Connection, the path can contain the body for PUT/POST
+                    # Truncate path more aggressively if it looks like binary data.
+                    # For simplicity, always truncate to a shorter length for logging.
+                    max_value_len = 100
+                    prefix = value[:max_value_len]
+                    try:
+                        # Attempt to decode a small prefix to see if it's text-like
+                        prefix.decode("utf-8")
+                        # If decodable, log its prefix (still truncated)
+                        display_value = prefix.decode("ascii", errors="replace")
+                        if len(value) > max_value_len:
+                            display_value += "..."
+                        logged_headers.append((name, display_value))
+                    except UnicodeDecodeError:
+                        # If not decodable as UTF-8, it's likely binary.
+                        logged_headers.append(
+                            (name, f"<binary data, {len(value)} bytes>")
+                        )
+                else:
+                    # For other headers or H3 connections
+                    display_value = value[:max_value_len].decode(
+                        "ascii", errors="replace"
+                    )
+                    if len(value) > max_value_len:
+                        display_value += "..."
+                    logged_headers.append((name, display_value))
+            self._quic._logger.info(
+                f"Raw headers received on stream {event.stream_id}: {logged_headers}"
+            )
+
         if isinstance(event, HeadersReceived) and event.stream_id not in self._handlers:
             authority = None
             headers = []
@@ -348,6 +385,33 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     protocol = value.decode()
                 elif header and not header.startswith(b":"):
                     headers.append((header, value))
+
+            # Handle HTTP/0.9 PUT/POST attempts
+            if isinstance(self._http, H0Connection) and method in ("PUT", "POST"):
+                # Truncate raw_path before decoding to limit length of binary data
+                # representation
+                truncated_raw_path = raw_path[:100]  # Max 100 bytes
+                log_path_display = truncated_raw_path.decode("ascii", errors="replace")
+                if len(raw_path) > 100:
+                    log_path_display += "..."
+                self._quic._logger.warning(
+                    (
+                        "HTTP/0.9 %s request for path starting with '%s' on stream %d "
+                        "is not supported. Sending error and closing stream."
+                    ),
+                    method,
+                    log_path_display,
+                    event.stream_id,
+                )
+                error_body = b"Error: Method Not Allowed for HTTP/0.9 requests.\r\n"
+                self._http.send_data(
+                    stream_id=event.stream_id, data=error_body, end_stream=True
+                )
+                self.transmit()
+                # Since this code is within the "if event.stream_id not in
+                # self._handlers" block, simply returning should prevent it from
+                # being added to _handlers and processed by ASGI.
+                return
 
             if b"?" in raw_path:
                 path_bytes, query_string = raw_path.split(b"?", maxsplit=1)
@@ -567,7 +631,39 @@ if __name__ == "__main__":
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="increase logging verbosity"
     )
+    parser.add_argument(
+        "--upload-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory to save uploaded files (influences AIOQUIC_UPLOAD_DIR "
+            "in demo.py)"
+        ),
+    )
+    parser.add_argument(
+        "--static-dir",
+        type=str,
+        default=None,
+        help=(
+            "Root directory for serving static files (influences STATIC_ROOT "
+            "in demo.py)"
+        ),
+    )
     args = parser.parse_args()
+
+    # Set environment variables based on command-line arguments
+    if args.upload_dir is not None:
+        abs_upload_dir = os.path.abspath(args.upload_dir)
+        os.environ["AIOQUIC_UPLOAD_DIR"] = abs_upload_dir
+        # Use logging if available and configured, otherwise print
+        # Assuming logger might not be configured yet, print for simplicity
+        # as per instructions
+        print(f"INFO: Uploads will be saved to directory: {abs_upload_dir}")
+
+    if args.static_dir is not None:
+        abs_static_dir = os.path.abspath(args.static_dir)
+        os.environ["STATIC_ROOT"] = abs_static_dir
+        print(f"INFO: Static files will be served from directory: {abs_static_dir}")
 
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
