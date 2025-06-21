@@ -453,7 +453,7 @@ async def main(
     data: Optional[str],
     include: bool,
     output_dir: Optional[str],
-    local_ip: str, # Added local_ip
+    local_ip: str,  # Added local_ip
     local_port: int,
     zero_rtt: bool,
     upload_file: Optional[str] = None,
@@ -490,13 +490,13 @@ async def main(
         _p = urlparse(_p.geturl())
         urls[i] = _p.geturl()
 
-    async with _local_connect( # Changed to _local_connect
+    async with _local_connect(  # Changed to _local_connect
         host,
         port,
         configuration=configuration,
         create_protocol=HttpClient,
         session_ticket_handler=save_session_ticket,
-        local_host=local_ip, # Passed local_ip as local_host
+        local_host=local_ip,  # Passed local_ip as local_host
         local_port=local_port,
         # local_host="0.0.0.0", # Removed as it caused TypeError with aioquic 1.2.0
         wait_connected=not zero_rtt,
@@ -591,7 +591,7 @@ async def _local_connect(
     stream_handler: Optional[QuicStreamHandler] = None,
     token_handler: Optional[QuicTokenHandler] = None,
     wait_connected: bool = True,
-    local_host: str = "::", # Added parameter
+    local_host: str = "::",  # Added parameter
     local_port: int = 0,
 ) -> AsyncGenerator[QuicConnectionProtocol, None]:
     """
@@ -624,7 +624,6 @@ async def _local_connect(
     # Default to the first entry from getaddrinfo for the remote host.
     _r_addr_info = remote_infos[0]
 
-
     # prepare QUIC connection
     if configuration is None:
         configuration = QuicConfiguration(is_client=True)
@@ -651,8 +650,7 @@ async def _local_connect(
             sock.bind((local_host, local_port, 0, 0))  # Bind to "::"
         except OSError as e:
             logger.error(
-                f"Direct IPv6 bind for '::' failed: {e}. "
-                f"Falling back to getaddrinfo."
+                f"Direct IPv6 bind for '::' failed: {e}. Falling back to getaddrinfo."
             )
             last_exc = e  # Store exception in case fallback also fails
             if sock:
@@ -960,7 +958,7 @@ if __name__ == "__main__":
             data=data_to_pass,
             include=args.include,
             output_dir=args.output_dir,
-            local_ip=args.local_ip, # Pass local_ip
+            local_ip=args.local_ip,
             local_port=args.local_port,
             zero_rtt=args.zero_rtt,
             upload_file=args.upload_file,
