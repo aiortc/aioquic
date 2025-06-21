@@ -48,6 +48,13 @@ Alternatively you can perform an HTTP/0.9 request:
 
   python examples/http3_client.py --ca-certs tests/pycacert.pem --legacy-http https://localhost:4433/
 
+The client also supports QUIC v2. By default, the server will accept both QUIC v1 and v2.
+You can instruct the client to only use QUIC v2 and fail if the server does not support it:
+
+.. code-block:: console
+
+  python examples/http3_client.py --ca-certs tests/pycacert.pem --strictly-v2 https://localhost:4433/
+
 Note: Attempting to use methods like PUT or POST (e.g., for file uploads via `--upload-file`)
 with the `--legacy-http` option is not supported by the example server.
 The server will respond with an error message and close the stream.

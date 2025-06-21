@@ -834,6 +834,12 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--strictly-v2",
+        action="store_true",
+        help="connect using only QUIC v2, fail if not supported",
+    )
+
+    parser.add_argument(
         "--output-dir",
         type=str,
         help="write downloaded files to this directory",
@@ -894,6 +900,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    if args.negotiate_v2 and args.strictly_v2:
+        parser.error("argument --strictly-v2: not allowed with argument --negotiate-v2")
+
     logging.basicConfig(
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -927,6 +936,9 @@ if __name__ == "__main__":
             QuicProtocolVersion.VERSION_2,
             QuicProtocolVersion.VERSION_1,
         ]
+    elif args.strictly_v2:
+        configuration.original_version = QuicProtocolVersion.VERSION_2
+        configuration.supported_versions = [QuicProtocolVersion.VERSION_2]
     if args.quic_log:
         configuration.quic_logger = QuicFileLogger(args.quic_log)
     if args.secrets_log:

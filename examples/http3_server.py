@@ -25,6 +25,7 @@ from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import DatagramFrameReceived, ProtocolNegotiated, QuicEvent
 from aioquic.quic.logger import QuicFileLogger
+from aioquic.quic.packet import QuicProtocolVersion
 from aioquic.tls import SessionTicket
 
 try:
@@ -695,6 +696,10 @@ if __name__ == "__main__":
         max_datagram_size=args.max_datagram_size,
         quic_logger=quic_logger,
         secrets_log_file=secrets_log_file,
+        supported_versions=[
+            QuicProtocolVersion.VERSION_2,
+            QuicProtocolVersion.VERSION_1,
+        ],
     )
 
     # load SSL certificate and key
