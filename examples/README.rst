@@ -46,6 +46,20 @@ You can also open a WebSocket over HTTP/3:
 
   python examples/http3_client.py --ca-certs tests/pycacert.pem wss://localhost:4433/ws
 
+The client also supports creating multiple streams for a request (if the URL scheme is HTTPS).
+This can be controlled with the ``--num-streams`` argument:
+
+.. code-block:: console
+
+  python examples/http3_client.py --ca-certs tests/pycacert.pem https://localhost:4433/ --num-streams 10
+
+If ``--num-streams`` is set to a value significantly higher than the server's
+advertised concurrent stream limit (typically 128 by default for `aioquic`),
+the client may show a warning: *"HttpClient has ... concurrent requests pending.
+Further stream creations might be delayed due to peer stream limits."*
+This indicates that the client is queuing requests locally until the server
+increases its stream limit via ``MAX_STREAMS`` frames.
+
 File Uploads (using PUT)
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -167,3 +181,45 @@ Please note that for real-world usage you will need to obtain a valid TLS certif
 .. _Google Public DNS: https://developers.google.com/speed/public-dns
 .. _--enable-experimental-web-platform-features: https://peter.sh/experiments/chromium-command-line-switches/#enable-experimental-web-platform-features
 .. _--ignore-certificate-errors-spki-list: https://peter.sh/experiments/chromium-command-line-switches/#ignore-certificate-errors-spki-list
+
+
+Performance Considerations for `http3_client.py`
+------------------------------------------------
+
+When using `http3_client.py` for sending a large number of requests or streams
+(e.g., using `--num-streams` with a high value), be aware of the following:
+
+*   **Python's Async Capabilities**: While `asyncio` provides excellent concurrency,
+    Python's Global Interpreter Lock (GIL) means that CPU-bound work in one part
+    of the client (e.g., intense data processing before sending, if added by a user)
+    might still impact the overall throughput of network operations. For I/O-bound
+    work like sending and receiving HTTP requests, `aioquic` and `asyncio` are
+    very efficient.
+
+*   **Stream and Connection Limits**: QUIC connections have built-in limits on
+    concurrent streams (typically advertised by the server, defaulting to 128
+    bidirectional streams in `aioquic` if the server doesn't specify otherwise)
+    and flow control limits for data. If the client attempts to open more streams
+    than the server currently allows, `aioquic` will queue these requests.
+    The client's warning, *"HttpClient has ... concurrent requests pending..."*,
+    can indicate that it's waiting for the server to increase stream limits via
+    `MAX_STREAMS` frames.
+
+*   **Single Client Instance**: The `http3_client.py` example runs as a single
+    Python process. To fully saturate very high-bandwidth links or to maximize
+    requests per second to a high-capacity server, you might need to run
+    multiple instances of the client, potentially distributed across different CPU
+    cores or even machines.
+
+*   **Underlying `aioquic` Library**: `aioquic` itself is a performant library.
+    Most bottlenecks in typical use cases with this example client are more likely
+    to be related to application logic, Python's single-process nature for
+    CPU-bound tasks, or network/server limitations rather than the core QUIC
+    protocol handling in `aioquic`.
+
+*   **Logging Verbosity**: Verbose logging (`-v`) can have a performance impact,
+    especially with many concurrent streams. For performance testing, consider
+    running with default (INFO) or minimal logging.
+
+This example client is designed for demonstration and testing of `aioquic`
+features rather than as a production-grade load generation tool.
