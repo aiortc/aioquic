@@ -35,11 +35,72 @@ Alternatively you can perform an HTTP/0.9 request:
 
   python examples/http3_client.py --ca-certs tests/pycacert.pem --legacy-http https://localhost:4433/
 
+Note: Attempting to use methods like PUT or POST (e.g., for file uploads via `--upload-file`)
+with the `--legacy-http` option is not supported by the example server.
+The server will respond with an error message and close the stream.
+HTTP/0.9 is primarily designed for simple GET requests.
+
 You can also open a WebSocket over HTTP/3:
 
 .. code-block:: console
 
   python examples/http3_client.py --ca-certs tests/pycacert.pem wss://localhost:4433/ws
+
+The client also supports creating multiple streams for a request (if the URL scheme is HTTPS).
+This can be controlled with the ``--num-streams`` argument:
+
+.. code-block:: console
+
+  python examples/http3_client.py --ca-certs tests/pycacert.pem https://localhost:4433/ --num-streams 10
+
+If ``--num-streams`` is set to a value significantly higher than the server's
+advertised concurrent stream limit (typically 128 by default for `aioquic`),
+the client may show a warning: *"HttpClient has ... concurrent requests pending.
+Further stream creations might be delayed due to peer stream limits."*
+This indicates that the client is queuing requests locally until the server
+increases its stream limit via ``MAX_STREAMS`` frames.
+
+File Uploads (using PUT)
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The example client can also upload files to the server using the `PUT` method.
+The server must be configured with an upload directory, and the path in the URL
+will dictate where the file is saved within that directory.
+
+First, ensure the server is running and configured with an upload directory.
+For example, to save uploaded files into a directory named `my_server_uploads`
+(created in your current working directory):
+
+.. code-block:: console
+
+   python examples/http3_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem --upload-dir ./my_server_uploads
+
+Then, use `http3_client.py` with the `--upload-file` option to send a file.
+The URL path will determine the save location and name on the server, relative
+to the server's configured upload directory.
+
+.. code-block:: console
+
+  python examples/http3_client.py --ca-certs tests/ssl_cert.pem --upload-file ./localfile.txt https://localhost:4433/path/on_server/remote_filename.txt
+
+This command will upload `./localfile.txt` from your machine, and the server
+will save it as `path/on_server/remote_filename.txt` inside the
+`./my_server_uploads` directory (creating subdirectories like `path/on_server/`
+if they don't exist).
+
+*Important Note on Headers:* Currently, `http3_client.py` sends no `Content-Type`
+or `Content-Disposition` headers for uploads. This is a workaround for a
+suspected issue in the underlying `aioquic` library's H3 header processing.
+The server uses the URL path for the filename and infers the content type if needed.
+
+You can also upload files using `curl` with the `PUT` method (which `curl -T` uses):
+
+.. code-block:: console
+
+  curl -T ./localfile.txt https://localhost:4433/path/on_server/remote_filename.txt --http3 -k
+
+(The `-k` flag for `curl` allows it to work with self-signed certificates like the
+example `ssl_cert.pem`.)
 
 Chromium and Chrome usage
 .........................
@@ -120,3 +181,45 @@ Please note that for real-world usage you will need to obtain a valid TLS certif
 .. _Google Public DNS: https://developers.google.com/speed/public-dns
 .. _--enable-experimental-web-platform-features: https://peter.sh/experiments/chromium-command-line-switches/#enable-experimental-web-platform-features
 .. _--ignore-certificate-errors-spki-list: https://peter.sh/experiments/chromium-command-line-switches/#ignore-certificate-errors-spki-list
+
+
+Performance Considerations for `http3_client.py`
+------------------------------------------------
+
+When using `http3_client.py` for sending a large number of requests or streams
+(e.g., using `--num-streams` with a high value), be aware of the following:
+
+*   **Python's Async Capabilities**: While `asyncio` provides excellent concurrency,
+    Python's Global Interpreter Lock (GIL) means that CPU-bound work in one part
+    of the client (e.g., intense data processing before sending, if added by a user)
+    might still impact the overall throughput of network operations. For I/O-bound
+    work like sending and receiving HTTP requests, `aioquic` and `asyncio` are
+    very efficient.
+
+*   **Stream and Connection Limits**: QUIC connections have built-in limits on
+    concurrent streams (typically advertised by the server, defaulting to 128
+    bidirectional streams in `aioquic` if the server doesn't specify otherwise)
+    and flow control limits for data. If the client attempts to open more streams
+    than the server currently allows, `aioquic` will queue these requests.
+    The client's warning, *"HttpClient has ... concurrent requests pending..."*,
+    can indicate that it's waiting for the server to increase stream limits via
+    `MAX_STREAMS` frames.
+
+*   **Single Client Instance**: The `http3_client.py` example runs as a single
+    Python process. To fully saturate very high-bandwidth links or to maximize
+    requests per second to a high-capacity server, you might need to run
+    multiple instances of the client, potentially distributed across different CPU
+    cores or even machines.
+
+*   **Underlying `aioquic` Library**: `aioquic` itself is a performant library.
+    Most bottlenecks in typical use cases with this example client are more likely
+    to be related to application logic, Python's single-process nature for
+    CPU-bound tasks, or network/server limitations rather than the core QUIC
+    protocol handling in `aioquic`.
+
+*   **Logging Verbosity**: Verbose logging (`-v`) can have a performance impact,
+    especially with many concurrent streams. For performance testing, consider
+    running with default (INFO) or minimal logging.
+
+This example client is designed for demonstration and testing of `aioquic`
+features rather than as a production-grade load generation tool.
