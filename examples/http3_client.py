@@ -958,7 +958,7 @@ if __name__ == "__main__":
             data=data_to_pass,
             include=args.include,
             output_dir=args.output_dir,
-            local_ip=args.local_ip, # Pass local_ip
+            local_ip=args.local_ip,
             local_port=args.local_port,
             zero_rtt=args.zero_rtt,
             upload_file=args.upload_file,
