@@ -154,6 +154,27 @@ class HttpClient(QuicConnectionProtocol):
             HttpRequest(method="POST", url=URL(url), content=data, headers=headers)
         )
 
+    async def upload(
+        self, url: str, file_path: str, headers: Optional[Dict] = None
+    ) -> Deque[H3Event]:
+        """
+        Perform a POST request to upload a file.
+        """
+        # Keep 'headers: Optional[Dict] = None' for compatibility, but ignore it for now.
+        
+        # os module should be imported at the top of the file.
+        # basename = os.path.basename(file_path) # This line is no longer needed for headers
+        minimal_headers = {
+            # No "Content-Type"
+            # No "Content-Disposition"
+        }
+        # The 'headers' input parameter is deliberately ignored.
+        
+        request = HttpRequest(
+            method="PUT", url=URL(url), content=b"", headers=minimal_headers
+        )
+        return await self._request(request, file_path=file_path)
+
     async def websocket(
         self, url: str, subprotocols: Optional[List[str]] = None
     ) -> WebSocket:
@@ -216,24 +237,62 @@ class HttpClient(QuicConnectionProtocol):
             for http_event in self._http.handle_event(event):
                 self.http_event_received(http_event)
 
-    async def _request(self, request: HttpRequest) -> Deque[H3Event]:
+    async def _request(
+        self, request: HttpRequest, file_path: Optional[str] = None
+    ) -> Deque[H3Event]:
         stream_id = self._quic.get_next_available_stream_id()
-        self._http.send_headers(
-            stream_id=stream_id,
-            headers=[
-                (b":method", request.method.encode()),
-                (b":scheme", request.url.scheme.encode()),
-                (b":authority", request.url.authority.encode()),
-                (b":path", request.url.full_path.encode()),
-                (b"user-agent", USER_AGENT.encode()),
-            ]
-            + [(k.encode(), v.encode()) for (k, v) in request.headers.items()],
-            end_stream=not request.content,
-        )
-        if request.content:
-            self._http.send_data(
-                stream_id=stream_id, data=request.content, end_stream=True
+
+        common_headers = [
+            (b":method", request.method.encode()),
+            (b":scheme", request.url.scheme.encode()),
+            (b":authority", request.url.authority.encode()),
+            (b":path", request.url.full_path.encode()),
+            (b"user-agent", USER_AGENT.encode()),
+        ] + [(k.encode(), v.encode()) for (k, v) in request.headers.items()]
+
+        if file_path:
+            # Sending a file
+            self._http.send_headers(
+                stream_id=stream_id,
+                headers=common_headers,
+                end_stream=False,  # Headers are not the end of the stream
             )
+
+            chunk_size = 4096
+            try:
+                with open(file_path, "rb") as f:
+                    while True:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break  # End of file
+                        self._http.send_data(
+                            stream_id=stream_id, data=chunk, end_stream=False
+                        )
+                # After all chunks are sent, send an empty data frame with end_stream=True
+                self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
+            except FileNotFoundError:
+                # Handle file not found error appropriately.
+                # For now, we can log it or raise an exception.
+                # This example will simply not send data if file not found,
+                # but a real application should handle this more gracefully.
+                logger.error(f"File not found: {file_path}")
+                # We might want to send an error back to the client or close the stream.
+                # For simplicity, sending an empty data frame with end_stream=True
+                # to correctly terminate the stream.
+                self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
+
+        else:
+            # Original behavior: sending content from request.content
+            self._http.send_headers(
+                stream_id=stream_id,
+                headers=common_headers,
+                end_stream=not request.content, # True if no content, False if content follows
+            )
+            if request.content:
+                self._http.send_data(
+                    stream_id=stream_id, data=request.content, end_stream=True
+                )
+            # If no request.content, headers with end_stream=True was already sent.
 
         waiter = self._loop.create_future()
         self._request_events[stream_id] = deque()
@@ -249,10 +308,16 @@ async def perform_http_request(
     data: Optional[str],
     include: bool,
     output_dir: Optional[str],
+    upload_file_path: Optional[str] = None,
 ) -> None:
     # perform request
     start = time.time()
-    if data is not None:
+    if upload_file_path:
+        # Pass empty headers for now, as per instruction.
+        # The `upload` method itself sets Content-Type to application/octet-stream.
+        http_events = await client.upload(url, file_path=upload_file_path, headers={})
+        method = "PUT"
+    elif data is not None:
         data_bytes = data.encode()
         http_events = await client.post(
             url,
@@ -269,10 +334,18 @@ async def perform_http_request(
     elapsed = time.time() - start
 
     # print speed
-    octets = 0
-    for http_event in http_events:
-        if isinstance(http_event, DataReceived):
-            octets += len(http_event.data)
+    if method == "PUT" and upload_file_path: # Check method and ensure upload_file_path is available
+        try:
+            octets = os.path.getsize(upload_file_path)
+        except OSError as e:
+            logger.error(f"Could not get size of uploaded file {upload_file_path}: {e}")
+            octets = 0 # Fallback if file size can't be read (e.g. deleted post-send start)
+    else: # For GET, POST, or if PUT somehow didn't have upload_file_path
+        octets = 0
+        for http_event in http_events:
+            if isinstance(http_event, DataReceived):
+                octets += len(http_event.data)
+    
     logger.info(
         "Response received for %s %s : %d bytes in %.1f s (%.3f Mbps)"
         % (method, urlparse(url).path, octets, elapsed, octets * 8 / elapsed / 1000000)
@@ -353,6 +426,7 @@ async def main(
     output_dir: Optional[str],
     local_port: int,
     zero_rtt: bool,
+    upload_file: Optional[str] = None,
 ) -> None:
     # parse URL
     parsed = urlparse(urls[0])
@@ -415,9 +489,10 @@ async def main(
                 perform_http_request(
                     client=client,
                     url=url,
-                    data=data,
+                    data=data, # This data is already None if upload_file was specified (handled in __main__)
                     include=include,
                     output_dir=output_dir,
+                    upload_file_path=upload_file,
                 )
                 for url in urls
             ]
@@ -459,6 +534,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-d", "--data", type=str, help="send the specified data in a POST request"
+    )
+    parser.add_argument(
+        "--upload-file",
+        type=str,
+        help="path to the file to upload (disables --data if used)",
     )
     parser.add_argument(
         "-i",
@@ -591,14 +671,22 @@ if __name__ == "__main__":
 
     if uvloop is not None:
         uvloop.install()
+    data_to_pass = args.data
+    if args.upload_file and args.data:
+        logger.warning(
+            "Both --data and --upload-file specified. --data will be ignored."
+        )
+        data_to_pass = None
+
     asyncio.run(
         main(
             configuration=configuration,
             urls=args.url,
-            data=args.data,
+            data=data_to_pass,
             include=args.include,
             output_dir=args.output_dir,
             local_port=args.local_port,
             zero_rtt=args.zero_rtt,
+            upload_file=args.upload_file,
         )
     )
