@@ -3,22 +3,31 @@ import asyncio
 import logging
 import os
 import pickle
-import ssl
 import socket
+import ssl
 import time
 from collections import deque
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
+from typing import (
+    AsyncGenerator,
+    BinaryIO,
+    Callable,
+    Deque,
+    Dict,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 from urllib.parse import urlparse
 
 import aioquic
 import wsproto
 import wsproto.events
+
 # Remove direct import of connect, as we will define a local version
 # from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol, QuicStreamHandler
-from aioquic.quic.connection import QuicConnection, QuicTokenHandler
-from aioquic.tls import SessionTicketHandler
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.connection import H3_ALPN, ErrorCode, H3Connection
 from aioquic.h3.events import (
@@ -28,10 +37,11 @@ from aioquic.h3.events import (
     PushPromiseReceived,
 )
 from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.connection import QuicConnection, QuicTokenHandler
 from aioquic.quic.events import QuicEvent
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.quic.packet import QuicProtocolVersion
-from aioquic.tls import CipherSuite, SessionTicket
+from aioquic.tls import CipherSuite, SessionTicket, SessionTicketHandler
 
 try:
     import uvloop
@@ -467,13 +477,14 @@ async def _local_connect(
     except socket.gaierror as e:
         logger.error(f"Error resolving remote address {host}:{port} - {e}")
         raise
-    
+
     # Use the first resolved address for the remote connection
     # Choose AF_INET6 if available, otherwise AF_INET
-    # This logic is simplified from the original which forces an IPv4-mapped IPv6 if addr is len 2
+    # This logic is simplified from the original which forces an
+    # IPv4-mapped IPv6 if addr is len 2
     # For QUIC, an IPv6 socket is generally preferred if the system supports it.
     # The actual connection logic in protocol.connect will handle the specifics.
-    
+
     # We will determine the final r_addr to use for connect() later,
     # after the local socket's family is known.
     # For now, just store the first resolved remote address info.
@@ -498,48 +509,65 @@ async def _local_connect(
 
     if local_host == "::":
         try:
-            logger.debug(f"Attempting direct IPv6 bind for local_host '::', port {local_port}")
+            logger.debug(
+                f"Attempting direct IPv6 bind for local_host '::', port {local_port}"
+            )
             sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-            if hasattr(socket, 'IPV6_V6ONLY') and hasattr(socket, 'IPPROTO_IPV6'):
+            if hasattr(socket, "IPV6_V6ONLY") and hasattr(socket, "IPPROTO_IPV6"):
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-            sock.bind((local_host, local_port, 0, 0)) # Bind to "::"
+            sock.bind((local_host, local_port, 0, 0))  # Bind to "::"
         except OSError as e:
-            logger.error(f"Direct IPv6 bind for '::' failed: {e}. Falling back to getaddrinfo.")
-            last_exc = e # Store exception in case fallback also fails
+            logger.error(
+                f"Direct IPv6 bind for '::' failed: {e}. "
+                f"Falling back to getaddrinfo."
+            )
+            last_exc = e  # Store exception in case fallback also fails
             if sock:
                 sock.close()
-            sock = None 
+            sock = None
             # Fall through to getaddrinfo logic if direct "::" bind fails
-    
-    if sock is None: # If not '::' or if '::' direct bind failed
-        logger.debug(f"Using getaddrinfo for local_host '{local_host}', port {local_port}")
+
+    if sock is None:  # If not '::' or if '::' direct bind failed
+        logger.debug(
+            f"Using getaddrinfo for local_host '{local_host}', port {local_port}"
+        )
         try:
             # Removed flags=socket.AI_PASSIVE
             local_addrinfos = await loop.getaddrinfo(
                 local_host, local_port, type=socket.SOCK_DGRAM
             )
         except socket.gaierror as e:
-            logger.error(f"Error resolving local_host '{local_host}':{local_port} - {e}")
-            # If '::' direct bind failed and getaddrinfo also failed for '::', re-raise initial error or this one
-            if last_exc and local_host == "::": # Prioritize direct bind error for "::" if it happened
-                 raise last_exc
+            logger.error(
+                f"Error resolving local_host '{local_host}':{local_port} - {e}"
+            )
+            # If '::' direct bind failed and getaddrinfo also failed for '::',
+            # re-raise initial error or this one
+            # Prioritize direct bind error for "::" if it happened
+            if last_exc and local_host == "::":
+                raise last_exc
             raise
 
         for res in local_addrinfos:
             af, socktype, proto, canonname, sa = res
             try:
-                logger.debug(f"Attempting to bind to {sa} (family {af}) via getaddrinfo")
+                logger.debug(
+                    f"Attempting to bind to {sa} (family {af}) via getaddrinfo"
+                )
                 sock = socket.socket(af, socktype, proto)
                 if af == socket.AF_INET6:
-                     # For IPv6, ensure dual-stack for wildcard if we didn't go through the direct "::" path
-                     # For specific IPv6s from getaddrinfo, this might also be desired.
-                    if sa[0] == "::" or sa[0].upper() == "0:0:0:0:0:0:0:0": # Check sockaddr's host part
-                        if hasattr(socket, 'IPV6_V6ONLY') and hasattr(socket, 'IPPROTO_IPV6'):
+                    # For IPv6, ensure dual-stack for wildcard if we didn't go
+                    # through the direct "::" path
+                    # For specific IPv6s from getaddrinfo, this might also be desired.
+                    # Check sockaddr's host part
+                    if sa[0] == "::" or sa[0].upper() == "0:0:0:0:0:0:0:0":
+                        if hasattr(socket, "IPV6_V6ONLY") and hasattr(
+                            socket, "IPPROTO_IPV6"
+                        ):
                             logger.debug(f"Setting IPV6_V6ONLY=0 for {sa}")
                             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
                 sock.bind(sa)
                 logger.debug(f"Successfully bound to {sa}")
-                last_exc = None # Clear previous error on success
+                last_exc = None  # Clear previous error on success
                 break  # Successfully bound
             except OSError as exc:
                 logger.warning(f"Binding to {sa} failed: {exc}")
@@ -547,15 +575,21 @@ async def _local_connect(
                 if sock is not None:
                     sock.close()
                 sock = None
-                continue # Try next address info
-        
-        if sock is None: # If loop completed and sock is still None
+                continue  # Try next address info
+
+        if sock is None:  # If loop completed and sock is still None
             if last_exc is not None:
-                logger.error(f"Failed to bind to {local_host}:{local_port} after trying all options - Last error: {last_exc}")
+                logger.error(
+                    f"Failed to bind to {local_host}:{local_port} after trying all "
+                    f"options - Last error: {last_exc}"
+                )
                 raise last_exc
             else:
                 # This case means getaddrinfo returned no usable addresses
-                custom_error = OSError(f"Could not create/bind socket for {local_host}:{local_port} (getaddrinfo yielded no usable address)")
+                custom_error = OSError(
+                    f"Could not create/bind socket for {local_host}:{local_port} "
+                    f"(getaddrinfo yielded no usable address)"
+                )
                 logger.error(str(custom_error))
                 raise custom_error
 
@@ -568,12 +602,14 @@ async def _local_connect(
     protocol = cast(QuicConnectionProtocol, protocol)
     try:
         # Determine the final remote address to use for connect()
-        connect_to_addr = _r_addr_info[4] # The sockaddr (host, port, flowinfo, scopeid)
-        
+        # The sockaddr is (host, port, flowinfo, scopeid)
+        connect_to_addr = _r_addr_info[4]
+
         # If our local socket is IPv6 and the remote address from getaddrinfo is IPv4,
         # we need to convert the remote address to an IPv4-mapped IPv6 address.
-        # A common way to check if a sockaddr is IPv4 is by its length (2 for (host,port))
-        # vs IPv6 (4 for (host,port,flowinfo,scopeid)).
+        #
+        # A common way to check if a sockaddr is IPv4 is by its length
+        # (2 for (host,port)) vs IPv6 (4 for (host,port,flowinfo,scopeid)).
         # Or, more reliably, check the family from _r_addr_info[0]
         remote_family = _r_addr_info[0]
 
@@ -582,7 +618,10 @@ async def _local_connect(
             # connect_to_addr is like ('1.2.3.4', 1234)
             # We want ('::ffff:1.2.3.4', 1234, 0, 0)
             connect_to_addr = ("::ffff:" + connect_to_addr[0], connect_to_addr[1], 0, 0)
-            logger.debug(f"Local socket is IPv6, remote is IPv4. Mapping remote to {connect_to_addr}")
+            logger.debug(
+                "Local socket is IPv6, remote is IPv4. Mapping remote to %s",
+                connect_to_addr,
+            )
 
         protocol.connect(connect_to_addr, transmit=wait_connected)
         if wait_connected:
