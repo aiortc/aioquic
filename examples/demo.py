@@ -111,7 +111,7 @@ async def handle_root_post_upload(request):
 
     filepath = request.path_params["filepath"]
     if filepath.startswith("upload/"):
-        filepath = filepath[len("upload/"):]
+        filepath = filepath[len("upload/") :]
         # Handle case where path is just "upload/".
         if not filepath:  # e.g. if original path was "upload/"
             # An empty filepath is handled by later sanitization.
