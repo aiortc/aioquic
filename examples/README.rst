@@ -29,6 +29,19 @@ You can run the example client to perform an HTTP/3 request:
 
   python examples/http3_client.py --ca-certs tests/pycacert.pem https://localhost:4433/
 
+To specify a local IP address for the client to bind to, use the ``--local-ip`` option.
+For example, to bind to ``192.168.1.100`` (replace with your actual local IP):
+
+.. code-block:: console
+
+  python examples/http3_client.py --ca-certs tests/pycacert.pem --local-ip 192.168.1.100 https://localhost:4433/
+
+The default local IP is "::" (any IPv6 or IPv4). For a full list of options, run:
+
+.. code-block:: console
+
+  python examples/http3_client.py --help
+
 Alternatively you can perform an HTTP/0.9 request:
 
 .. code-block:: console
