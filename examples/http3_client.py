@@ -4,16 +4,21 @@ import logging
 import os
 import pickle
 import ssl
+import socket
 import time
 from collections import deque
-from typing import BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator, BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
 from urllib.parse import urlparse
 
 import aioquic
 import wsproto
 import wsproto.events
-from aioquic.asyncio.client import connect
-from aioquic.asyncio.protocol import QuicConnectionProtocol
+# Remove direct import of connect, as we will define a local version
+# from aioquic.asyncio.client import connect
+from aioquic.asyncio.protocol import QuicConnectionProtocol, QuicStreamHandler
+from aioquic.quic.connection import QuicConnection, QuicTokenHandler
+from aioquic.tls import SessionTicketHandler
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.connection import H3_ALPN, ErrorCode, H3Connection
 from aioquic.h3.events import (
@@ -351,6 +356,7 @@ async def main(
     data: Optional[str],
     include: bool,
     output_dir: Optional[str],
+    local_ip: str, # Added local_ip
     local_port: int,
     zero_rtt: bool,
 ) -> None:
@@ -385,12 +391,13 @@ async def main(
         _p = urlparse(_p.geturl())
         urls[i] = _p.geturl()
 
-    async with connect(
+    async with _local_connect( # Changed to _local_connect
         host,
         port,
         configuration=configuration,
         create_protocol=HttpClient,
         session_ticket_handler=save_session_ticket,
+        local_host=local_ip, # Passed local_ip as local_host
         local_port=local_port,
         wait_connected=not zero_rtt,
     ) as client:
@@ -426,6 +433,165 @@ async def main(
             # process http pushes
             process_http_pushes(client=client, include=include, output_dir=output_dir)
         client.close(error_code=ErrorCode.H3_NO_ERROR)
+
+
+# Copied and modified from aioquic.asyncio.client.connect
+# Added local_host parameter and removed hardcoding
+@asynccontextmanager
+async def _local_connect(
+    host: str,
+    port: int,
+    *,
+    configuration: Optional[QuicConfiguration] = None,
+    create_protocol: Optional[Callable] = QuicConnectionProtocol,
+    session_ticket_handler: Optional[SessionTicketHandler] = None,
+    stream_handler: Optional[QuicStreamHandler] = None,
+    token_handler: Optional[QuicTokenHandler] = None,
+    wait_connected: bool = True,
+    local_host: str = "::", # Added parameter
+    local_port: int = 0,
+) -> AsyncGenerator[QuicConnectionProtocol, None]:
+    """
+    Connect to a QUIC server at the given `host` and `port`.
+    This is a modified version of aioquic.asyncio.client.connect
+    to support specifying the local_host.
+    """
+    loop = asyncio.get_running_loop()
+    # local_host is now a parameter
+
+    # lookup remote address
+    # We need to do this first to make sure the remote host is resolvable,
+    # otherwise we might create a socket unnecessarily.
+    try:
+        remote_infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
+    except socket.gaierror as e:
+        logger.error(f"Error resolving remote address {host}:{port} - {e}")
+        raise
+    
+    # Use the first resolved address for the remote connection
+    # Choose AF_INET6 if available, otherwise AF_INET
+    # This logic is simplified from the original which forces an IPv4-mapped IPv6 if addr is len 2
+    # For QUIC, an IPv6 socket is generally preferred if the system supports it.
+    # The actual connection logic in protocol.connect will handle the specifics.
+    
+    # We will determine the final r_addr to use for connect() later,
+    # after the local socket's family is known.
+    # For now, just store the first resolved remote address info.
+    # Default to the first entry from getaddrinfo for the remote host.
+    _r_addr_info = remote_infos[0]
+
+
+    # prepare QUIC connection
+    if configuration is None:
+        configuration = QuicConfiguration(is_client=True)
+    if configuration.server_name is None:
+        configuration.server_name = host
+    connection = QuicConnection(
+        configuration=configuration,
+        session_ticket_handler=session_ticket_handler,
+        token_handler=token_handler,
+    )
+
+    # Create and bind the local socket
+    sock = None
+    last_exc = None
+
+    if local_host == "::":
+        try:
+            logger.debug(f"Attempting direct IPv6 bind for local_host '::', port {local_port}")
+            sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            if hasattr(socket, 'IPV6_V6ONLY') and hasattr(socket, 'IPPROTO_IPV6'):
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.bind((local_host, local_port, 0, 0)) # Bind to "::"
+        except OSError as e:
+            logger.error(f"Direct IPv6 bind for '::' failed: {e}. Falling back to getaddrinfo.")
+            last_exc = e # Store exception in case fallback also fails
+            if sock:
+                sock.close()
+            sock = None 
+            # Fall through to getaddrinfo logic if direct "::" bind fails
+    
+    if sock is None: # If not '::' or if '::' direct bind failed
+        logger.debug(f"Using getaddrinfo for local_host '{local_host}', port {local_port}")
+        try:
+            # Removed flags=socket.AI_PASSIVE
+            local_addrinfos = await loop.getaddrinfo(
+                local_host, local_port, type=socket.SOCK_DGRAM
+            )
+        except socket.gaierror as e:
+            logger.error(f"Error resolving local_host '{local_host}':{local_port} - {e}")
+            # If '::' direct bind failed and getaddrinfo also failed for '::', re-raise initial error or this one
+            if last_exc and local_host == "::": # Prioritize direct bind error for "::" if it happened
+                 raise last_exc
+            raise
+
+        for res in local_addrinfos:
+            af, socktype, proto, canonname, sa = res
+            try:
+                logger.debug(f"Attempting to bind to {sa} (family {af}) via getaddrinfo")
+                sock = socket.socket(af, socktype, proto)
+                if af == socket.AF_INET6:
+                     # For IPv6, ensure dual-stack for wildcard if we didn't go through the direct "::" path
+                     # For specific IPv6s from getaddrinfo, this might also be desired.
+                    if sa[0] == "::" or sa[0].upper() == "0:0:0:0:0:0:0:0": # Check sockaddr's host part
+                        if hasattr(socket, 'IPV6_V6ONLY') and hasattr(socket, 'IPPROTO_IPV6'):
+                            logger.debug(f"Setting IPV6_V6ONLY=0 for {sa}")
+                            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                sock.bind(sa)
+                logger.debug(f"Successfully bound to {sa}")
+                last_exc = None # Clear previous error on success
+                break  # Successfully bound
+            except OSError as exc:
+                logger.warning(f"Binding to {sa} failed: {exc}")
+                last_exc = exc
+                if sock is not None:
+                    sock.close()
+                sock = None
+                continue # Try next address info
+        
+        if sock is None: # If loop completed and sock is still None
+            if last_exc is not None:
+                logger.error(f"Failed to bind to {local_host}:{local_port} after trying all options - Last error: {last_exc}")
+                raise last_exc
+            else:
+                # This case means getaddrinfo returned no usable addresses
+                custom_error = OSError(f"Could not create/bind socket for {local_host}:{local_port} (getaddrinfo yielded no usable address)")
+                logger.error(str(custom_error))
+                raise custom_error
+
+    # connect
+    logger.debug(f"Local socket bound: {sock.getsockname()}, family {sock.family}")
+    transport, protocol = await loop.create_datagram_endpoint(
+        lambda: create_protocol(connection, stream_handler=stream_handler),
+        sock=sock,
+    )
+    protocol = cast(QuicConnectionProtocol, protocol)
+    try:
+        # Determine the final remote address to use for connect()
+        connect_to_addr = _r_addr_info[4] # The sockaddr (host, port, flowinfo, scopeid)
+        
+        # If our local socket is IPv6 and the remote address from getaddrinfo is IPv4,
+        # we need to convert the remote address to an IPv4-mapped IPv6 address.
+        # A common way to check if a sockaddr is IPv4 is by its length (2 for (host,port))
+        # vs IPv6 (4 for (host,port,flowinfo,scopeid)).
+        # Or, more reliably, check the family from _r_addr_info[0]
+        remote_family = _r_addr_info[0]
+
+        if sock.family == socket.AF_INET6 and remote_family == socket.AF_INET:
+            # Convert IPv4 sockaddr to IPv4-mapped IPv6 sockaddr
+            # connect_to_addr is like ('1.2.3.4', 1234)
+            # We want ('::ffff:1.2.3.4', 1234, 0, 0)
+            connect_to_addr = ("::ffff:" + connect_to_addr[0], connect_to_addr[1], 0, 0)
+            logger.debug(f"Local socket is IPv6, remote is IPv4. Mapping remote to {connect_to_addr}")
+
+        protocol.connect(connect_to_addr, transmit=wait_connected)
+        if wait_connected:
+            await protocol.wait_connected()
+        yield protocol
+    finally:
+        protocol.close()
+        await protocol.wait_closed()
+        transport.close()
 
 
 if __name__ == "__main__":
@@ -538,6 +704,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--zero-rtt", action="store_true", help="try to send requests using 0-RTT"
     )
+    parser.add_argument(
+        "--local-ip",
+        type=str,
+        default="::",
+        help="local IP address to bind for connections",
+    )
 
     args = parser.parse_args()
 
@@ -598,6 +770,7 @@ if __name__ == "__main__":
             data=args.data,
             include=args.include,
             output_dir=args.output_dir,
+            local_ip=args.local_ip, # Pass local_ip
             local_port=args.local_port,
             zero_rtt=args.zero_rtt,
         )
