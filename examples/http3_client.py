@@ -4,7 +4,6 @@ import logging
 import os
 import pickle
 import ssl
-import sys # Added for stderr
 import time
 from collections import deque
 from typing import BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
@@ -161,16 +160,18 @@ class HttpClient(QuicConnectionProtocol):
         """
         Perform a POST request to upload a file.
         """
-        # Keep 'headers: Optional[Dict] = None' for compatibility, but ignore it for now.
-        
+        # Keep 'headers: Optional[Dict] = None' for compatibility,
+        # but ignore it for now.
+
         # os module should be imported at the top of the file.
-        # basename = os.path.basename(file_path) # This line is no longer needed for headers
+        # basename = os.path.basename(file_path)
+        # This line is no longer needed for headers
         minimal_headers = {
             # No "Content-Type"
             # No "Content-Disposition"
         }
         # The 'headers' input parameter is deliberately ignored.
-        
+
         request = HttpRequest(
             method="PUT", url=URL(url), content=b"", headers=minimal_headers
         )
@@ -241,9 +242,13 @@ class HttpClient(QuicConnectionProtocol):
     async def _request(
         self, request: HttpRequest, file_path: Optional[str] = None
     ) -> Deque[H3Event]:
-        if len(self._request_waiter) > 100: # Threshold for warning
+        if len(self._request_waiter) > 100:  # Threshold for warning
             logger.warning(
-                f"HttpClient has {len(self._request_waiter)} concurrent requests pending. Further stream creations might be delayed due to server-imposed concurrent stream limits."
+                (
+                    f"HttpClient has {len(self._request_waiter)} concurrent "
+                    "requests pending. Further stream creations might be delayed "
+                    "due to server-imposed concurrent stream limits."
+                )
             )
         stream_id = self._quic.get_next_available_stream_id()
 
@@ -273,7 +278,8 @@ class HttpClient(QuicConnectionProtocol):
                         self._http.send_data(
                             stream_id=stream_id, data=chunk, end_stream=False
                         )
-                # After all chunks are sent, send an empty data frame with end_stream=True
+                # After all chunks are sent, send an empty data frame
+                # with end_stream=True
                 self._http.send_data(stream_id=stream_id, data=b"", end_stream=True)
             except FileNotFoundError:
                 # Handle file not found error appropriately.
@@ -288,10 +294,11 @@ class HttpClient(QuicConnectionProtocol):
 
         else:
             # Original behavior: sending content from request.content
+            # True if no content, False if content follows
             self._http.send_headers(
                 stream_id=stream_id,
                 headers=common_headers,
-                end_stream=not request.content, # True if no content, False if content follows
+                end_stream=not request.content,
             )
             if request.content:
                 self._http.send_data(
@@ -339,18 +346,20 @@ async def perform_http_request(
     elapsed = time.time() - start
 
     # print speed
-    if method == "PUT" and upload_file_path: # Check method and ensure upload_file_path is available
+    # Check method and ensure upload_file_path is available
+    if method == "PUT" and upload_file_path:
         try:
             octets = os.path.getsize(upload_file_path)
         except OSError as e:
             logger.error(f"Could not get size of uploaded file {upload_file_path}: {e}")
-            octets = 0 # Fallback if file size can't be read (e.g. deleted post-send start)
-    else: # For GET, POST, or if PUT somehow didn't have upload_file_path
+            # Fallback if file size can't be read (e.g. deleted post-send start)
+            octets = 0
+    else:  # For GET, POST, or if PUT somehow didn't have upload_file_path
         octets = 0
         for http_event in http_events:
             if isinstance(http_event, DataReceived):
                 octets += len(http_event.data)
-    
+
     logger.info(
         "Response received for %s %s : %d bytes in %.1f s (%.3f Mbps)"
         % (method, urlparse(url).path, octets, elapsed, octets * 8 / elapsed / 1000000)
@@ -493,30 +502,32 @@ async def main(
         else:
             # When using --num-streams, the client will attempt to create
             # multiple streams for each specified URL.
-            # Note that the actual number of concurrent streams is limited by the server.
-            # The aioquic library will queue stream initiation attempts if the server's limit
-            # is reached, and these will be processed as the server increases
-            # its limits via MAX_STREAMS frames.
-            
+            # Note that the actual number of concurrent streams is limited
+            # by the server. The aioquic library will queue stream initiation
+            # attempts if the server's limit is reached, and these will be
+            # processed as the server increases its limits via MAX_STREAMS frames.
+
             # The `data` and `upload_file` parameters for main() are derived from
             # args.data and args.upload_file in the `if __name__ == "__main__":` block.
             # If args.upload_file is set, data (data_to_pass) is None.
             # This means `upload_file` takes precedence if provided.
-            
+
             all_coros = []
             for url_str in urls:  # Iterate through each URL provided
-                for _ in range(num_streams): # For each URL, create num_streams requests
+                # For each URL, create num_streams requests
+                for _ in range(num_streams):
                     all_coros.append(
                         perform_http_request(
                             client=client,
                             url=url_str,
-                            data=data, # This is data_to_pass from __main__
+                            data=data,  # This is data_to_pass from __main__
                             include=include,
                             output_dir=output_dir,
-                            upload_file_path=upload_file, # This is args.upload_file from __main__
+                            # This is args.upload_file from __main__
+                            upload_file_path=upload_file,
                         )
                     )
-            
+
             if all_coros:
                 results = await asyncio.gather(*all_coros, return_exceptions=True)
                 for i, result in enumerate(results):
@@ -524,16 +535,25 @@ async def main(
                         # Determine which URL and request number this was for context
                         # num_streams is available in main's scope
                         # urls is available in main's scope
-                        url_idx = i // num_streams if num_streams > 0 else i # Avoid division by zero if num_streams somehow is 0
-                        req_num_for_url = (i % num_streams) + 1 if num_streams > 0 else 1
-                        
+                        # Avoid division by zero if num_streams somehow is 0
+                        url_idx = i // num_streams if num_streams > 0 else i
+                        req_num_for_url = (
+                            (i % num_streams) + 1 if num_streams > 0 else 1
+                        )
+
                         failed_url = "unknown_url"
                         if url_idx < len(urls):
                             failed_url = urls[url_idx]
-                                
+
                         logger.error(
-                            f"Request {req_num_for_url} for URL {failed_url} encountered an error: {result}",
-                            exc_info=result if isinstance(result, BaseException) else None # Log traceback if it's an actual exception object
+                            (
+                                f"Request {req_num_for_url} for URL {failed_url} "
+                                f"encountered an error: {result}"
+                            ),
+                            # Log traceback if it's an actual exception object
+                            exc_info=(
+                                result if isinstance(result, BaseException) else None
+                            ),
                         )
 
             # process http pushes
