@@ -1711,6 +1711,121 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
+    def test_streams_are_closed_after_requests(self):
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            for _ in range(6):
+                self._make_request(h3_client, h3_server)
+
+            # Only 3 streams should be opened: Control, QPACK encoder and QPACK decoder
+            self.assertEqual(len(h3_client._stream), 3)
+            self.assertEqual(len(h3_server._stream), 3)
+
+    def test_streams_are_not_closed_prematurely(self):
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # No streams opened
+            self.assertEqual(len(h3_client._stream), 0)
+            self.assertEqual(len(h3_server._stream), 0)
+
+            # Send request
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"POST"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                    (b"x-foo", b"client"),
+                ],
+            )
+
+            # The request stream was opened
+            self.assertEqual(len(h3_client._stream), 1)
+
+            h3_client.send_data(stream_id=stream_id, data=b"p1ng", end_stream=False)
+            # Still the same stream
+            self.assertEqual(len(h3_client._stream), 1)
+
+            h3_client.send_data(stream_id=stream_id, data=b"", end_stream=True)
+            # Still the same stream because server didn't end the stream yet
+            self.assertEqual(len(h3_client._stream), 1)
+
+            h3_transfer(h3_client._quic, h3_server)
+
+            self.assertEqual(len(h3_client._stream), 1)
+            # Server has 4 streams: Control, QPACK encoder, QPACK decoder and
+            # the request stream
+            self.assertEqual(len(h3_server._stream), 4)
+
+            h3_server.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":status", b"200"),
+                    (b"content-type", b"text/html; charset=utf-8"),
+                    (b"x-foo", b"server"),
+                ],
+            )
+            h3_transfer(h3_server._quic, h3_client)
+            h3_transfer(h3_client._quic, h3_server)
+
+            # Now both have 4 streams still open
+            self.assertEqual(len(h3_server._stream), 4)
+            self.assertEqual(len(h3_client._stream), 4)
+
+            h3_server.send_data(
+                stream_id=stream_id,
+                data=b"p0ng",
+                end_stream=False,
+            )
+            h3_transfer(h3_server._quic, h3_client)
+            h3_transfer(h3_client._quic, h3_server)
+
+            # All streams are still open
+            self.assertEqual(len(h3_server._stream), 4)
+            self.assertEqual(len(h3_client._stream), 4)
+
+            h3_server.send_data(
+                stream_id=stream_id,
+                data=b"",
+                end_stream=True,
+            )
+            h3_transfer(h3_server._quic, h3_client)
+            h3_transfer(h3_client._quic, h3_server)
+            # Request streams are closed. The Control and QPACK remain open to
+            # the end of connection
+            self.assertEqual(len(h3_client._stream), 3)
+            self.assertEqual(len(h3_server._stream), 3)
+
+    def test_double_sending_stream_closing(self):
+        quic_client = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=True)
+        )
+        h3_client = H3Connection(quic_client)
+
+        stream_id = quic_client.get_next_available_stream_id()
+        h3_client.send_headers(
+            stream_id=stream_id,
+            headers=[
+                (b":method", b"POST"),
+                (b":scheme", b"https"),
+                (b":authority", b"localhost"),
+                (b":path", b"/"),
+                (b"x-foo", b"client"),
+            ],
+            end_stream=True,
+        )
+
+        with self.assertRaises(FrameUnexpected) as assert_err:
+            h3_client.send_data(stream_id, b"data", end_stream=True)
+
+        self.assertEqual(str(assert_err.exception), "stream was already ended")
+
 
 class H3ParserTest(TestCase):
     def test_parse_settings_duplicate_identifier(self):
