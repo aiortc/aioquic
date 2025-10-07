@@ -315,13 +315,16 @@ class QuicStreamSender:
     def reset(self, error_code: int) -> None:
         """
         Abruptly terminate the sending part of the QUIC stream.
-        """
-        assert self._reset_error_code is None, "cannot call reset() more than once"
-        self._reset_error_code = error_code
-        self.reset_pending = True
 
-        # Prevent any more data from being sent or re-sent.
-        self.buffer_is_empty = True
+        Once this method has been called, any further calls to it
+        will have no effect.
+        """
+        if self._reset_error_code is None:
+            self._reset_error_code = error_code
+            self.reset_pending = True
+
+            # Prevent any more data from being sent or re-sent.
+            self.buffer_is_empty = True
 
     def write(self, data: bytes, end_stream: bool = False) -> None:
         """

@@ -1095,6 +1095,9 @@ class QuicConnection:
         """
         Abruptly terminate the sending part of a stream.
 
+        This method has no effect if a reset has already been triggered either by a
+        call to :meth:`reset_stream` or by the reception of a STOP_SENDING frame.
+
         .. aioquic_transmit::
 
         :param stream_id: The stream's ID.
