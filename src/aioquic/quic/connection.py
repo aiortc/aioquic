@@ -68,7 +68,7 @@ EPOCH_SHORTCUTS = {
     "1": tls.Epoch.ONE_RTT,
 }
 MAX_EARLY_DATA = 0xFFFFFFFF
-MAX_REMOTE_CHALLENGES = 5
+MAX_REMOTE_CHALLENGES = 32
 MAX_LOCAL_CHALLENGES = 5
 SECRETS_LABELS = [
     [
@@ -2045,7 +2045,11 @@ class QuicConnection:
                 self._quic_logger.encode_path_challenge_frame(data=data)
             )
 
-        context.network_path.remote_challenges.append(data)
+        # Append the new path challenge unless our limit was reached.
+        # This is technically not compliant with RFC 9000 but it's needed
+        # to avoid resource exhaustion attacks.
+        if len(context.network_path.remote_challenges) < MAX_REMOTE_CHALLENGES:
+            context.network_path.remote_challenges.append(data)
 
     def _handle_path_response_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
