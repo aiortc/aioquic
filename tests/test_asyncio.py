@@ -107,17 +107,14 @@ class HighLevelTest(TestCase):
         if configuration is None:
             configuration = QuicConfiguration(is_client=False)
             configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
-        server = await serve(
+        async with serve(
             host=host,
             port=0,
             configuration=configuration,
             stream_handler=handle_stream,
             **kwargs,
-        )
-        try:
+        ) as server:
             yield server._transport.get_extra_info("sockname")[1]
-        finally:
-            server.close()
 
     @asynctest
     async def test_connect_and_serve(self) -> None:
@@ -455,13 +452,14 @@ class HighLevelTest(TestCase):
     async def test_server_receives_garbage(self) -> None:
         configuration = QuicConfiguration(is_client=False)
         configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
-        server = await serve(
+        async with serve(
             host=self.server_host,
             port=0,
             configuration=configuration,
-        )
-        server.datagram_received(binascii.unhexlify("c00000000080"), ("1.2.3.4", 1234))
-        server.close()
+        ) as server:
+            server.datagram_received(
+                binascii.unhexlify("c00000000080"), ("1.2.3.4", 1234)
+            )
 
     @asynctest
     async def test_combined_key(self) -> None:
