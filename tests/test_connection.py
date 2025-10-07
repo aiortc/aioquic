@@ -1,6 +1,7 @@
 import binascii
 import contextlib
 import io
+import os
 import time
 from typing import List, Tuple
 from unittest import TestCase, skipIf
@@ -12,6 +13,7 @@ from aioquic.quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfigura
 from aioquic.quic.connection import (
     MAX_LOCAL_CHALLENGES,
     MAX_PENDING_CRYPTO,
+    MAX_REMOTE_CHALLENGES,
     STREAM_COUNT_MAX,
     NetworkAddress,
     QuicConnection,
@@ -2010,6 +2012,20 @@ class QuicConnectionTest(TestCase):
                     server._local_challenges[int.to_bytes(i, 8, "big")].addr,
                     f"1.2.3.{i}",
                 )
+
+    def test_remote_path_challenges_are_bounded(self):
+        with client_and_server() as (client, server):
+            challenges = [os.urandom(8) for i in range(MAX_REMOTE_CHALLENGES + 2)]
+            for challenge in challenges:
+                client._handle_path_challenge_frame(
+                    client_receive_context(client),
+                    QuicFrameType.PATH_CHALLENGE,
+                    Buffer(data=challenge),
+                )
+            self.assertEqual(
+                list(client._network_paths[0].remote_challenges),
+                challenges[0:MAX_REMOTE_CHALLENGES],
+            )
 
     def test_handle_path_response_frame_bad(self):
         with client_and_server() as (client, server):
