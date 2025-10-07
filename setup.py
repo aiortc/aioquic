@@ -16,7 +16,7 @@ class bdist_wheel_abi3(bdist_wheel):
         python, abi, plat = super().get_tag()
 
         if python.startswith("cp"):
-            return "cp39", "abi3", plat
+            return "cp310", "abi3", plat
 
         return python, abi, plat
 
@@ -27,7 +27,7 @@ setuptools.setup(
             "aioquic._buffer",
             extra_compile_args=extra_compile_args,
             sources=["src/aioquic/_buffer.c"],
-            define_macros=[("Py_LIMITED_API", "0x03080000")],
+            define_macros=[("Py_LIMITED_API", "0x030A0000")],
             py_limited_api=True,
         ),
         setuptools.Extension(
@@ -35,7 +35,7 @@ setuptools.setup(
             extra_compile_args=extra_compile_args,
             libraries=libraries,
             sources=["src/aioquic/_crypto.c"],
-            define_macros=[("Py_LIMITED_API", "0x03080000")],
+            define_macros=[("Py_LIMITED_API", "0x030A0000")],
             py_limited_api=True,
         ),
     ],
