@@ -4,13 +4,7 @@ import functools
 import ipaddress
 import logging
 import os
-import sys
-from typing import Callable, Coroutine, Tuple, TypeVar
-
-if sys.version_info >= (3, 10):
-    from typing import ParamSpec
-else:
-    from typing_extensions import ParamSpec
+from typing import Callable, Coroutine, ParamSpec, Tuple, TypeVar
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
