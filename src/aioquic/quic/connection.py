@@ -3032,20 +3032,20 @@ class QuicConnection:
                 # PATH CHALLENGE
                 if not (network_path.is_validated or network_path.local_challenge_sent):
                     challenge = os.urandom(8)
-                    self._add_local_challenge(
-                        challenge=challenge, network_path=network_path
-                    )
                     self._write_path_challenge_frame(
                         builder=builder, challenge=challenge
+                    )
+                    self._add_local_challenge(
+                        challenge=challenge, network_path=network_path
                     )
                     network_path.local_challenge_sent = True
 
                 # PATH RESPONSE
                 while len(network_path.remote_challenges) > 0:
-                    challenge = network_path.remote_challenges.popleft()
                     self._write_path_response_frame(
-                        builder=builder, challenge=challenge
+                        builder=builder, challenge=network_path.remote_challenges[0]
                     )
+                    network_path.remote_challenges.popleft()
 
                 # NEW_CONNECTION_ID
                 for connection_id in self._host_cids:
