@@ -3020,15 +3020,6 @@ class QuicConnection:
             builder.start_packet(packet_type, crypto)
 
             if self._handshake_complete:
-                # ACK
-                if space.ack_at is not None and space.ack_at <= now:
-                    self._write_ack_frame(builder=builder, space=space, now=now)
-
-                # HANDSHAKE_DONE
-                if self._handshake_done_pending:
-                    self._write_handshake_done_frame(builder=builder)
-                    self._handshake_done_pending = False
-
                 # PATH CHALLENGE
                 if not (network_path.is_validated or network_path.local_challenge_sent):
                     challenge = os.urandom(8)
@@ -3039,6 +3030,15 @@ class QuicConnection:
                         challenge=challenge, network_path=network_path
                     )
                     network_path.local_challenge_sent = True
+
+                # ACK
+                if space.ack_at is not None and space.ack_at <= now:
+                    self._write_ack_frame(builder=builder, space=space, now=now)
+
+                # HANDSHAKE_DONE
+                if self._handshake_done_pending:
+                    self._write_handshake_done_frame(builder=builder)
+                    self._handshake_done_pending = False
 
                 # PATH RESPONSE
                 while len(network_path.remote_challenges) > 0:
