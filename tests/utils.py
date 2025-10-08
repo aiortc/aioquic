@@ -4,7 +4,7 @@ import functools
 import ipaddress
 import logging
 import os
-from typing import Callable, Coroutine, ParamSpec, Tuple, TypeVar
+from typing import Callable, Coroutine, ParamSpec, TypeVar
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
@@ -45,7 +45,7 @@ def generate_certificate(
     common_name: str,
     hash_algorithm,
     key: K,
-) -> Tuple[x509.Certificate, K]:
+) -> tuple[x509.Certificate, K]:
     subject = issuer = x509.Name(
         [x509.NameAttribute(x509.NameOID.COMMON_NAME, common_name)]
     )
@@ -74,7 +74,7 @@ def generate_certificate(
 
 def generate_ec_certificate(
     common_name: str, alternative_names: list[str] = [], curve=ec.SECP256R1
-) -> Tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
     key = ec.generate_private_key(curve=curve())
     return generate_certificate(
         alternative_names=alternative_names,
@@ -86,7 +86,7 @@ def generate_ec_certificate(
 
 def generate_ed25519_certificate(
     common_name: str, alternative_names: list[str] = []
-) -> Tuple[x509.Certificate, ed25519.Ed25519PrivateKey]:
+) -> tuple[x509.Certificate, ed25519.Ed25519PrivateKey]:
     key = ed25519.Ed25519PrivateKey.generate()
     return generate_certificate(
         alternative_names=alternative_names,
@@ -98,7 +98,7 @@ def generate_ed25519_certificate(
 
 def generate_ed448_certificate(
     common_name: str, alternative_names: list[str] = []
-) -> Tuple[x509.Certificate, ed448.Ed448PrivateKey]:
+) -> tuple[x509.Certificate, ed448.Ed448PrivateKey]:
     key = ed448.Ed448PrivateKey.generate()
     return generate_certificate(
         alternative_names=alternative_names,
@@ -110,7 +110,7 @@ def generate_ed448_certificate(
 
 def generate_rsa_certificate(
     common_name: str, alternative_names: list[str] = []
-) -> Tuple[x509.Certificate, rsa.RSAPrivateKey]:
+) -> tuple[x509.Certificate, rsa.RSAPrivateKey]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     return generate_certificate(
         alternative_names=alternative_names,

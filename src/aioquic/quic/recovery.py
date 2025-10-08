@@ -1,6 +1,6 @@
 import logging
 import math
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from .congestion import cubic, reno  # noqa
 from .congestion.base import K_GRANULARITY, create_congestion_control
@@ -28,7 +28,7 @@ class QuicPacketSpace:
         self.ack_eliciting_in_flight = 0
         self.largest_acked_packet = 0
         self.loss_time: Optional[float] = None
-        self.sent_packets: Dict[int, QuicSentPacket] = {}
+        self.sent_packets: dict[int, QuicSentPacket] = {}
 
 
 class QuicPacketPacer:
@@ -96,7 +96,7 @@ class QuicPacketRecovery:
     ) -> None:
         self.max_ack_delay = 0.025
         self.peer_completed_address_validation = peer_completed_address_validation
-        self.spaces: List[QuicPacketSpace] = []
+        self.spaces: list[QuicPacketSpace] = []
 
         # callbacks
         self._logger = logger
@@ -334,7 +334,7 @@ class QuicPacketRecovery:
         return loss_space
 
     def _log_metrics_updated(self, log_rtt=False) -> None:
-        data: Dict[str, Any] = self._cc.get_log_data()
+        data: dict[str, Any] = self._cc.get_log_data()
 
         if log_rtt:
             data.update(

@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, Callable, Dict, Optional, Text, Tuple, Union, cast
+from typing import Any, Callable, Optional, Text, Union, cast
 
 from ..quic import events
 from ..quic.connection import NetworkAddress, QuicConnection
@@ -19,9 +19,9 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         self._connected = False
         self._connected_waiter: Optional[asyncio.Future[None]] = None
         self._loop = loop
-        self._ping_waiters: Dict[int, asyncio.Future[None]] = {}
+        self._ping_waiters: dict[int, asyncio.Future[None]] = {}
         self._quic = quic
-        self._stream_readers: Dict[int, asyncio.StreamReader] = {}
+        self._stream_readers: dict[int, asyncio.StreamReader] = {}
         self._timer: Optional[asyncio.TimerHandle] = None
         self._timer_at: Optional[float] = None
         self._transmit_task: Optional[asyncio.Handle] = None
@@ -76,7 +76,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
 
     async def create_stream(
         self, is_unidirectional: bool = False
-    ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         """
         Create a QUIC stream and return a pair of (reader, writer) objects.
 
@@ -182,7 +182,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
 
     def _create_stream(
         self, stream_id: int
-    ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         adapter = QuicStreamAdapter(self, stream_id)
         reader = asyncio.StreamReader()
         protocol = asyncio.streams.StreamReaderProtocol(reader)

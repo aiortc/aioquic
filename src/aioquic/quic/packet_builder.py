@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Optional, Sequence
 
 from ..buffer import Buffer, size_uint_var
 from ..tls import Epoch
@@ -39,10 +39,10 @@ class QuicSentPacket:
     sent_time: Optional[float] = None
     sent_bytes: int = 0
 
-    delivery_handlers: List[Tuple[QuicDeliveryHandler, Any]] = field(
+    delivery_handlers: list[tuple[QuicDeliveryHandler, Any]] = field(
         default_factory=list
     )
-    quic_logger_frames: List[Dict] = field(default_factory=list)
+    quic_logger_frames: list[dict] = field(default_factory=list)
 
 
 class QuicPacketBuilderStop(Exception):
@@ -69,7 +69,7 @@ class QuicPacketBuilder:
     ):
         self.max_flight_bytes: Optional[int] = None
         self.max_total_bytes: Optional[int] = None
-        self.quic_logger_frames: Optional[List[Dict]] = None
+        self.quic_logger_frames: Optional[list[dict]] = None
 
         self._host_cid = host_cid
         self._is_client = is_client
@@ -80,11 +80,11 @@ class QuicPacketBuilder:
         self._version = version
 
         # assembled datagrams and packets
-        self._datagrams: List[bytes] = []
+        self._datagrams: list[bytes] = []
         self._datagram_flight_bytes = 0
         self._datagram_init = True
         self._datagram_needs_padding = False
-        self._packets: List[QuicSentPacket] = []
+        self._packets: list[QuicSentPacket] = []
         self._flight_bytes = 0
         self._total_bytes = 0
 
@@ -140,7 +140,7 @@ class QuicPacketBuilder:
             - self._packet_crypto.aead_tag_size
         )
 
-    def flush(self) -> Tuple[List[bytes], List[QuicSentPacket]]:
+    def flush(self) -> tuple[list[bytes], list[QuicSentPacket]]:
         """
         Returns the assembled datagrams.
         """

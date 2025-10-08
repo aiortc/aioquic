@@ -1,5 +1,3 @@
-from typing import Dict, List
-
 from aioquic.h3.events import DataReceived, H3Event, Headers, HeadersReceived
 from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import QuicEvent, StreamDataReceived
@@ -13,13 +11,13 @@ class H0Connection:
     """
 
     def __init__(self, quic: QuicConnection):
-        self._buffer: Dict[int, bytes] = {}
-        self._headers_received: Dict[int, bool] = {}
+        self._buffer: dict[int, bytes] = {}
+        self._headers_received: dict[int, bool] = {}
         self._is_client = quic.configuration.is_client
         self._quic = quic
 
-    def handle_event(self, event: QuicEvent) -> List[H3Event]:
-        http_events: List[H3Event] = []
+    def handle_event(self, event: QuicEvent) -> list[H3Event]:
+        http_events: list[H3Event] = []
 
         if isinstance(event, StreamDataReceived) and (event.stream_id % 4) == 0:
             data = self._buffer.pop(event.stream_id, b"") + event.data

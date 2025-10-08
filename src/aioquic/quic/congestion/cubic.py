@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterable
+from typing import Any, Iterable
 
 from ..packet_builder import QuicSentPacket
 from .base import (
@@ -201,7 +201,7 @@ class CubicCongestionControl(QuicCongestionControl):
         ):
             self.ssthresh = self.congestion_window
 
-    def get_log_data(self) -> Dict[str, Any]:
+    def get_log_data(self) -> dict[str, Any]:
         data = super().get_log_data()
 
         data["cubic-wmax"] = int(self._W_max)

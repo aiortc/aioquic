@@ -3,7 +3,7 @@ import json
 import os
 import time
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Deque, Optional
 
 from ..h3.events import Headers
 from .packet import (
@@ -43,7 +43,7 @@ class QuicLoggerTrace:
 
     def __init__(self, *, is_client: bool, odcid: bytes) -> None:
         self._odcid = odcid
-        self._events: Deque[Dict[str, Any]] = deque()
+        self._events: Deque[dict[str, Any]] = deque()
         self._vantage_point = {
             "name": "aioquic",
             "type": "client" if is_client else "server",
@@ -51,7 +51,7 @@ class QuicLoggerTrace:
 
     # QUIC
 
-    def encode_ack_frame(self, ranges: RangeSet, delay: float) -> Dict:
+    def encode_ack_frame(self, ranges: RangeSet, delay: float) -> dict:
         return {
             "ack_delay": self.encode_time(delay),
             "acked_ranges": [[x.start, x.stop - 1] for x in ranges],
@@ -60,7 +60,7 @@ class QuicLoggerTrace:
 
     def encode_connection_close_frame(
         self, error_code: int, frame_type: Optional[int], reason_phrase: str
-    ) -> Dict:
+    ) -> dict:
         attrs = {
             "error_code": error_code,
             "error_space": "application" if frame_type is None else "transport",
@@ -73,7 +73,7 @@ class QuicLoggerTrace:
 
         return attrs
 
-    def encode_connection_limit_frame(self, frame_type: int, maximum: int) -> Dict:
+    def encode_connection_limit_frame(self, frame_type: int, maximum: int) -> dict:
         if frame_type == QuicFrameType.MAX_DATA:
             return {"frame_type": "max_data", "maximum": maximum}
         else:
@@ -85,23 +85,23 @@ class QuicLoggerTrace:
                 else "bidirectional",
             }
 
-    def encode_crypto_frame(self, frame: QuicStreamFrame) -> Dict:
+    def encode_crypto_frame(self, frame: QuicStreamFrame) -> dict:
         return {
             "frame_type": "crypto",
             "length": len(frame.data),
             "offset": frame.offset,
         }
 
-    def encode_data_blocked_frame(self, limit: int) -> Dict:
+    def encode_data_blocked_frame(self, limit: int) -> dict:
         return {"frame_type": "data_blocked", "limit": limit}
 
-    def encode_datagram_frame(self, length: int) -> Dict:
+    def encode_datagram_frame(self, length: int) -> dict:
         return {"frame_type": "datagram", "length": length}
 
-    def encode_handshake_done_frame(self) -> Dict:
+    def encode_handshake_done_frame(self) -> dict:
         return {"frame_type": "handshake_done"}
 
-    def encode_max_stream_data_frame(self, maximum: int, stream_id: int) -> Dict:
+    def encode_max_stream_data_frame(self, maximum: int, stream_id: int) -> dict:
         return {
             "frame_type": "max_stream_data",
             "maximum": maximum,
@@ -114,7 +114,7 @@ class QuicLoggerTrace:
         retire_prior_to: int,
         sequence_number: int,
         stateless_reset_token: bytes,
-    ) -> Dict:
+    ) -> dict:
         return {
             "connection_id": hexdump(connection_id),
             "frame_type": "new_connection_id",
@@ -124,28 +124,28 @@ class QuicLoggerTrace:
             "sequence_number": sequence_number,
         }
 
-    def encode_new_token_frame(self, token: bytes) -> Dict:
+    def encode_new_token_frame(self, token: bytes) -> dict:
         return {
             "frame_type": "new_token",
             "length": len(token),
             "token": hexdump(token),
         }
 
-    def encode_padding_frame(self) -> Dict:
+    def encode_padding_frame(self) -> dict:
         return {"frame_type": "padding"}
 
-    def encode_path_challenge_frame(self, data: bytes) -> Dict:
+    def encode_path_challenge_frame(self, data: bytes) -> dict:
         return {"data": hexdump(data), "frame_type": "path_challenge"}
 
-    def encode_path_response_frame(self, data: bytes) -> Dict:
+    def encode_path_response_frame(self, data: bytes) -> dict:
         return {"data": hexdump(data), "frame_type": "path_response"}
 
-    def encode_ping_frame(self) -> Dict:
+    def encode_ping_frame(self) -> dict:
         return {"frame_type": "ping"}
 
     def encode_reset_stream_frame(
         self, error_code: int, final_size: int, stream_id: int
-    ) -> Dict:
+    ) -> dict:
         return {
             "error_code": error_code,
             "final_size": final_size,
@@ -153,27 +153,27 @@ class QuicLoggerTrace:
             "stream_id": stream_id,
         }
 
-    def encode_retire_connection_id_frame(self, sequence_number: int) -> Dict:
+    def encode_retire_connection_id_frame(self, sequence_number: int) -> dict:
         return {
             "frame_type": "retire_connection_id",
             "sequence_number": sequence_number,
         }
 
-    def encode_stream_data_blocked_frame(self, limit: int, stream_id: int) -> Dict:
+    def encode_stream_data_blocked_frame(self, limit: int, stream_id: int) -> dict:
         return {
             "frame_type": "stream_data_blocked",
             "limit": limit,
             "stream_id": stream_id,
         }
 
-    def encode_stop_sending_frame(self, error_code: int, stream_id: int) -> Dict:
+    def encode_stop_sending_frame(self, error_code: int, stream_id: int) -> dict:
         return {
             "frame_type": "stop_sending",
             "error_code": error_code,
             "stream_id": stream_id,
         }
 
-    def encode_stream_frame(self, frame: QuicStreamFrame, stream_id: int) -> Dict:
+    def encode_stream_frame(self, frame: QuicStreamFrame, stream_id: int) -> dict:
         return {
             "fin": frame.fin,
             "frame_type": "stream",
@@ -182,7 +182,7 @@ class QuicLoggerTrace:
             "stream_id": stream_id,
         }
 
-    def encode_streams_blocked_frame(self, is_unidirectional: bool, limit: int) -> Dict:
+    def encode_streams_blocked_frame(self, is_unidirectional: bool, limit: int) -> dict:
         return {
             "frame_type": "streams_blocked",
             "limit": limit,
@@ -197,8 +197,8 @@ class QuicLoggerTrace:
 
     def encode_transport_parameters(
         self, owner: str, parameters: QuicTransportParameters
-    ) -> Dict[str, Any]:
-        data: Dict[str, Any] = {"owner": owner}
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = {"owner": owner}
         for param_name, param_value in parameters.__dict__.items():
             if isinstance(param_value, bool):
                 data[param_name] = param_value
@@ -213,7 +213,7 @@ class QuicLoggerTrace:
 
     # HTTP/3
 
-    def encode_http3_data_frame(self, length: int, stream_id: int) -> Dict:
+    def encode_http3_data_frame(self, length: int, stream_id: int) -> dict:
         return {
             "frame": {"frame_type": "data"},
             "length": length,
@@ -222,7 +222,7 @@ class QuicLoggerTrace:
 
     def encode_http3_headers_frame(
         self, length: int, headers: Headers, stream_id: int
-    ) -> Dict:
+    ) -> dict:
         return {
             "frame": {
                 "frame_type": "headers",
@@ -234,7 +234,7 @@ class QuicLoggerTrace:
 
     def encode_http3_push_promise_frame(
         self, length: int, headers: Headers, push_id: int, stream_id: int
-    ) -> Dict:
+    ) -> dict:
         return {
             "frame": {
                 "frame_type": "push_promise",
@@ -245,14 +245,14 @@ class QuicLoggerTrace:
             "stream_id": stream_id,
         }
 
-    def _encode_http3_headers(self, headers: Headers) -> List[Dict]:
+    def _encode_http3_headers(self, headers: Headers) -> list[dict]:
         return [
             {"name": h[0].decode("utf8"), "value": h[1].decode("utf8")} for h in headers
         ]
 
     # CORE
 
-    def log_event(self, *, category: str, event: str, data: Dict) -> None:
+    def log_event(self, *, category: str, event: str, data: dict) -> None:
         self._events.append(
             {
                 "data": data,
@@ -261,7 +261,7 @@ class QuicLoggerTrace:
             }
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Return the trace as a dictionary which can be written as JSON.
         """
@@ -280,7 +280,7 @@ class QuicLogger:
     """
 
     def __init__(self) -> None:
-        self._traces: List[QuicLoggerTrace] = []
+        self._traces: list[QuicLoggerTrace] = []
 
     def start_trace(self, is_client: bool, odcid: bytes) -> QuicLoggerTrace:
         trace = QuicLoggerTrace(is_client=is_client, odcid=odcid)
@@ -290,7 +290,7 @@ class QuicLogger:
     def end_trace(self, trace: QuicLoggerTrace) -> None:
         assert trace in self._traces, "QuicLoggerTrace does not belong to QuicLogger"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Return the traces as a dictionary which can be written as JSON.
         """

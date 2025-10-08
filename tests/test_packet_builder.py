@@ -1,4 +1,3 @@
-from typing import List
 from unittest import TestCase
 
 from aioquic.quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE
@@ -33,7 +32,7 @@ def create_crypto():
     return crypto
 
 
-def datagram_sizes(datagrams: List[bytes]) -> List[int]:
+def datagram_sizes(datagrams: list[bytes]) -> list[int]:
     return [len(x) for x in datagrams]
 
 

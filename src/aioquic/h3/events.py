@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Optional
 
-Headers = List[Tuple[bytes, bytes]]
+Headers = list[tuple[bytes, bytes]]
 
 
 class H3Event:

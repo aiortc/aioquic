@@ -1,7 +1,7 @@
 import asyncio
 import os
 from functools import partial
-from typing import Callable, Dict, Optional, Text, Union, cast
+from typing import Callable, Optional, Text, Union, cast
 
 from ..buffer import Buffer
 from ..quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
@@ -33,7 +33,7 @@ class QuicServer(asyncio.DatagramProtocol):
         self._configuration = configuration
         self._create_protocol = create_protocol
         self._loop = asyncio.get_running_loop()
-        self._protocols: Dict[bytes, QuicConnectionProtocol] = {}
+        self._protocols: dict[bytes, QuicConnectionProtocol] = {}
         self._session_ticket_fetcher = session_ticket_fetcher
         self._session_ticket_handler = session_ticket_handler
         self._transport: Optional[asyncio.DatagramTransport] = None

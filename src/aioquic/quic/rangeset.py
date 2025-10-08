@@ -1,10 +1,10 @@
 from collections.abc import Sequence
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, Optional
 
 
 class RangeSet(Sequence):
     def __init__(self, ranges: Iterable[range] = []):
-        self.__ranges: List[range] = []
+        self.__ranges: list[range] = []
         for r in ranges:
             assert r.step == 1
             self.add(r.start, r.stop)
