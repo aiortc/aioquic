@@ -1,5 +1,5 @@
 import binascii
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional
 
 from .._crypto import AEAD, CryptoError, HeaderProtection
 from ..tls import CipherSuite, cipher_suite_hash, hkdf_expand_label, hkdf_extract
@@ -33,7 +33,7 @@ class KeyUnavailableError(CryptoError):
 
 def derive_key_iv_hp(
     *, cipher_suite: CipherSuite, secret: bytes, version: int
-) -> Tuple[bytes, bytes, bytes]:
+) -> tuple[bytes, bytes, bytes]:
     algorithm = cipher_suite_hash(cipher_suite)
     if cipher_suite in [
         CipherSuite.AES_256_GCM_SHA384,
@@ -74,7 +74,7 @@ class CryptoContext:
 
     def decrypt_packet(
         self, packet: bytes, encrypted_offset: int, expected_packet_number: int
-    ) -> Tuple[bytes, bytes, int, bool]:
+    ) -> tuple[bytes, bytes, int, bool]:
         if self.aead is None:
             raise KeyUnavailableError("Decryption key is not available")
 
@@ -183,7 +183,7 @@ class CryptoPair:
 
     def decrypt_packet(
         self, packet: bytes, encrypted_offset: int, expected_packet_number: int
-    ) -> Tuple[bytes, bytes, int]:
+    ) -> tuple[bytes, bytes, int]:
         plain_header, payload, packet_number, update_key = self.recv.decrypt_packet(
             packet, encrypted_offset, expected_packet_number
         )

@@ -3,7 +3,6 @@ import contextlib
 import io
 import os
 import time
-from typing import List, Tuple
 from unittest import TestCase, skipIf
 
 from aioquic import tls
@@ -121,7 +120,7 @@ def create_standalone_server(self, original_destination_connection_id=bytes(8)):
     return server
 
 
-def datagram_sizes(items: List[Tuple[bytes, NetworkAddress]]) -> List[int]:
+def datagram_sizes(items: list[tuple[bytes, NetworkAddress]]) -> list[int]:
     return [len(x[0]) for x in items]
 
 
@@ -269,7 +268,7 @@ class QuicConnectionTest(TestCase):
                 break
         self.assertEqual(found_trigger, trigger)
 
-    def assertSentPackets(self, connection: QuicConnection, expected: List[int]):
+    def assertSentPackets(self, connection: QuicConnection, expected: list[int]):
         counts = [len(space.sent_packets) for space in connection._loss.spaces]
         self.assertEqual(counts, expected)
 

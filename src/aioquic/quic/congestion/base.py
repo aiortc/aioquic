@@ -1,5 +1,5 @@
 import abc
-from typing import Any, Dict, Iterable, Optional, Protocol
+from typing import Any, Iterable, Optional, Protocol
 
 from ..packet_builder import QuicSentPacket
 
@@ -37,7 +37,7 @@ class QuicCongestionControl(abc.ABC):
     @abc.abstractmethod
     def on_rtt_measurement(self, *, now: float, rtt: float) -> None: ...
 
-    def get_log_data(self) -> Dict[str, Any]:
+    def get_log_data(self) -> dict[str, Any]:
         data = {"cwnd": self.congestion_window, "bytes_in_flight": self.bytes_in_flight}
         if self.ssthresh is not None:
             data["ssthresh"] = self.ssthresh
@@ -103,7 +103,7 @@ class QuicRttMonitor:
         return False
 
 
-_factories: Dict[str, QuicCongestionControlFactory] = {}
+_factories: dict[str, QuicCongestionControlFactory] = {}
 
 
 def create_congestion_control(

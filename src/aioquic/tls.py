@@ -11,12 +11,9 @@ from functools import partial
 from typing import (
     Any,
     Callable,
-    Dict,
     Generator,
-    List,
     Optional,
     Sequence,
-    Tuple,
     TypeVar,
     Union,
     cast,
@@ -205,7 +202,7 @@ def load_pem_private_key(
     return serialization.load_pem_private_key(data, password=password)
 
 
-def load_pem_x509_certificates(data: bytes) -> List[x509.Certificate]:
+def load_pem_x509_certificates(data: bytes) -> list[x509.Certificate]:
     """
     Load a chain of PEM-encoded X509 certificates.
     """
@@ -219,7 +216,7 @@ def load_pem_x509_certificates(data: bytes) -> List[x509.Certificate]:
 
 def verify_certificate(
     certificate: x509.Certificate,
-    chain: List[x509.Certificate] = [],
+    chain: list[x509.Certificate] = [],
     server_name: Optional[str] = None,
     cadata: Optional[bytes] = None,
     cafile: Optional[str] = None,
@@ -414,7 +411,7 @@ class SkipItem(Exception):
     "There is nothing to append for this invocation of a pull_list() func"
 
 
-def pull_list(buf: Buffer, capacity: int, func: Callable[[], T]) -> List[T]:
+def pull_list(buf: Buffer, capacity: int, func: Callable[[], T]) -> list[T]:
     """
     Pull a list of items.
 
@@ -489,7 +486,7 @@ def push_server_name(buf: Buffer, server_name: str) -> None:
 # KeyShareEntry
 
 
-KeyShareEntry = Tuple[int, bytes]
+KeyShareEntry = tuple[int, bytes]
 
 
 def pull_key_share(buf: Buffer) -> KeyShareEntry:
@@ -522,13 +519,13 @@ def push_alpn_protocol(buf: Buffer, protocol: str) -> None:
 
 # PRE SHARED KEY
 
-PskIdentity = Tuple[bytes, int]
+PskIdentity = tuple[bytes, int]
 
 
 @dataclass
 class OfferedPsks:
-    identities: List[PskIdentity]
-    binders: List[bytes]
+    identities: list[PskIdentity]
+    binders: list[bytes]
 
 
 def pull_psk_identity(buf: Buffer) -> PskIdentity:
@@ -574,28 +571,28 @@ def push_offered_psks(buf: Buffer, pre_shared_key: OfferedPsks) -> None:
 
 # MESSAGES
 
-Extension = Tuple[int, bytes]
+Extension = tuple[int, bytes]
 
 
 @dataclass
 class ClientHello:
     random: bytes
     legacy_session_id: bytes
-    cipher_suites: List[int]
-    legacy_compression_methods: List[int]
+    cipher_suites: list[int]
+    legacy_compression_methods: list[int]
 
     # extensions
-    alpn_protocols: Optional[List[str]] = None
+    alpn_protocols: Optional[list[str]] = None
     early_data: bool = False
-    key_share: Optional[List[KeyShareEntry]] = None
+    key_share: Optional[list[KeyShareEntry]] = None
     pre_shared_key: Optional[OfferedPsks] = None
-    psk_key_exchange_modes: Optional[List[int]] = None
+    psk_key_exchange_modes: Optional[list[int]] = None
     server_name: Optional[str] = None
-    signature_algorithms: Optional[List[int]] = None
-    supported_groups: Optional[List[int]] = None
-    supported_versions: Optional[List[int]] = None
+    signature_algorithms: Optional[list[int]] = None
+    supported_groups: Optional[list[int]] = None
+    supported_versions: Optional[list[int]] = None
 
-    other_extensions: List[Extension] = field(default_factory=list)
+    other_extensions: list[Extension] = field(default_factory=list)
 
 
 def pull_handshake_type(buf: Buffer, expected_type: HandshakeType) -> None:
@@ -726,7 +723,7 @@ class ServerHello:
     key_share: Optional[KeyShareEntry] = None
     pre_shared_key: Optional[int] = None
     supported_version: Optional[int] = None
-    other_extensions: List[Tuple[int, bytes]] = field(default_factory=list)
+    other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
 
 def pull_server_hello(buf: Buffer) -> ServerHello:
@@ -800,7 +797,7 @@ class NewSessionTicket:
 
     # extensions
     max_early_data_size: Optional[int] = None
-    other_extensions: List[Tuple[int, bytes]] = field(default_factory=list)
+    other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
 
 def pull_new_session_ticket(buf: Buffer) -> NewSessionTicket:
@@ -851,7 +848,7 @@ class EncryptedExtensions:
     alpn_protocol: Optional[str] = None
     early_data: bool = False
 
-    other_extensions: List[Tuple[int, bytes]] = field(default_factory=list)
+    other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
 
 def pull_encrypted_extensions(buf: Buffer) -> EncryptedExtensions:
@@ -901,13 +898,13 @@ def push_encrypted_extensions(buf: Buffer, extensions: EncryptedExtensions) -> N
                     buf.push_bytes(extension_value)
 
 
-CertificateEntry = Tuple[bytes, bytes]
+CertificateEntry = tuple[bytes, bytes]
 
 
 @dataclass
 class Certificate:
     request_context: bytes = b""
-    certificates: List[CertificateEntry] = field(default_factory=list)
+    certificates: list[CertificateEntry] = field(default_factory=list)
 
 
 def pull_certificate(buf: Buffer) -> Certificate:
@@ -946,8 +943,8 @@ def push_certificate(buf: Buffer, certificate: Certificate) -> None:
 @dataclass
 class CertificateRequest:
     request_context: bytes = b""
-    signature_algorithms: Optional[List[int]] = None
-    other_extensions: List[Tuple[int, bytes]] = field(default_factory=list)
+    signature_algorithms: Optional[list[int]] = None
+    other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
 
 def pull_certificate_request(buf: Buffer) -> CertificateRequest:
@@ -1093,7 +1090,7 @@ class KeySchedule:
 
 
 class KeyScheduleProxy:
-    def __init__(self, cipher_suites: List[CipherSuite]):
+    def __init__(self, cipher_suites: list[CipherSuite]):
         self.__schedules = dict(map(lambda c: (c, KeySchedule(c)), cipher_suites))
 
     def extract(self, key_material: Optional[bytes] = None) -> None:
@@ -1108,13 +1105,13 @@ class KeyScheduleProxy:
             k.update_hash(data)
 
 
-CIPHER_SUITES: Dict = {
+CIPHER_SUITES: dict = {
     CipherSuite.AES_128_GCM_SHA256: hashes.SHA256,
     CipherSuite.AES_256_GCM_SHA384: hashes.SHA384,
     CipherSuite.CHACHA20_POLY1305_SHA256: hashes.SHA256,
 }
 
-SIGNATURE_ALGORITHMS: Dict = {
+SIGNATURE_ALGORITHMS: dict = {
     SignatureAlgorithm.ECDSA_SECP256R1_SHA256: (None, hashes.SHA256),
     SignatureAlgorithm.ECDSA_SECP384R1_SHA384: (None, hashes.SHA384),
     SignatureAlgorithm.ECDSA_SECP521R1_SHA512: (None, hashes.SHA512),
@@ -1127,7 +1124,7 @@ SIGNATURE_ALGORITHMS: Dict = {
     SignatureAlgorithm.RSA_PSS_RSAE_SHA512: (padding.PSS, hashes.SHA512),
 }
 
-GROUP_TO_CURVE: Dict = {
+GROUP_TO_CURVE: dict = {
     Group.SECP256R1: ec.SECP256R1,
     Group.SECP384R1: ec.SECP384R1,
     Group.SECP521R1: ec.SECP521R1,
@@ -1170,7 +1167,7 @@ def encode_public_key(
 
 
 def negotiate(
-    supported: List[T], offered: Optional[List[Any]], exc: Optional[Alert] = None
+    supported: list[T], offered: Optional[list[Any]], exc: Optional[Alert] = None
 ) -> T:
     if offered is not None:
         for c in supported:
@@ -1182,7 +1179,7 @@ def negotiate(
     return None
 
 
-def signature_algorithm_params(signature_algorithm: int) -> Tuple:
+def signature_algorithm_params(signature_algorithm: int) -> tuple:
     if signature_algorithm in (SignatureAlgorithm.ED25519, SignatureAlgorithm.ED448):
         return tuple()
 
@@ -1226,7 +1223,7 @@ class SessionTicket:
     ticket: bytes
 
     max_early_data_size: Optional[int] = None
-    other_extensions: List[Tuple[int, bytes]] = field(default_factory=list)
+    other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
     @property
     def is_valid(self) -> bool:
@@ -1248,11 +1245,11 @@ class Context:
     def __init__(
         self,
         is_client: bool,
-        alpn_protocols: Optional[List[str]] = None,
+        alpn_protocols: Optional[list[str]] = None,
         cadata: Optional[bytes] = None,
         cafile: Optional[str] = None,
         capath: Optional[str] = None,
-        cipher_suites: Optional[List[CipherSuite]] = None,
+        cipher_suites: Optional[list[CipherSuite]] = None,
         logger: Optional[Union[logging.Logger, logging.LoggerAdapter]] = None,
         max_early_data: Optional[int] = None,
         server_name: Optional[str] = None,
@@ -1264,11 +1261,11 @@ class Context:
         self._cafile = cafile
         self._capath = capath
         self.certificate: Optional[x509.Certificate] = None
-        self.certificate_chain: List[x509.Certificate] = []
+        self.certificate_chain: list[x509.Certificate] = []
         self.certificate_private_key: Optional[
             Union[dsa.DSAPrivateKey, ec.EllipticCurvePrivateKey, rsa.RSAPrivateKey]
         ] = None
-        self.handshake_extensions: List[Extension] = []
+        self.handshake_extensions: list[Extension] = []
         self._is_client = is_client
         self._max_early_data = max_early_data
         self.session_ticket: Optional[SessionTicket] = None
@@ -1296,9 +1293,9 @@ class Context:
                 CipherSuite.AES_128_GCM_SHA256,
                 CipherSuite.CHACHA20_POLY1305_SHA256,
             ]
-        self._legacy_compression_methods: List[int] = [CompressionMethod.NULL]
-        self._psk_key_exchange_modes: List[int] = [PskKeyExchangeMode.PSK_DHE_KE]
-        self._signature_algorithms: List[int] = [
+        self._legacy_compression_methods: list[int] = [CompressionMethod.NULL]
+        self._psk_key_exchange_modes: list[int] = [PskKeyExchangeMode.PSK_DHE_KE]
+        self._signature_algorithms: list[int] = [
             SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
             SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
             SignatureAlgorithm.RSA_PKCS1_SHA256,
@@ -1322,13 +1319,13 @@ class Context:
         self.alpn_negotiated: Optional[str] = None
         self.early_data_accepted = False
         self.key_schedule: Optional[KeySchedule] = None
-        self.received_extensions: Optional[List[Extension]] = None
+        self.received_extensions: Optional[list[Extension]] = None
         self._certificate_request: Optional[CertificateRequest] = None
         self._key_schedule_psk: Optional[KeySchedule] = None
         self._key_schedule_proxy: Optional[KeyScheduleProxy] = None
         self._new_session_ticket: Optional[NewSessionTicket] = None
         self._peer_certificate: Optional[x509.Certificate] = None
-        self._peer_certificate_chain: List[x509.Certificate] = []
+        self._peer_certificate_chain: list[x509.Certificate] = []
         self._psk_key_exchange_mode: Optional[int] = None
         self._receive_buffer = b""
         self._session_resumed = False
@@ -1336,7 +1333,7 @@ class Context:
         self._dec_key: Optional[bytes] = None
         self.__logger = logger
 
-        self._ec_private_keys: List[ec.EllipticCurvePrivateKey] = []
+        self._ec_private_keys: list[ec.EllipticCurvePrivateKey] = []
         self._x25519_private_key: Optional[x25519.X25519PrivateKey] = None
         self._x448_private_key: Optional[x448.X448PrivateKey] = None
 
@@ -1357,7 +1354,7 @@ class Context:
         return self._session_resumed
 
     def handle_message(
-        self, input_data: bytes, output_buf: Dict[Epoch, Buffer]
+        self, input_data: bytes, output_buf: dict[Epoch, Buffer]
     ) -> None:
         if self.state == State.CLIENT_HANDSHAKE_START:
             self._client_send_hello(output_buf[Epoch.INITIAL])
@@ -1388,7 +1385,7 @@ class Context:
                 raise AlertDecodeError("Could not parse TLS message")
 
     def _handle_reassembled_message(
-        self, message_type: int, input_buf: Buffer, output_buf: Dict[Epoch, Buffer]
+        self, message_type: int, input_buf: Buffer, output_buf: dict[Epoch, Buffer]
     ) -> None:
         # client states
 
@@ -1468,7 +1465,7 @@ class Context:
         assert input_buf.eof()
 
     def _build_session_ticket(
-        self, new_session_ticket: NewSessionTicket, other_extensions: List[Extension]
+        self, new_session_ticket: NewSessionTicket, other_extensions: list[Extension]
     ) -> SessionTicket:
         resumption_master_secret = self.key_schedule.derive_secret(b"res master")
         resumption_secret = hkdf_expand_label(
@@ -1520,8 +1517,8 @@ class Context:
             raise AlertDecryptError
 
     def _client_send_hello(self, output_buf: Buffer) -> None:
-        key_share: List[KeyShareEntry] = []
-        supported_groups: List[int] = []
+        key_share: list[KeyShareEntry] = []
+        supported_groups: list[int] = []
 
         for group in self._supported_groups:
             if group == Group.X25519:
@@ -2159,8 +2156,8 @@ class Context:
             self.__logger.debug("TLS %s -> %s", self.state, state)
         self.state = state
 
-    def _signature_algorithms_for_private_key(self) -> List[SignatureAlgorithm]:
-        signature_algorithms: List[SignatureAlgorithm] = []
+    def _signature_algorithms_for_private_key(self) -> list[SignatureAlgorithm]:
+        signature_algorithms: list[SignatureAlgorithm] = []
         if isinstance(self.certificate_private_key, rsa.RSAPrivateKey):
             signature_algorithms = [
                 SignatureAlgorithm.RSA_PSS_RSAE_SHA256,

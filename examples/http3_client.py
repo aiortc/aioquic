@@ -6,7 +6,7 @@ import pickle
 import ssl
 import time
 from collections import deque
-from typing import BinaryIO, Callable, Deque, Dict, List, Optional, Union, cast
+from typing import BinaryIO, Callable, Deque, Optional, Union, cast
 from urllib.parse import urlparse
 
 import aioquic
@@ -57,7 +57,7 @@ class HttpRequest:
         method: str,
         url: URL,
         content: bytes = b"",
-        headers: Optional[Dict] = None,
+        headers: Optional[dict] = None,
     ) -> None:
         if headers is None:
             headers = {}
@@ -125,18 +125,18 @@ class HttpClient(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.pushes: Dict[int, Deque[H3Event]] = {}
+        self.pushes: dict[int, Deque[H3Event]] = {}
         self._http: Optional[HttpConnection] = None
-        self._request_events: Dict[int, Deque[H3Event]] = {}
-        self._request_waiter: Dict[int, asyncio.Future[Deque[H3Event]]] = {}
-        self._websockets: Dict[int, WebSocket] = {}
+        self._request_events: dict[int, Deque[H3Event]] = {}
+        self._request_waiter: dict[int, asyncio.Future[Deque[H3Event]]] = {}
+        self._websockets: dict[int, WebSocket] = {}
 
         if self._quic.configuration.alpn_protocols[0].startswith("hq-"):
             self._http = H0Connection(self._quic)
         else:
             self._http = H3Connection(self._quic)
 
-    async def get(self, url: str, headers: Optional[Dict] = None) -> Deque[H3Event]:
+    async def get(self, url: str, headers: Optional[dict] = None) -> Deque[H3Event]:
         """
         Perform a GET request.
         """
@@ -145,7 +145,7 @@ class HttpClient(QuicConnectionProtocol):
         )
 
     async def post(
-        self, url: str, data: bytes, headers: Optional[Dict] = None
+        self, url: str, data: bytes, headers: Optional[dict] = None
     ) -> Deque[H3Event]:
         """
         Perform a POST request.
@@ -155,7 +155,7 @@ class HttpClient(QuicConnectionProtocol):
         )
 
     async def websocket(
-        self, url: str, subprotocols: Optional[List[str]] = None
+        self, url: str, subprotocols: Optional[list[str]] = None
     ) -> WebSocket:
         """
         Open a WebSocket.
@@ -347,7 +347,7 @@ def save_session_ticket(ticket: SessionTicket) -> None:
 
 async def main(
     configuration: QuicConfiguration,
-    urls: List[str],
+    urls: list[str],
     data: Optional[str],
     include: bool,
     output_dir: Optional[str],

@@ -3,7 +3,7 @@ import ipaddress
 import os
 from dataclasses import dataclass
 from enum import Enum, IntEnum
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -111,7 +111,7 @@ class QuicHeader:
     integrity_tag: bytes
     "The retry integrity tag. Only present in `RETRY` packets."
 
-    supported_versions: List[int]
+    supported_versions: list[int]
     "Supported protocol versions. Only present in `VERSION_NEGOTIATION` packets."
 
 
@@ -315,7 +315,7 @@ def encode_quic_retry(
 
 
 def encode_quic_version_negotiation(
-    source_cid: bytes, destination_cid: bytes, supported_versions: List[int]
+    source_cid: bytes, destination_cid: bytes, supported_versions: list[int]
 ) -> bytes:
     buf = Buffer(
         capacity=7
@@ -339,8 +339,8 @@ def encode_quic_version_negotiation(
 
 @dataclass
 class QuicPreferredAddress:
-    ipv4_address: Optional[Tuple[str, int]]
-    ipv6_address: Optional[Tuple[str, int]]
+    ipv4_address: Optional[tuple[str, int]]
+    ipv6_address: Optional[tuple[str, int]]
     connection_id: bytes
     stateless_reset_token: bytes
 
@@ -348,7 +348,7 @@ class QuicPreferredAddress:
 @dataclass
 class QuicVersionInformation:
     chosen_version: int
-    available_versions: List[int]
+    available_versions: list[int]
 
 
 @dataclass
@@ -606,7 +606,7 @@ class QuicStreamFrame:
     offset: int = 0
 
 
-def pull_ack_frame(buf: Buffer) -> Tuple[RangeSet, int]:
+def pull_ack_frame(buf: Buffer) -> tuple[RangeSet, int]:
     rangeset = RangeSet()
     end = buf.pull_uint_var()  # largest acknowledged
     delay = buf.pull_uint_var()

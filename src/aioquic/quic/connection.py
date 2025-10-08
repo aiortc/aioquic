@@ -9,13 +9,10 @@ from typing import (
     Any,
     Callable,
     Deque,
-    Dict,
     FrozenSet,
-    List,
     Optional,
     Sequence,
     Set,
-    Tuple,
 )
 
 from .. import tls
@@ -179,7 +176,7 @@ class QuicConnectionError(Exception):
 
 
 class QuicConnectionAdapter(logging.LoggerAdapter):
-    def process(self, msg: str, kwargs: Any) -> Tuple[str, Any]:
+    def process(self, msg: str, kwargs: Any) -> tuple[str, Any]:
         return "[%s] %s" % (self.extra["id"], msg), kwargs
 
 
@@ -217,7 +214,7 @@ class QuicReceiveContext:
     epoch: tls.Epoch
     host_cid: bytes
     network_path: QuicNetworkPath
-    quic_logger_frames: Optional[List[Any]]
+    quic_logger_frames: Optional[list[Any]]
     time: float
     version: Optional[int]
 
@@ -292,13 +289,13 @@ class QuicConnection:
         self._close_at: Optional[float] = None
         self._close_event: Optional[events.ConnectionTerminated] = None
         self._connect_called = False
-        self._cryptos: Dict[tls.Epoch, CryptoPair] = {}
-        self._cryptos_initial: Dict[int, CryptoPair] = {}
-        self._crypto_buffers: Dict[tls.Epoch, Buffer] = {}
+        self._cryptos: dict[tls.Epoch, CryptoPair] = {}
+        self._cryptos_initial: dict[int, CryptoPair] = {}
+        self._crypto_buffers: dict[tls.Epoch, Buffer] = {}
         self._crypto_frame_type: Optional[int] = None
         self._crypto_packet_version: Optional[int] = None
         self._crypto_retransmitted = False
-        self._crypto_streams: Dict[tls.Epoch, QuicStream] = {}
+        self._crypto_streams: dict[tls.Epoch, QuicStream] = {}
         self._events: Deque[events.QuicEvent] = deque()
         self._handshake_complete = False
         self._handshake_confirmed = False
@@ -314,7 +311,7 @@ class QuicConnection:
         self._host_cid_seq = 1
         self._local_ack_delay_exponent = 3
         self._local_active_connection_id_limit = 8
-        self._local_challenges: Dict[bytes, QuicNetworkPath] = {}
+        self._local_challenges: dict[bytes, QuicNetworkPath] = {}
         self._local_initial_source_connection_id = self._host_cids[0].cid
         self._local_max_data = Limit(
             frame_type=QuicFrameType.MAX_DATA,
@@ -336,13 +333,13 @@ class QuicConnection:
         self._local_next_stream_id_uni = 2 if self._is_client else 3
         self._loss_at: Optional[float] = None
         self._max_datagram_size = configuration.max_datagram_size
-        self._network_paths: List[QuicNetworkPath] = []
+        self._network_paths: list[QuicNetworkPath] = []
         self._pacing_at: Optional[float] = None
         self._packet_number = 0
         self._peer_cid = QuicConnectionId(
             cid=os.urandom(configuration.connection_id_length), sequence_number=None
         )
-        self._peer_cid_available: List[QuicConnectionId] = []
+        self._peer_cid_available: list[QuicConnectionId] = []
         self._peer_cid_sequence_numbers: Set[int] = set([0])
         self._peer_retire_prior_to = 0
         self._peer_token = configuration.token
@@ -362,14 +359,14 @@ class QuicConnection:
         self._remote_version_information: Optional[QuicVersionInformation] = None
         self._retry_count = 0
         self._retry_source_connection_id = retry_source_connection_id
-        self._spaces: Dict[tls.Epoch, QuicPacketSpace] = {}
+        self._spaces: dict[tls.Epoch, QuicPacketSpace] = {}
         self._spin_bit = False
         self._spin_highest_pn = 0
         self._state = QuicConnectionState.FIRSTFLIGHT
-        self._streams: Dict[int, QuicStream] = {}
-        self._streams_queue: List[QuicStream] = []
-        self._streams_blocked_bidi: List[QuicStream] = []
-        self._streams_blocked_uni: List[QuicStream] = []
+        self._streams: dict[int, QuicStream] = {}
+        self._streams_queue: list[QuicStream] = []
+        self._streams_blocked_bidi: list[QuicStream] = []
+        self._streams_blocked_uni: list[QuicStream] = []
         self._streams_finished: Set[int] = set()
         self._version: Optional[int] = None
         self._version_negotiated_compatible = False
@@ -407,9 +404,9 @@ class QuicConnection:
         self._close_pending = False
         self._datagrams_pending: Deque[bytes] = deque()
         self._handshake_done_pending = False
-        self._ping_pending: List[int] = []
+        self._ping_pending: list[int] = []
         self._probe_pending = False
-        self._retire_connection_ids: List[int] = []
+        self._retire_connection_ids: list[int] = []
         self._streams_blocked_pending = False
 
         # callbacks
@@ -523,7 +520,7 @@ class QuicConnection:
             self._version = self._configuration.supported_versions[0]
         self._connect(now=now)
 
-    def datagrams_to_send(self, now: float) -> List[Tuple[bytes, NetworkAddress]]:
+    def datagrams_to_send(self, now: float) -> list[tuple[bytes, NetworkAddress]]:
         """
         Return a list of `(data, addr)` tuples of datagrams which need to be
         sent, and the network address to which they need to be sent.
@@ -963,7 +960,7 @@ class QuicConnection:
                 return
 
             # log packet
-            quic_logger_frames: Optional[List[Dict]] = None
+            quic_logger_frames: Optional[list[dict]] = None
             if self._quic_logger is not None:
                 quic_logger_frames = []
                 self._quic_logger.log_event(
@@ -2416,7 +2413,7 @@ class QuicConnection:
         context: QuicReceiveContext,
         plain: bytes,
         crypto_frame_required: bool = False,
-    ) -> Tuple[bool, bool]:
+    ) -> tuple[bool, bool]:
         """
         Handle a QUIC packet payload.
         """
@@ -3440,7 +3437,7 @@ class QuicConnection:
             )
 
     def _write_ping_frame(
-        self, builder: QuicPacketBuilder, uids: List[int] = [], comment=""
+        self, builder: QuicPacketBuilder, uids: list[int] = [], comment=""
     ):
         builder.start_frame(
             QuicFrameType.PING,

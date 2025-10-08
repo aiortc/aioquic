@@ -6,7 +6,7 @@ import pickle
 import ssl
 import time
 from collections import deque
-from typing import AsyncIterator, Deque, Dict, Optional, Tuple, cast
+from typing import AsyncIterator, Deque, Optional, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -35,8 +35,8 @@ class H3Transport(QuicConnectionProtocol, httpx.AsyncBaseTransport):
         super().__init__(*args, **kwargs)
 
         self._http = H3Connection(self._quic)
-        self._read_queue: Dict[int, Deque[H3Event]] = {}
-        self._read_ready: Dict[int, asyncio.Event] = {}
+        self._read_queue: dict[int, Deque[H3Event]] = {}
+        self._read_ready: dict[int, asyncio.Event] = {}
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         assert isinstance(request.stream, httpx.AsyncByteStream)
@@ -94,7 +94,7 @@ class H3Transport(QuicConnectionProtocol, httpx.AsyncBaseTransport):
             for http_event in self._http.handle_event(event):
                 self.http_event_received(http_event)
 
-    async def _receive_response(self, stream_id: int) -> Tuple[int, Headers, bool]:
+    async def _receive_response(self, stream_id: int) -> tuple[int, Headers, bool]:
         """
         Read the response status and headers.
         """

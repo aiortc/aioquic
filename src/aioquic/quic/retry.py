@@ -1,5 +1,4 @@
 import ipaddress
-from typing import Tuple
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -34,7 +33,7 @@ class QuicRetryTokenHandler:
             ),
         )
 
-    def validate_token(self, addr: NetworkAddress, token: bytes) -> Tuple[bytes, bytes]:
+    def validate_token(self, addr: NetworkAddress, token: bytes) -> tuple[bytes, bytes]:
         buf = Buffer(
             data=self._key.decrypt(
                 token,

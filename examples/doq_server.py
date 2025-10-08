@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import logging
 import struct
-from typing import Dict, Optional
+from typing import Optional
 
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
@@ -33,7 +33,7 @@ class SessionTicketStore:
     """
 
     def __init__(self) -> None:
-        self.tickets: Dict[bytes, SessionTicket] = {}
+        self.tickets: dict[bytes, SessionTicket] = {}
 
     def add(self, ticket: SessionTicket) -> None:
         self.tickets[ticket.ticket] = ticket

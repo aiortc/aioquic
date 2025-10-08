@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from os import PathLike
 from re import split
-from typing import Any, List, Optional, TextIO, Union
+from typing import Any, Optional, TextIO, Union
 
 from ..tls import (
     CipherSuite,
@@ -21,7 +21,7 @@ class QuicConfiguration:
     A QUIC configuration.
     """
 
-    alpn_protocols: Optional[List[str]] = None
+    alpn_protocols: Optional[list[str]] = None
     """
     A list of supported ALPN protocols.
     """
@@ -105,14 +105,14 @@ class QuicConfiguration:
     cafile: Optional[str] = None
     capath: Optional[str] = None
     certificate: Any = None
-    certificate_chain: List[Any] = field(default_factory=list)
-    cipher_suites: Optional[List[CipherSuite]] = None
+    certificate_chain: list[Any] = field(default_factory=list)
+    cipher_suites: Optional[list[CipherSuite]] = None
     initial_rtt: float = 0.1
     max_datagram_frame_size: Optional[int] = None
     original_version: Optional[int] = None
     private_key: Any = None
     quantum_readiness_test: bool = False
-    supported_versions: List[int] = field(
+    supported_versions: list[int] = field(
         default_factory=lambda: [
             QuicProtocolVersion.VERSION_1,
             QuicProtocolVersion.VERSION_2,
