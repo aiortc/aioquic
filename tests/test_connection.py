@@ -48,7 +48,7 @@ CLIENT_ADDR = ("1.2.3.4", 1234)
 CLIENT_HANDSHAKE_DATAGRAM_SIZES = [1200]
 
 SERVER_ADDR = ("2.3.4.5", 4433)
-SERVER_INITIAL_DATAGRAM_SIZES = [1200, 1162]
+SERVER_INITIAL_DATAGRAM_SIZES = [1200, 229]
 
 HANDSHAKE_COMPLETED_EVENTS = [
     events.HandshakeCompleted,
@@ -769,7 +769,7 @@ class QuicConnectionTest(TestCase):
             now = server.get_timer()
             server.handle_timer(now=now)
             items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [1200, 986])
+            self.assertEqual(datagram_sizes(items), [1200, 53])
             self.assertAlmostEqual(server.get_timer(), 0.65)
             self.assertSentPackets(server, [0, 3, 0])
             self.assertEvents(server, [])
