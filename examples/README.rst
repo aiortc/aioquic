@@ -7,6 +7,19 @@ After checking out the code using git you can run:
 
    pip install . dnslib jinja2 starlette wsproto
 
+The examples need a TLS certificate. For testing purposes, you can generate a
+self-signed certificate for ``localhost`` using:
+
+.. code-block:: console
+
+   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+     -days 14 -subj /CN=localhost -addext subjectAltName=DNS:localhost \
+     -keyout key.pem -out cert.pem
+
+This certificate is only trusted by clients which are explicitly told to trust
+it, so it is not suitable for real-world usage, which requires a certificate
+issued by a recognised certificate authority.
+
 
 HTTP/3
 ------
@@ -18,7 +31,7 @@ You can run the example server, which handles both HTTP/0.9 and HTTP/3:
 
 .. code-block:: console
 
-   python examples/http3_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem
+   python examples/http3_server.py --certificate cert.pem --private-key key.pem
 
 HTTP/3 client
 .............
@@ -27,19 +40,19 @@ You can run the example client to perform an HTTP/3 request:
 
 .. code-block:: console
 
-  python examples/http3_client.py --ca-certs tests/pycacert.pem https://localhost:4433/
+  python examples/http3_client.py --ca-certs cert.pem https://localhost:4433/
 
 Alternatively you can perform an HTTP/0.9 request:
 
 .. code-block:: console
 
-  python examples/http3_client.py --ca-certs tests/pycacert.pem --legacy-http https://localhost:4433/
+  python examples/http3_client.py --ca-certs cert.pem --legacy-http https://localhost:4433/
 
 You can also open a WebSocket over HTTP/3:
 
 .. code-block:: console
 
-  python examples/http3_client.py --ca-certs tests/pycacert.pem wss://localhost:4433/ws
+  python examples/http3_client.py --ca-certs cert.pem wss://localhost:4433/ws
 
 Chromium and Chrome usage
 .........................
@@ -50,24 +63,20 @@ Some flags are needed to allow Chrome to communicate with the demo server. Most 
 - The `--origin-to-force-quic-on` forces Chrome to communicate using HTTP/3. This is needed because the demo server *only* provides an HTTP/3 server. Usually Chrome will connect to an HTTP/2 or HTTP/1.1 server and "discover" the server supports HTTP/3 through an Alt-Svc header.
 - The `--enable-experimental-web-platform-features`_ enables WebTransport, because the specifications and implementation are not yet finalised. For HTTP/3 itself, you do not need this flag.
 
-To access the demo server running on the local machine, launch Chromium or Chrome as follows:
+To access the demo server running on the local machine, compute the fingerprint of the certificate's public key, then launch Chromium or Chrome as follows:
 
 .. code:: bash
+
+  SPKI=$(openssl x509 -in cert.pem -pubkey -noout | \
+    openssl pkey -pubin -outform der | \
+    openssl dgst -sha256 -binary | \
+    openssl enc -base64)
 
   google-chrome \
     --enable-experimental-web-platform-features \
-    --ignore-certificate-errors-spki-list=BSQJ0jkQ7wwhR7KvPZ+DSNk2XTZ/MS6xCbo9qu++VdQ= \
+    --ignore-certificate-errors-spki-list=$SPKI \
     --origin-to-force-quic-on=localhost:4433 \
     https://localhost:4433/
-
-The fingerprint passed to the `--ignore-certificate-errors-spki-list`_ option is obtained by running:
-
-.. code:: bash
-
-  openssl x509 -in tests/ssl_cert.pem -pubkey -noout | \
-    openssl pkey -pubin -outform der | \
-    openssl dgst -sha256 -binary | \
-    openssl enc -base64
 
 WebTransport
 ............
@@ -107,13 +116,13 @@ You can run the server locally using:
 
 .. code-block:: console
 
-    python examples/doq_server.py --certificate tests/ssl_cert.pem --private-key tests/ssl_key.pem --port 8053
+    python examples/doq_server.py --certificate cert.pem --private-key key.pem --port 8053
 
 You can then run the client with a specific query:
 
 .. code-block:: console
 
-    python examples/doq_client.py --ca-certs tests/pycacert.pem --query-type A --query-name quic.aiortc.org --port 8053
+    python examples/doq_client.py --ca-certs cert.pem --query-type A --query-name quic.aiortc.org --port 8053
 
 Please note that for real-world usage you will need to obtain a valid TLS certificate.
 
