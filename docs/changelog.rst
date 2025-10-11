@@ -1,6 +1,21 @@
 Changelog
 =========
 
+1.3.0
+-----
+
+* Ensure PATH_CHALLENGE frames are sent before other frame types.
+* Reclaim memory when HTTP/3 streams end.
+* Limit the number of remote PATH_CHALLENGE stored per path.
+* Avoid assertion error when receiving multiple STOP_SENDING frames.
+* Improve type annotations.
+* Make it possible to use LibreSSL instead of OpenSSL.
+* Add support Python 3.13 and 3.14, drop support for Python 3.8 and 3.9.
+* Build binary wheels for `musllinux`_.
+* Build binary wheels against `OpenSSL`_ 3.5.4.
+* Add command-line argument to the `http3_client` example to request
+  a key update during interoperability tests.
+
 1.2.0
 -----
 
@@ -57,4 +72,5 @@ Changelog
 
 .. _certifi: https://github.com/certifi/python-certifi
 .. _cryptography: https://cryptography.io/
+.. _musllinux: https://peps.python.org/pep-0656/
 .. _OpenSSL: https://www.openssl.org/
