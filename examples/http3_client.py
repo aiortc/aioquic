@@ -125,6 +125,7 @@ class HttpClient(QuicConnectionProtocol):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
+        self.key_update = False
         self.pushes: dict[int, Deque[H3Event]] = {}
         self._http: Optional[HttpConnection] = None
         self._request_events: dict[int, Deque[H3Event]] = {}
@@ -205,6 +206,12 @@ class HttpClient(QuicConnectionProtocol):
             elif event.push_id in self.pushes:
                 # push
                 self.pushes[event.push_id].append(event)
+
+            # Request a key update for interoperability testing.
+            if self.key_update:
+                logger.info("Requesting key update")
+                self.request_key_update()
+                self.key_update = False
 
         elif isinstance(event, PushPromiseReceived):
             self.pushes[event.push_id] = deque()
@@ -352,6 +359,7 @@ async def main(
     include: bool,
     output_dir: Optional[str],
     local_port: int,
+    key_update: bool,
     zero_rtt: bool,
 ) -> None:
     # parse URL
@@ -395,6 +403,7 @@ async def main(
         wait_connected=not zero_rtt,
     ) as client:
         client = cast(HttpClient, client)
+        client.key_update = key_update
 
         if parsed.scheme == "wss":
             ws = await client.websocket(urls[0], subprotocols=["chat", "superchat"])
@@ -470,6 +479,11 @@ if __name__ == "__main__":
         "--insecure",
         action="store_true",
         help="do not validate server certificate",
+    )
+    parser.add_argument(
+        "--key-update",
+        action="store_true",
+        help="request a key update",
     )
     parser.add_argument(
         "--legacy-http",
@@ -599,6 +613,7 @@ if __name__ == "__main__":
             include=args.include,
             output_dir=args.output_dir,
             local_port=args.local_port,
+            key_update=args.key_update,
             zero_rtt=args.zero_rtt,
         )
     )
