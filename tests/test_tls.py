@@ -258,7 +258,7 @@ class ContextTest(TestCase):
     def test_client_bad_certificate_verify_algorithm(self):
         self.handshake_with_client_input_corruption(
             # Mess with certificate verify.
-            lambda x: x[:-440] + b"\xff\xff" + x[-438:],
+            lambda x: x[:-312] + b"\xff\xff" + x[-310:],
             tls.AlertDecryptError(
                 "CertificateVerify has a signature algorithm we did not advertise"
             ),
