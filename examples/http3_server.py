@@ -29,7 +29,10 @@ from aioquic.tls import SessionTicket
 try:
     import uvloop
 except ImportError:
-    uvloop = None
+    try:
+        import winloop as uvloop
+    except ImportError:
+        uvloop = None
 
 AsgiApplication = Callable
 HttpConnection = Union[H0Connection, H3Connection]
