@@ -165,7 +165,7 @@ AEAD_encrypt(AEADObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "y#y#K", &data, &data_len, &associated, &associated_len, &pn))
         return NULL;
 
-    if (data_len > PACKET_LENGTH_MAX) {
+    if (data_len > PACKET_LENGTH_MAX - AEAD_TAG_LENGTH) {
         PyErr_SetString(CryptoError, "Invalid payload length");
         return NULL;
     }
