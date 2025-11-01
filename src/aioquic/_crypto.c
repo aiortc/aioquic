@@ -296,8 +296,29 @@ HeaderProtection_apply(HeaderProtectionObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "y#y#", &header, &header_len, &payload, &payload_len))
         return NULL;
 
+    if (header_len < 1) {
+        PyErr_SetString(CryptoError, "Invalid header length");
+        return NULL;
+    }
+
     int pn_length = (header[0] & 0x03) + 1;
     int pn_offset = header_len - pn_length;
+
+    if (pn_offset < 0) {
+        PyErr_SetString(CryptoError, "Invalid packet number length");
+        return NULL;
+    }
+
+    if (header_len > (Py_ssize_t)PACKET_LENGTH_MAX - payload_len) {
+        PyErr_SetString(CryptoError, "Packet too large");
+        return NULL;
+    }
+
+    Py_ssize_t sample_offset = PACKET_NUMBER_LENGTH_MAX - pn_length; /* 0..3 */
+    if (payload_len < sample_offset + SAMPLE_LENGTH) {
+        PyErr_SetString(CryptoError, "Payload too short for header protection sample");
+        return NULL;
+    }
 
     res = HeaderProtection_mask(self, payload + PACKET_NUMBER_LENGTH_MAX - pn_length);
     CHECK_RESULT(res != 0);
@@ -327,6 +348,21 @@ HeaderProtection_remove(HeaderProtectionObject *self, PyObject *args)
 
     if (!PyArg_ParseTuple(args, "y#I", &packet, &packet_len, &pn_offset))
         return NULL;
+
+    if (pn_offset < 0 || (Py_ssize_t)pn_offset > (Py_ssize_t)PACKET_LENGTH_MAX - PACKET_NUMBER_LENGTH_MAX) {
+        PyErr_SetString(CryptoError, "Packet number offset out of range");
+        return NULL;
+    }
+
+    if (packet_len < (Py_ssize_t)pn_offset + PACKET_NUMBER_LENGTH_MAX) {
+        PyErr_SetString(CryptoError, "Truncated packet");
+        return NULL;
+    }
+
+    if (packet_len < (Py_ssize_t)pn_offset + PACKET_NUMBER_LENGTH_MAX + SAMPLE_LENGTH) {
+        PyErr_SetString(CryptoError, "Packet too short for header protection sample");
+        return NULL;
+    }
 
     res = HeaderProtection_mask(self, packet + pn_offset + PACKET_NUMBER_LENGTH_MAX);
     CHECK_RESULT(res != 0);
