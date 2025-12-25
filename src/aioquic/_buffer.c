@@ -43,11 +43,23 @@ Buffer_init(BufferObject *self, PyObject *args, PyObject *kwargs)
         return -1;
 
     if (data != NULL) {
-        self->base = malloc(data_len);
+        self->base = PyMem_Malloc(data_len);
+        if (self->base == NULL) {
+            PyErr_NoMemory();
+            return -1;
+        }
         self->end = self->base + data_len;
         memcpy(self->base, data, data_len);
     } else {
-        self->base = malloc(capacity);
+        if (capacity < 0) {
+            PyErr_SetString(PyExc_ValueError, "capacity cannot be negative");
+            return -1;
+        }
+        self->base = PyMem_Malloc(capacity);
+        if (self->base == NULL) {
+            PyErr_NoMemory();
+            return -1;
+        }
         self->end = self->base + capacity;
     }
     self->pos = self->base;
@@ -57,7 +69,7 @@ Buffer_init(BufferObject *self, PyObject *args, PyObject *kwargs)
 static void
 Buffer_dealloc(BufferObject *self)
 {
-    free(self->base);
+    PyMem_Free(self->base);
     PyTypeObject *tp = Py_TYPE((PyObject *)self);
     freefunc free = PyType_GetSlot(tp, Py_tp_free);
     free(self);
