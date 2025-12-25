@@ -4,6 +4,17 @@ from aioquic.buffer import Buffer, BufferReadError, BufferWriteError, size_uint_
 
 
 class BufferTest(TestCase):
+    def test_capacity_negative(self):
+        with self.assertRaises(ValueError) as cm:
+            Buffer(capacity=-1)
+        self.assertEqual(str(cm.exception), "capacity cannot be negative")
+
+    def test_capacity_zero(self):
+        buf = Buffer(capacity=0)
+        self.assertEqual(buf.capacity, 0)
+        self.assertEqual(buf.data, b"")
+        self.assertTrue(buf.eof())
+
     def test_data_slice(self):
         buf = Buffer(data=b"\x08\x07\x06\x05\x04\x03\x02\x01")
         self.assertEqual(buf.data_slice(0, 8), b"\x08\x07\x06\x05\x04\x03\x02\x01")
