@@ -1155,6 +1155,35 @@ HYBRID_MLKEM_CLASSICAL_PK_SIZE: dict[Group, int] = {
     Group.SECP384R1MLKEM1024: 97,
 }
 
+GROUP_NAMES: dict[str, Group] = {
+    "P-256": Group.SECP256R1,
+    "prime256v1": Group.SECP256R1,
+    "secp256r1": Group.SECP256R1,
+    "SECP256R1": Group.SECP256R1,
+    "P-384": Group.SECP384R1,
+    "secp384r1": Group.SECP384R1,
+    "SECP384R1": Group.SECP384R1,
+    "P-521": Group.SECP521R1,
+    "secp521r1": Group.SECP521R1,
+    "SECP521R1": Group.SECP521R1,
+    "X25519": Group.X25519,
+    "x25519": Group.X25519,
+    "X448": Group.X448,
+    "x448": Group.X448,
+    "MLKEM768": Group.MLKEM768,
+    "mlkem768": Group.MLKEM768,
+    "MLKEM1024": Group.MLKEM1024,
+    "mlkem1024": Group.MLKEM1024,
+    "X25519MLKEM768": Group.X25519MLKEM768,
+    "x25519mlkem768": Group.X25519MLKEM768,
+    "SECP256R1MLKEM768": Group.SECP256R1MLKEM768,
+    "secp256r1mlkem768": Group.SECP256R1MLKEM768,
+    "P256MLKEM768": Group.SECP256R1MLKEM768,
+    "SECP384R1MLKEM1024": Group.SECP384R1MLKEM1024,
+    "secp384r1mlkem1024": Group.SECP384R1MLKEM1024,
+    "P384MLKEM1024": Group.SECP384R1MLKEM1024,
+}
+
 
 def mlkem_generate_private_key(group: Group):
     priv_cls, _ = GROUP_TO_MLKEM[group]
@@ -1287,6 +1316,7 @@ class Context:
         logger: Optional[Union[logging.Logger, logging.LoggerAdapter]] = None,
         max_early_data: Optional[int] = None,
         server_name: Optional[str] = None,
+        ssl_groups: Optional[str] = None,
         verify_mode: Optional[int] = None,
     ):
         # configuration
@@ -1343,18 +1373,44 @@ class Context:
         if default_backend().ed448_supported():
             self._signature_algorithms.append(SignatureAlgorithm.ED448)
         self._supported_groups = []
-        if default_backend().mlkem_supported() and default_backend().x25519_supported():
-            self._supported_groups.append(Group.X25519MLKEM768)
-        if default_backend().x25519_supported():
-            self._supported_groups.append(Group.X25519)
-        self._supported_groups += [Group.SECP256R1, Group.SECP384R1]
-        if default_backend().x448_supported():
-            self._supported_groups.append(Group.X448)
-        if default_backend().mlkem_supported():
-            self._supported_groups.append(Group.SECP256R1MLKEM768)
-            self._supported_groups.append(Group.SECP384R1MLKEM1024)
-            self._supported_groups.append(Group.MLKEM768)
-            self._supported_groups.append(Group.MLKEM1024)
+        if ssl_groups is not None:
+            mlkem_supported = default_backend().mlkem_supported()
+            x25519_supported = default_backend().x25519_supported()
+            x448_supported = default_backend().x448_supported()
+            available_groups: dict[Group, bool] = {
+                Group.SECP256R1: True,
+                Group.SECP384R1: True,
+                Group.SECP521R1: True,
+                Group.X25519: x25519_supported,
+                Group.X448: x448_supported,
+                Group.MLKEM768: mlkem_supported,
+                Group.MLKEM1024: mlkem_supported,
+                Group.X25519MLKEM768: mlkem_supported and x25519_supported,
+                Group.SECP256R1MLKEM768: mlkem_supported,
+                Group.SECP384R1MLKEM1024: mlkem_supported,
+            }
+            seen: set[Group] = set()
+            for name in ssl_groups.split(":"):
+                group = GROUP_NAMES.get(name.strip())
+                if group is None:
+                    raise ValueError(f"Unknown TLS group: {name.strip()!r}")
+                if available_groups.get(group, False) and group not in seen:
+                    seen.add(group)
+                    self._supported_groups.append(group)
+        else:
+            if default_backend().mlkem_supported() and default_backend().x25519_supported():
+                self._supported_groups.append(Group.X25519MLKEM768)
+            if default_backend().x25519_supported():
+                self._supported_groups.append(Group.X25519)
+            self._supported_groups.append(Group.SECP256R1)
+            self._supported_groups.append(Group.SECP384R1)
+            if default_backend().x448_supported():
+                self._supported_groups.append(Group.X448)
+            if default_backend().mlkem_supported():
+                self._supported_groups.append(Group.SECP256R1MLKEM768)
+                self._supported_groups.append(Group.SECP384R1MLKEM1024)
+                self._supported_groups.append(Group.MLKEM768)
+                self._supported_groups.append(Group.MLKEM1024)
         self._supported_versions = [TLS_VERSION_1_3]
 
         # state
