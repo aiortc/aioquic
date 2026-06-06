@@ -5,6 +5,8 @@ from functools import partial
 from unittest import TestCase, skipIf
 from unittest.mock import patch
 
+from cryptography.hazmat.backends import default_backend
+
 from aioquic import tls
 from aioquic.buffer import Buffer, BufferReadError
 from aioquic.quic.configuration import QuicConfiguration
@@ -101,9 +103,9 @@ def corrupt_hello_version(data: bytes) -> bytes:
 
 def create_buffers():
     return {
-        tls.Epoch.INITIAL: Buffer(capacity=4096),
-        tls.Epoch.HANDSHAKE: Buffer(capacity=4096),
-        tls.Epoch.ONE_RTT: Buffer(capacity=4096),
+        tls.Epoch.INITIAL: Buffer(capacity=16384),
+        tls.Epoch.HANDSHAKE: Buffer(capacity=16384),
+        tls.Epoch.ONE_RTT: Buffer(capacity=16384),
     }
 
 
@@ -120,7 +122,8 @@ class ContextTest(TestCase):
     def assertClientHello(self, data: bytes):
         self.assertEqual(data[0], tls.HandshakeType.CLIENT_HELLO)
         self.assertGreaterEqual(len(data), 189)
-        self.assertLessEqual(len(data), 564)
+        # ML-KEM key shares (up to ~7500 bytes) expand the ClientHello significantly
+        self.assertLessEqual(len(data), 10000)
 
     def create_client(
         self, alpn_protocols=None, cadata=None, cafile=SERVER_CACERTFILE, **kwargs
@@ -397,7 +400,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 587)
-        self.assertLessEqual(len(client_input), 2316)
+        self.assertLessEqual(len(client_input), 5000)
 
         reset_buffers(server_buf)
 
@@ -462,7 +465,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 587)
-        self.assertLessEqual(len(client_input), 2316)
+        self.assertLessEqual(len(client_input), 5000)
 
         reset_buffers(server_buf)
 
@@ -520,7 +523,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 587)
-        self.assertLessEqual(len(client_input), 2316)
+        self.assertLessEqual(len(client_input), 5000)
 
         reset_buffers(server_buf)
 
@@ -697,6 +700,87 @@ class ContextTest(TestCase):
             self._handshake(client, server)
         except UnsupportedAlgorithm as exc:
             self.skipTest(str(exc))
+
+    def _skip_if_mlkem_unsupported(self):
+        if not default_backend().mlkem_supported():
+            self.skipTest("ML-KEM not supported by backend")
+
+    def test_handshake_with_mlkem768(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.MLKEM768]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_mlkem1024(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.MLKEM1024]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_x25519mlkem768(self):
+        self._skip_if_mlkem_unsupported()
+        if not default_backend().x25519_supported():
+            self.skipTest("X25519 not supported by backend")
+        client = self.create_client()
+        client._supported_groups = [tls.Group.X25519MLKEM768]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_secp256r1mlkem768(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP256R1MLKEM768]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_secp384r1mlkem1024(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP384R1MLKEM1024]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_supported_groups_include_mlkem_when_supported(self):
+        client = self.create_client()
+        if default_backend().mlkem_supported():
+            self.assertIn(tls.Group.MLKEM768, client._supported_groups)
+            self.assertIn(tls.Group.MLKEM1024, client._supported_groups)
+            self.assertIn(tls.Group.SECP256R1MLKEM768, client._supported_groups)
+            self.assertIn(tls.Group.SECP384R1MLKEM1024, client._supported_groups)
+            if default_backend().x25519_supported():
+                self.assertIn(tls.Group.X25519MLKEM768, client._supported_groups)
+        else:
+            self.assertNotIn(tls.Group.MLKEM768, client._supported_groups)
+            self.assertNotIn(tls.Group.MLKEM1024, client._supported_groups)
+
+    def test_mlkem768_client_hello_key_share_size(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.MLKEM768]
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        data = client_buf[tls.Epoch.INITIAL].data
+        # MLKEM768 encapsulation key is 1184 bytes
+        self.assertGreater(len(data), 1184)
+
+    def test_hybrid_x25519mlkem768_client_hello_key_share_size(self):
+        self._skip_if_mlkem_unsupported()
+        if not default_backend().x25519_supported():
+            self.skipTest("X25519 not supported by backend")
+        client = self.create_client()
+        client._supported_groups = [tls.Group.X25519MLKEM768]
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        data = client_buf[tls.Epoch.INITIAL].data
+        # X25519 (32 bytes) + MLKEM768 (1184 bytes)
+        self.assertGreater(len(data), 32 + 1184)
 
     def test_session_ticket(self):
         client_tickets = []
