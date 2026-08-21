@@ -2881,6 +2881,7 @@ class QuicConnection:
             initial_source_connection_id=self._local_initial_source_connection_id,
             max_ack_delay=25,
             max_datagram_frame_size=self._configuration.max_datagram_frame_size,
+            max_udp_payload_size=1500, # PACKET_LENGTH_MAX from _crypto.c
             quantum_readiness=(
                 b"Q" * SMALLEST_MAX_DATAGRAM_SIZE
                 if self._configuration.quantum_readiness_test
