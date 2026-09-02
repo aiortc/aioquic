@@ -12,6 +12,7 @@ from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.asyncio.server import serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.logger import QuicLogger
+from aioquic.quic.packet import encode_quic_version_negotiation
 from cryptography.hazmat.primitives import serialization
 
 from .utils import (
@@ -461,6 +462,32 @@ class HighLevelTest(TestCase):
             configuration=configuration,
         )
         server.datagram_received(binascii.unhexlify("c00000000080"), ("1.2.3.4", 1234))
+        server.close()
+
+    @asynctest
+    async def test_server_does_not_reply_to_version_negotiation_packet(self) -> None:
+        """
+        The server must not reply to an incoming Version Negotiation packet
+        with another one. A Version Negotiation packet's version field is
+        always 0, which is never a supported version, so without an
+        explicit exclusion the server would reflect it back, and two
+        servers with spoofed source addresses could loop forever.
+        """
+        configuration = QuicConfiguration(is_client=False)
+        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        server = await serve(
+            host=self.server_host,
+            port=0,
+            configuration=configuration,
+        )
+        vn_packet = encode_quic_version_negotiation(
+            source_cid=b"\x08" * 8,
+            destination_cid=b"\x08" * 8,
+            supported_versions=[0x00000001],
+        )
+        with patch.object(server._transport, "sendto") as mock_sendto:
+            server.datagram_received(vn_packet, ("1.2.3.4", 1234))
+        mock_sendto.assert_not_called()
         server.close()
 
     @asynctest
