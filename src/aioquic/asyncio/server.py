@@ -69,8 +69,15 @@ class QuicServer(asyncio.DatagramProtocol):
             return
 
         # version negotiation
+        #
+        # A Version Negotiation packet itself has a version field of 0,
+        # which is never in supported_versions, so without this check we
+        # would reply to a VN packet with another VN packet. An attacker
+        # who spoofs the source address of two such servers at each other
+        # can turn that into a self-sustaining reflection loop.
         if (
-            header.version is not None
+            header.packet_type != QuicPacketType.VERSION_NEGOTIATION
+            and header.version is not None
             and header.version not in self._configuration.supported_versions
         ):
             self._transport.sendto(
