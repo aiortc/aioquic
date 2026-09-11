@@ -103,7 +103,11 @@ class HighLevelTest(TestCase):
 
     @contextlib.asynccontextmanager
     async def run_server(
-        self, configuration: Optional[QuicConfiguration] = None, host="::", **kwargs
+        self,
+        configuration: Optional[QuicConfiguration] = None,
+        host="::",
+        stream_handler=handle_stream,
+        **kwargs,
     ) -> AsyncGenerator[int, None]:
         if configuration is None:
             configuration = QuicConfiguration(is_client=False)
@@ -112,7 +116,7 @@ class HighLevelTest(TestCase):
             host=host,
             port=0,
             configuration=configuration,
-            stream_handler=handle_stream,
+            stream_handler=stream_handler,
             **kwargs,
         )
         try:
@@ -252,6 +256,38 @@ class HighLevelTest(TestCase):
 
                 response = await reader.read()
                 self.assertEqual(response, b"5432109876543210")
+
+    @asynctest
+    async def test_connect_and_serve_unidirectional_stream(self) -> None:
+        serve_task: asyncio.Future[asyncio.Future[None]] = (
+            asyncio.get_running_loop().create_future()
+        )
+
+        def handle_unidirectional_stream(reader, writer):
+            async def serve():
+                # the stream is receive-only, closing it must not send a FIN
+                self.assertEqual(writer.can_write_eof(), False)
+                self.assertEqual(await reader.read(), b"ping")
+                writer.close()
+                self.assertEqual(writer.is_closing(), True)
+
+            serve_task.set_result(asyncio.ensure_future(serve()))
+
+        async with self.run_server(
+            stream_handler=handle_unidirectional_stream
+        ) as server_port:
+            configuration = QuicConfiguration(is_client=True)
+            configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+            async with connect(
+                self.server_host, server_port, configuration=configuration
+            ) as client:
+                reader, writer = await client.create_stream(is_unidirectional=True)
+                self.assertEqual(writer.can_write_eof(), True)
+
+                writer.write(b"ping")
+                writer.write_eof()
+
+                await (await serve_task)
 
     @skipIf("loss" in SKIP_TESTS, "Skipping loss tests")
     @patch("socket.socket.sendto", new_callable=lambda: sendto_with_loss)
