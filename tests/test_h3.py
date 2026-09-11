@@ -1457,6 +1457,20 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_server._stream[6].buffer, b"")
             self.assertEqual(h3_server._stream[6].stream_type, 64)
 
+    def test_sent_settings_webtransport(self):
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+        self.assertNotIn(Setting.H3_DATAGRAM, h3_server.sent_settings)
+        self.assertNotIn(Setting.ENABLE_WEBTRANSPORT, h3_server.sent_settings)
+        self.assertNotIn(Setting.WT_MAX_SESSIONS, h3_server.sent_settings)
+
+        h3_server = H3Connection(quic_server, enable_webtransport=True)
+        self.assertEqual(h3_server.sent_settings[Setting.H3_DATAGRAM], 1)
+        self.assertEqual(h3_server.sent_settings[Setting.ENABLE_WEBTRANSPORT], 1)
+        self.assertEqual(h3_server.sent_settings[Setting.WT_MAX_SESSIONS], 1)
+
     def test_validate_settings_h3_datagram_invalid_value(self):
         quic_server = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=False)
