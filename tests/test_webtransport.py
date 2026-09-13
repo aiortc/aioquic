@@ -1,6 +1,13 @@
 from unittest import TestCase
 
-from aioquic.h3.connection import H3_ALPN, ErrorCode, H3Connection
+from aioquic.buffer import encode_uint_var
+from aioquic.h3.connection import (
+    H3_ALPN,
+    ErrorCode,
+    FrameType,
+    H3Connection,
+    encode_frame,
+)
 from aioquic.h3.events import (
     DatagramReceived,
     HeadersReceived,
@@ -189,6 +196,75 @@ class WebTransportTest(TestCase):
                         stream_id=stream_id,
                     )
                 ],
+            )
+
+    def test_bidirectional_stream_on_connect_stream(self):
+        """
+        A WEBTRANSPORT_STREAM frame on the CONNECT stream is a protocol
+        violation and must close the connection with H3_FRAME_ERROR.
+        """
+        with h3_fake_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # create session
+            session_id = self._make_session(h3_client, h3_server)
+
+            # receive a WEBTRANSPORT_STREAM frame on the CONNECT stream
+            quic_client.send_stream_data(
+                session_id,
+                encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
+                + encode_uint_var(session_id)
+                + b"AAAA",
+            )
+
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual(events, [])
+            self.assertEqual(
+                quic_server.closed,
+                (
+                    ErrorCode.H3_FRAME_ERROR,
+                    "WEBTRANSPORT_STREAM frame must be the first frame",
+                ),
+            )
+
+    def test_bidirectional_stream_not_first_frame(self):
+        """
+        A WEBTRANSPORT_STREAM frame is only allowed as the very first frame
+        of a stream, any prior frame must close the connection with
+        H3_FRAME_ERROR.
+        """
+        with h3_fake_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # create session
+            session_id = self._make_session(h3_client, h3_server)
+
+            # receive an unknown frame followed by a WEBTRANSPORT_STREAM
+            # frame on a fresh bidirectional stream
+            stream_id = quic_client.get_next_available_stream_id()
+            quic_client.send_stream_data(
+                stream_id,
+                encode_frame(0x21, b"")
+                + encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
+                + encode_uint_var(session_id),
+            )
+
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual(events, [])
+            self.assertEqual(
+                quic_server.closed,
+                (
+                    ErrorCode.H3_FRAME_ERROR,
+                    "WEBTRANSPORT_STREAM frame must be the first frame",
+                ),
             )
 
     def test_unidirectional_stream(self):

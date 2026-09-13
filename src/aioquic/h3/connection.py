@@ -137,6 +137,10 @@ class DatagramError(ProtocolError):
     error_code = ErrorCode.H3_DATAGRAM_ERROR
 
 
+class FrameError(ProtocolError):
+    error_code = ErrorCode.H3_FRAME_ERROR
+
+
 class FrameUnexpected(ProtocolError):
     error_code = ErrorCode.H3_FRAME_UNEXPECTED
 
@@ -354,6 +358,7 @@ class H3Stream:
         self.headers_recv_state: HeadersState = HeadersState.INITIAL
         self.headers_send_state: HeadersState = HeadersState.INITIAL
         self.push_id: Optional[int] = None
+        self.received_frame = False
         self.session_id: Optional[int] = None
         self.stream_id = stream_id
         self.stream_type: Optional[int] = None
@@ -994,6 +999,19 @@ class H3Connection:
 
                 # WEBTRANSPORT_STREAM frames last until the end of the stream
                 if stream.frame_type == FrameType.WEBTRANSPORT_STREAM:
+                    # Per draft-ietf-webtrans-http3, a WEBTRANSPORT_STREAM
+                    # frame is only allowed as the very first frame of a
+                    # request stream, in any other position it is an
+                    # H3_FRAME_ERROR.
+                    if (
+                        stream.headers_send_state != HeadersState.INITIAL
+                        or stream.push_id is not None
+                        or stream.received_frame
+                    ):
+                        raise FrameError(
+                            "WEBTRANSPORT_STREAM frame must be the first frame"
+                        )
+
                     stream.session_id = stream.frame_size
                     stream.frame_size = None
 
@@ -1014,6 +1032,8 @@ class H3Connection:
                             )
                         )
                     return http_events
+
+                stream.received_frame = True
 
                 # log frame
                 if (
