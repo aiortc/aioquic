@@ -229,6 +229,21 @@ def stream_is_request_response(stream_id: int):
     """
     return stream_id % 4 == 0
 
+def is_informational_response(headers:Headers) -> bool:
+    """
+    Check if `:status` contains Informational response status code (1xx)
+    """
+    
+    for key , value in headers:
+        try:
+            if (key == b":status" and (100 <= int(value) <= 199)):# status code between 100-199 (1xx) and not 101 (switching protocol)
+                if (value == b"101"):
+                    raise MessageError("Header :status contains forbidden 101 status code")
+                return True
+        except ValueError as exc:
+            raise MessageError("Header %r contains invalid characters" % key) from exc
+    return False
+
 
 def validate_header_name(key: bytes) -> None:
     """
@@ -607,15 +622,29 @@ class H3Connection:
         :param headers: The HTTP headers to send.
         :param end_stream: Whether to end the stream.
         """
+        informational_response_headers = is_informational_response(headers=headers)
+        if informational_response_headers and self._is_client:
+            raise ProtocolError("A client cannot send informational response headers")
+
+
+        if informational_response_headers and end_stream:
+            raise ProtocolError("informational headers (1xx) cannot end the stream")
+
         # check HEADERS frame is allowed
         with self._get_or_create_stream(stream_id) as stream:
             if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
                 raise FrameUnexpected("HEADERS frame is not allowed in this state")
+
+            # Cannot send informational headers after final headers were already sent
+            if (
+                informational_response_headers
+                and stream.headers_send_state != HeadersState.INITIAL
+            ):
+                raise FrameUnexpected("Interim headers is not allowed in this state")
+            
             if end_stream:
                 stream.finish_sending()
-
             frame_data = self._encode_headers(stream_id, headers)
-
             # log frame
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
@@ -625,15 +654,16 @@ class H3Connection:
                         length=len(frame_data), headers=headers, stream_id=stream_id
                     ),
                 )
-
             # update state and send headers
-            if stream.headers_send_state == HeadersState.INITIAL:
-                stream.headers_send_state = HeadersState.AFTER_HEADERS
-            else:
-                stream.headers_send_state = HeadersState.AFTER_TRAILERS
+            if not informational_response_headers:
+                if stream.headers_send_state == HeadersState.INITIAL:
+                    stream.headers_send_state = HeadersState.AFTER_HEADERS
+                else:
+                    stream.headers_send_state = HeadersState.AFTER_TRAILERS
             self._quic.send_stream_data(
                 stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
             )
+
 
     @property
     def received_settings(self) -> Optional[dict[int, int]]:
@@ -825,11 +855,13 @@ class H3Connection:
 
             # try to decode HEADERS, may raise pylsqpack.StreamBlocked
             headers = self._decode_headers(stream.stream_id, frame_data)
-
+            is_informational = False # default to False
             # validate headers
             if stream.headers_recv_state == HeadersState.INITIAL:
                 if self._is_client:
                     validate_response_headers(headers, stream)
+                    # check if headers :status contains informational response status code
+                    is_informational = is_informational_response(headers=headers)
                 else:
                     validate_request_headers(headers, stream)
             else:
@@ -855,11 +887,16 @@ class H3Connection:
                     ),
                 )
 
-            # update state and emit headers
-            if stream.headers_recv_state == HeadersState.INITIAL:
-                stream.headers_recv_state = HeadersState.AFTER_HEADERS
-            else:
-                stream.headers_recv_state = HeadersState.AFTER_TRAILERS
+            if is_informational and stream_ended:
+                raise FrameUnexpected("Informational response HEADERS frame cannot end stream")
+
+            if not (self._is_client and is_informational): # informational response headers cant change state to AFTER_HEADERS
+
+                if stream.headers_recv_state == HeadersState.INITIAL:
+                    stream.headers_recv_state = HeadersState.AFTER_HEADERS
+                else:
+                    stream.headers_recv_state = HeadersState.AFTER_TRAILERS
+
             http_events.append(
                 HeadersReceived(
                     headers=headers,

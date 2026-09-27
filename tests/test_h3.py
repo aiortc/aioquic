@@ -13,6 +13,7 @@ from aioquic.h3.connection import (
     MessageError,
     Setting,
     SettingsError,
+    ProtocolError,
     StreamType,
     encode_frame,
     encode_settings,
@@ -3146,6 +3147,102 @@ class H3ConnectionTest(TestCase):
             h3_client.send_data(stream_id, b"data", end_stream=True)
 
         self.assertEqual(str(assert_err.exception), "stream was already ended")
+
+    def test_send_receive_informational_headers(self):
+        """A server can send informational headers before final headers and a client should process one or more informational headers before final headers."""
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = quic_client.get_next_available_stream_id()
+
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+            )
+            h3_transfer(quic_client, h3_server)
+
+            informational_headers = [
+                (b":status", b"103"),
+                (b"link", b"</style.css>; rel=preload"),
+            ]
+            final_headers = [(b":status", b"200")]
+            h3_server.send_headers(
+                stream_id=stream_id,
+                headers=informational_headers,
+            )
+            h3_server.send_headers(stream_id=stream_id, headers=final_headers)
+
+            self.assertEqual(
+                h3_transfer(quic_server, h3_client),
+                [
+                    HeadersReceived(
+                        headers=informational_headers,
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    HeadersReceived(
+                        headers=final_headers,
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                ],
+            )
+
+    def test_send_informational_headers_after_final_headers(self):
+        """Informational headers cannot follow final headers."""
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+            )
+            h3_transfer(quic_client, h3_server)
+            h3_server.send_headers(
+                stream_id=stream_id, headers=[(b":status", b"200")]
+            )
+
+            with self.assertRaises((ProtocolError,FrameUnexpected)):
+                h3_server.send_headers(
+                    stream_id=stream_id,
+                    headers=[(b":status", b"103")],
+                )
+
+    def test_send_informational_headers_end_stream(self):
+        """Informational headers cannot end the stream."""
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_server = H3Connection(quic_server)
+            stream_id = quic_client.get_next_available_stream_id()
+
+            with self.assertRaises((ProtocolError,FrameUnexpected)):
+                h3_server.send_headers(
+                    stream_id=stream_id,
+                    headers=[(b":status", b"103")],
+                    end_stream=True,
+                )
+
+    def test_client_cannot_send_informational_headers(self):
+        """Clients cannot send informational response headers."""
+        with h3_fake_client_and_server() as (quic_client, _):
+            h3_client = H3Connection(quic_client)
+            stream_id = quic_client.get_next_available_stream_id()
+
+            with self.assertRaises((ProtocolError,FrameUnexpected)):
+                h3_client.send_headers(
+                    stream_id=stream_id,
+                    headers=[(b":status", b"103")],
+                )
 
 
 class H3ParserTest(TestCase):
