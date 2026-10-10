@@ -947,6 +947,19 @@ class QuicConnection:
                     )
                 continue
 
+            # RFC 9000 section 12.3 requires discarding duplicate packets.
+            if packet_number in space.received_packets:
+                if self._quic_logger is not None:
+                    self._quic_logger.log_event(
+                        category="transport",
+                        event="packet_dropped",
+                        data={
+                            "trigger": "duplicate",
+                            "raw": {"length": header.packet_length},
+                        },
+                    )
+                continue
+
             # check reserved bits
             if header.packet_type == QuicPacketType.ONE_RTT:
                 reserved_mask = 0x18
@@ -1077,6 +1090,7 @@ class QuicConnection:
                     space.largest_received_packet = packet_number
                     space.largest_received_time = now
                 space.ack_queue.add(packet_number)
+                space.received_packets.add(packet_number)
                 if is_ack_eliciting and space.ack_at is None:
                     space.ack_at = now + self._ack_delay
 

@@ -1,7 +1,7 @@
 from unittest import TestCase
 
 from aioquic.quic.congestion.base import QuicRttMonitor, create_congestion_control
-from aioquic.quic.recovery import QuicPacketPacer
+from aioquic.quic.recovery import QuicPacketNumberWindow, QuicPacketPacer
 
 
 class QuicCongestionControlTest(TestCase):
@@ -11,6 +11,56 @@ class QuicCongestionControlTest(TestCase):
         self.assertEqual(
             str(cm.exception), "Unknown congestion control algorithm: bogus"
         )
+
+
+class QuicPacketNumberWindowTest(TestCase):
+    def test_empty(self):
+        window = QuicPacketNumberWindow(size=8)
+        self.assertNotIn(0, window)
+        self.assertNotIn(7, window)
+        self.assertNotIn(100, window)
+
+    def test_add(self):
+        window = QuicPacketNumberWindow(size=8)
+        window.add(0)
+        window.add(2)
+        self.assertIn(0, window)
+        self.assertNotIn(1, window)
+        self.assertIn(2, window)
+        self.assertNotIn(3, window)
+
+    def test_slide(self):
+        window = QuicPacketNumberWindow(size=8)
+        window.add(1)
+        window.add(5)
+        window.add(10)
+
+        # packets below the window are considered received
+        self.assertIn(0, window)
+        self.assertIn(1, window)
+        self.assertIn(2, window)
+
+        # packets within the window are tracked individually
+        self.assertNotIn(3, window)
+        self.assertNotIn(4, window)
+        self.assertIn(5, window)
+        self.assertNotIn(9, window)
+        self.assertIn(10, window)
+        self.assertNotIn(11, window)
+
+        # adding a packet below the window is a no-op
+        window.add(0)
+        self.assertNotIn(3, window)
+
+    def test_slide_beyond_size(self):
+        window = QuicPacketNumberWindow(size=8)
+        window.add(3)
+        window.add(1000)
+        self.assertIn(992, window)
+        self.assertNotIn(993, window)
+        self.assertNotIn(999, window)
+        self.assertIn(1000, window)
+        self.assertNotIn(1001, window)
 
 
 class QuicPacketPacerTest(TestCase):
