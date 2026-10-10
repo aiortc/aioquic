@@ -24,6 +24,11 @@ from aioquic.quic.logger import QuicLoggerTrace
 logger = logging.getLogger("http3")
 
 H3_ALPN = ["h3"]
+# Frame types used in HTTP/2 which have no HTTP/3 equivalent, receiving them
+# is an error (RFC 9114 section 7.2.8 and section 11.2.1).
+RESERVED_FRAME_TYPES = (0x2, 0x6, 0x8, 0x9)
+# Setting identifiers used in HTTP/2 which have no HTTP/3 equivalent, receiving
+# them is an error (RFC 9114 section 7.2.4.1 and section 11.2.2).
 RESERVED_SETTINGS = (0x0, 0x2, 0x3, 0x4, 0x5)
 UPPERCASE = re.compile(b"[A-Z]")
 COLON = 0x3A
@@ -62,13 +67,11 @@ class ErrorCode(IntEnum):
 class FrameType(IntEnum):
     DATA = 0x0
     HEADERS = 0x1
-    PRIORITY = 0x2
     CANCEL_PUSH = 0x3
     SETTINGS = 0x4
     PUSH_PROMISE = 0x5
     GOAWAY = 0x7
     MAX_PUSH_ID = 0xD
-    DUPLICATE_PUSH = 0xE
     WEBTRANSPORT_STREAM = 0x41
 
 
@@ -706,7 +709,7 @@ class H3Connection:
             FrameType.DATA,
             FrameType.HEADERS,
             FrameType.PUSH_PROMISE,
-            FrameType.DUPLICATE_PUSH,
+            *RESERVED_FRAME_TYPES,
         ):
             raise FrameUnexpected("Invalid frame type on control stream")
 
@@ -831,13 +834,12 @@ class H3Connection:
                 )
             )
         elif frame_type in (
-            FrameType.PRIORITY,
             FrameType.CANCEL_PUSH,
             FrameType.SETTINGS,
             FrameType.PUSH_PROMISE,
             FrameType.GOAWAY,
             FrameType.MAX_PUSH_ID,
-            FrameType.DUPLICATE_PUSH,
+            *RESERVED_FRAME_TYPES,
         ):
             raise FrameUnexpected(
                 "Invalid frame type on request stream"
