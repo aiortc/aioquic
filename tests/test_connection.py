@@ -451,6 +451,28 @@ class QuicConnectionTest(TestCase):
         items = client.datagrams_to_send(now=now)
         self.assertEqual(datagram_sizes(items), [1480])
 
+    def test_connect_with_large_packet_size(self):
+        """
+        Check that packets larger than 1500 bytes can be exchanged.
+        """
+        with client_and_server(
+            client_options={"max_datagram_size": 3000},
+            server_options={"max_datagram_size": 3000},
+        ) as (client, server):
+            self.check_handshake(client=client, server=server)
+
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, bytes(2500), end_stream=True)
+            items = client.datagrams_to_send(now=time.time())
+            self.assertEqual(datagram_sizes(items), [2531])
+
+            for data, addr in items:
+                server.receive_datagram(data, CLIENT_ADDR, now=time.time())
+            event = server.next_event()
+            self.assertEqual(type(event), events.StreamDataReceived)
+            self.assertEqual(event.data, bytes(2500))
+            self.assertTrue(event.end_stream)
+
     def test_connect_without_loss(self):
         """
         Check connection is established in the absence of loss.

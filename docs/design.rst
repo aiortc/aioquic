@@ -29,9 +29,8 @@ Header protection and payload encryption
 
 QUIC makes extensive use of cryptographic operations to protect QUIC packet
 headers and encrypt packet payloads. These operations occur for every single
-packet and are a determining factor for performance. For this reason, they
-are implemented as a C extension linked to `OpenSSL`_.
+packet and are a determining factor for performance. They are implemented
+using the `cryptography`_ library, whose primitives are backed by OpenSSL.
 
 .. _sans I/O: https://sans-io.readthedocs.io/
 .. _cryptography: https://cryptography.io/
-.. _OpenSSL: https://www.openssl.org/

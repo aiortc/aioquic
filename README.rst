@@ -81,54 +81,13 @@ Building from source
 --------------------
 
 If there are no wheels for your system or if you wish to build ``aioquic``
-from source you will need the OpenSSL development headers.
-
-Linux
-.....
+from source you will need a C compiler and the Python development headers.
 
 On Debian/Ubuntu run:
 
 .. code-block:: console
 
-   sudo apt install libssl-dev python3-dev
-
-On Alpine Linux run:
-
-.. code-block:: console
-
-   sudo apk add openssl-dev python3-dev bsd-compat-headers libffi-dev
-
-OS X
-....
-
-On OS X run:
-
-.. code-block:: console
-
-   brew install openssl
-
-You will need to set some environment variables to link against OpenSSL:
-
-.. code-block:: console
-
-   export CFLAGS=-I$(brew --prefix openssl)/include
-   export LDFLAGS=-L$(brew --prefix openssl)/lib
-
-Windows
-.......
-
-On Windows the easiest way to install OpenSSL is to use `Chocolatey`_.
-
-.. code-block:: console
-
-   choco install openssl
-
-You will need to set some environment variables to link against OpenSSL:
-
-.. code-block:: console
-
-  $Env:INCLUDE = "C:\Progra~1\OpenSSL\include"
-  $Env:LIB = "C:\Progra~1\OpenSSL\lib"
+   sudo apt install python3-dev
 
 Running the examples
 --------------------
@@ -150,7 +109,6 @@ License
 .. _tested for interoperability: https://interop.seemann.io/
 .. _QUIC implementations: https://github.com/quicwg/base-drafts/wiki/Implementations
 .. _cryptography: https://cryptography.io/
-.. _Chocolatey: https://chocolatey.org/
 .. _BSD license: https://aioquic.readthedocs.io/en/latest/license.html
 .. _RFC 8446: https://datatracker.ietf.org/doc/html/rfc8446
 .. _RFC 9000: https://datatracker.ietf.org/doc/html/rfc9000
