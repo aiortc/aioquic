@@ -6,8 +6,8 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
       - name: Build documentation
@@ -20,8 +20,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
       - name: Install packages
@@ -37,7 +37,7 @@ jobs:
     name: Check for spelling errors
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: codespell-project/actions-codespell@v2
         with:
           check_filenames: true
@@ -58,8 +58,8 @@ jobs:
           - "3.11"
           - "3.10"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Disable firewall
@@ -75,15 +75,15 @@ jobs:
         shell: bash
       - name: Upload coverage report
         if: matrix.python != 'pypy3'
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   package-source:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
       - name: Build source package
@@ -91,7 +91,7 @@ jobs:
           pip install -U build
           python -m build --sdist
       - name: Upload source package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-source
           path: dist/
@@ -119,8 +119,8 @@ jobs:
           - os: windows-11-arm
             arch: ARM64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Build wheels
@@ -137,7 +137,7 @@ jobs:
           pip install cibuildwheel
           cibuildwheel --output-dir dist
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-wheel-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/
@@ -146,8 +146,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, test, package-source, package-wheel]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
           path: dist/
