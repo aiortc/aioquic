@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Callable, Optional, cast
 
 from ..quic.configuration import QuicConfiguration
-from ..quic.connection import QuicConnection, QuicTokenHandler
+from ..quic.connection import NetworkAddress, QuicConnection, QuicTokenHandler
 from ..tls import SessionTicketHandler
 from .protocol import QuicConnectionProtocol, QuicStreamHandler
 
@@ -56,7 +56,7 @@ async def connect(
 
     # lookup remote address
     infos = await loop.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
-    addr = infos[0][4]
+    addr: NetworkAddress = infos[0][4]
     if len(addr) == 2:
         addr = ("::ffff:" + addr[0], addr[1], 0, 0)
 
