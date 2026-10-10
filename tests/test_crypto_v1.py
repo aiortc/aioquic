@@ -201,6 +201,24 @@ class CryptoTest(TestCase):
         self.assertEqual(plain_payload, CHACHA20_CLIENT_PLAIN_PAYLOAD)
         self.assertEqual(packet_number, CHACHA20_CLIENT_PACKET_NUMBER)
 
+    @skipIf("chacha20" in SKIP_TESTS, "Skipping chacha20 tests")
+    def test_decrypt_chacha20_truncated(self):
+        pair = CryptoPair()
+        pair.recv.setup(
+            cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
+            secret=binascii.unhexlify(
+                "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
+            ),
+            version=PROTOCOL_VERSION,
+        )
+
+        with self.assertRaises(CryptoError):
+            pair.decrypt_packet(
+                CHACHA20_CLIENT_ENCRYPTED_PACKET[:-1],
+                1,
+                CHACHA20_CLIENT_PACKET_NUMBER,
+            )
+
     def test_decrypt_long_client(self):
         pair = self.create_crypto(is_client=False)
 
@@ -236,6 +254,28 @@ class CryptoTest(TestCase):
             version=PROTOCOL_VERSION,
         )
 
+        plain_header, plain_payload, packet_number = pair.decrypt_packet(
+            SHORT_SERVER_ENCRYPTED_PACKET, 9, 0
+        )
+        self.assertEqual(plain_header, SHORT_SERVER_PLAIN_HEADER)
+        self.assertEqual(plain_payload, SHORT_SERVER_PLAIN_PAYLOAD)
+        self.assertEqual(packet_number, SHORT_SERVER_PACKET_NUMBER)
+
+    def test_decrypt_short_server_truncated(self):
+        pair = CryptoPair()
+        pair.recv.setup(
+            cipher_suite=INITIAL_CIPHER_SUITE,
+            secret=binascii.unhexlify(
+                "310281977cb8c1c1c1212d784b2d29e5a6489e23de848d370a5a2f9537f3a100"
+            ),
+            version=PROTOCOL_VERSION,
+        )
+
+        # The sample is incomplete, the packet is rejected.
+        with self.assertRaises(CryptoError):
+            pair.decrypt_packet(SHORT_SERVER_ENCRYPTED_PACKET[:20], 9, 0)
+
+        # The header protection context is still usable.
         plain_header, plain_payload, packet_number = pair.decrypt_packet(
             SHORT_SERVER_ENCRYPTED_PACKET, 9, 0
         )
