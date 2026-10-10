@@ -11,6 +11,7 @@ from aioquic.quic import events
 from aioquic.quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
 from aioquic.quic.connection import (
     MAX_LOCAL_CHALLENGES,
+    MAX_NETWORK_PATHS,
     MAX_PENDING_CRYPTO,
     MAX_REMOTE_CHALLENGES,
     STREAM_COUNT_MAX,
@@ -2011,6 +2012,51 @@ class QuicConnectionTest(TestCase):
                     server._local_challenges[int.to_bytes(i, 8, "big")].addr,
                     f"1.2.3.{i}",
                 )
+
+    def test_network_paths_are_bounded(self):
+        with client_and_server() as (client, server):
+            # client sends a fresh packet from many different ports
+            for port in range(2000, 2000 + MAX_NETWORK_PATHS + 10):
+                client.send_ping(port)
+                for data, addr in client.datagrams_to_send(now=time.time()):
+                    server.receive_datagram(data, ("1.2.3.4", port), now=time.time())
+
+            # check paths
+            self.assertEqual(len(server._network_paths), MAX_NETWORK_PATHS)
+            self.assertEqual(
+                server._network_paths[0].addr, ("1.2.3.4", 2000 + MAX_NETWORK_PATHS + 9)
+            )
+
+    def test_network_paths_eviction_prefers_unvalidated(self):
+        with client_and_server() as (client, server):
+            server._add_network_path(QuicNetworkPath(("1.2.3.4", 2000)))
+            server._add_network_path(
+                QuicNetworkPath(("1.2.3.4", 2001), is_validated=True)
+            )
+            for port in range(2002, 2002 + MAX_NETWORK_PATHS):
+                server._add_network_path(QuicNetworkPath(("1.2.3.4", port)))
+
+            # the active path and validated path are kept
+            self.assertEqual(len(server._network_paths), MAX_NETWORK_PATHS)
+            self.assertEqual(server._network_paths[0].addr, ("1.2.3.4", 1234))
+            self.assertEqual(server._network_paths[1].addr, ("1.2.3.4", 2001))
+            self.assertEqual(
+                server._network_paths[-1].addr, ("1.2.3.4", 2001 + MAX_NETWORK_PATHS)
+            )
+
+    def test_network_paths_eviction_all_validated(self):
+        with client_and_server() as (client, server):
+            for port in range(2000, 2000 + MAX_NETWORK_PATHS - 1):
+                server._add_network_path(
+                    QuicNetworkPath(("1.2.3.4", port), is_validated=True)
+                )
+
+            # the oldest non-active path is evicted, not the one being added
+            server._add_network_path(QuicNetworkPath(("1.2.3.4", 3000)))
+            self.assertEqual(len(server._network_paths), MAX_NETWORK_PATHS)
+            self.assertEqual(server._network_paths[0].addr, ("1.2.3.4", 1234))
+            self.assertEqual(server._network_paths[1].addr, ("1.2.3.4", 2001))
+            self.assertEqual(server._network_paths[-1].addr, ("1.2.3.4", 3000))
 
     def test_remote_path_challenges_are_bounded(self):
         with client_and_server() as (client, server):
