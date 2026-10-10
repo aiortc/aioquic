@@ -15,6 +15,39 @@ K_MICRO_SECOND = 0.000001
 K_SECOND = 1.0
 
 
+class QuicPacketNumberWindow:
+    """
+    A sliding window of the most recently received packet numbers, used to
+    detect duplicate packets.
+
+    Packet numbers which have fallen out of the window are considered to have
+    already been received.
+    """
+
+    def __init__(self, size: int = 128) -> None:
+        self._lower = 0
+        self._received: set[int] = set()
+        self._size = size
+
+    def add(self, packet_number: int) -> None:
+        if packet_number < self._lower:
+            return
+        self._received.add(packet_number)
+
+        # Slide the window so that the packet number is its upper bound.
+        lower = packet_number - self._size + 1
+        if lower > self._lower:
+            self._lower = lower
+
+            # Prune packet numbers below the window, but only once the set has
+            # grown well beyond the window size, so the cost is amortized.
+            if len(self._received) > 2 * self._size:
+                self._received = {pn for pn in self._received if pn >= lower}
+
+    def __contains__(self, packet_number: int) -> bool:
+        return packet_number < self._lower or packet_number in self._received
+
+
 class QuicPacketSpace:
     def __init__(self) -> None:
         self.ack_at: Optional[float] = None
@@ -23,6 +56,7 @@ class QuicPacketSpace:
         self.expected_packet_number = 0
         self.largest_received_packet = -1
         self.largest_received_time: Optional[float] = None
+        self.received_packets = QuicPacketNumberWindow()
 
         # sent packets and loss
         self.ack_eliciting_in_flight = 0

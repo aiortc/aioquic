@@ -1299,6 +1299,35 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(event.frame_type, QuicFrameType.CRYPTO)
             self.assertEqual(event.reason_phrase, "No supported protocol version")
 
+    def test_receive_datagram_duplicate(self):
+        with client_and_server() as (client, server):
+            while server.next_event() is not None:
+                pass
+
+            # client sends some data
+            client.send_stream_data(0, b"01234567")
+            datagrams = [
+                data for data, addr in client.datagrams_to_send(now=time.time())
+            ]
+            for data in datagrams:
+                server.receive_datagram(data, CLIENT_ADDR, now=time.time())
+            self.assertEqual(type(server.next_event()), events.StreamDataReceived)
+            self.assertIsNone(server.next_event())
+
+            # the same datagrams are replayed
+            for data in datagrams:
+                server.receive_datagram(data, CLIENT_ADDR, now=time.time())
+
+            # the duplicates are discarded
+            self.assertIsNone(server.next_event())
+            log = server.configuration.quic_logger.to_dict()
+            triggers = [
+                event["data"]["trigger"]
+                for event in log["traces"][0]["events"]
+                if event["name"] == "transport:packet_dropped"
+            ]
+            self.assertEqual(triggers.count("duplicate"), len(datagrams))
+
     def test_receive_datagram_garbage(self):
         client = create_standalone_client(self)
 
