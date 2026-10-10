@@ -44,6 +44,9 @@ Homepage = "https://github.com/aiortc/aioquic"
 Changelog = "https://aioquic.readthedocs.io/en/stable/changelog.html"
 Documentation = "https://aioquic.readthedocs.io/"
 
+[tool.check-manifest]
+ignore = ["SECURITY.md"]
+
 [tool.coverage.run]
 source = ["aioquic"]
 
