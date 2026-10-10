@@ -11,9 +11,9 @@ from aioquic.h3.connection import (
     FrameUnexpected,
     H3Connection,
     MessageError,
+    ProtocolError,
     Setting,
     SettingsError,
-    ProtocolError,
     StreamType,
     encode_frame,
     encode_settings,
@@ -3149,7 +3149,8 @@ class H3ConnectionTest(TestCase):
         self.assertEqual(str(assert_err.exception), "stream was already ended")
 
     def test_send_receive_informational_headers(self):
-        """A server can send informational headers before final headers and a client should process one or more informational headers before final headers."""
+        """A server can send informational headers before final headers, and a client
+        should process them before the final response."""
         with h3_fake_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -3209,11 +3210,9 @@ class H3ConnectionTest(TestCase):
                 ],
             )
             h3_transfer(quic_client, h3_server)
-            h3_server.send_headers(
-                stream_id=stream_id, headers=[(b":status", b"200")]
-            )
+            h3_server.send_headers(stream_id=stream_id, headers=[(b":status", b"200")])
 
-            with self.assertRaises((ProtocolError,FrameUnexpected)):
+            with self.assertRaises((ProtocolError, FrameUnexpected)):
                 h3_server.send_headers(
                     stream_id=stream_id,
                     headers=[(b":status", b"103")],
@@ -3225,7 +3224,7 @@ class H3ConnectionTest(TestCase):
             h3_server = H3Connection(quic_server)
             stream_id = quic_client.get_next_available_stream_id()
 
-            with self.assertRaises((ProtocolError,FrameUnexpected)):
+            with self.assertRaises((ProtocolError, FrameUnexpected)):
                 h3_server.send_headers(
                     stream_id=stream_id,
                     headers=[(b":status", b"103")],
@@ -3238,7 +3237,7 @@ class H3ConnectionTest(TestCase):
             h3_client = H3Connection(quic_client)
             stream_id = quic_client.get_next_available_stream_id()
 
-            with self.assertRaises((ProtocolError,FrameUnexpected)):
+            with self.assertRaises((ProtocolError, FrameUnexpected)):
                 h3_client.send_headers(
                     stream_id=stream_id,
                     headers=[(b":status", b"103")],
