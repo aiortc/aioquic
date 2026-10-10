@@ -73,10 +73,10 @@ jobs:
       - name: Install OpenSSL
         if: matrix.os == 'windows-latest'
         run: |
-          # OpenSSL is pre-installed on windows-2025 runners.
-          echo "INCLUDE=C:\Progra~1\OpenSSL\include" >> $GITHUB_ENV
-          echo "LIB=C:\Progra~1\OpenSSL\\lib\\VC\\x64\\MD" >> $GITHUB_ENV
-        shell: bash
+          python scripts\fetch-vendor.py C:\cibw\vendor
+          echo "INCLUDE=C:\cibw\vendor\include" >> $env:GITHUB_ENV
+          echo "LIB=C:\cibw\vendor\lib" >> $env:GITHUB_ENV
+        shell: pwsh
       - name: Run tests
         run: |
           python -m pip install -U pip setuptools wheel
