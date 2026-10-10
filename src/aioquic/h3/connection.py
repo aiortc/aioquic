@@ -682,16 +682,41 @@ class H3Connection:
             settings[Setting.ENABLE_WEBTRANSPORT] = 1
         return settings
 
-    def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> None:
+    def _check_control_frame_type(self, frame_type: int) -> None:
         """
-        Handle a frame received on the peer's control stream.
+        Check a frame type received on the peer's control stream.
+
+        This is called as soon as the frame header is parsed, so that invalid
+        frames are rejected without buffering their payload.
         """
+        # The first frame on the control stream MUST be SETTINGS, and unknown
+        # frame types do not satisfy this requirement (RFC 9114 section 6.2.1
+        # and section 9).
         if frame_type != FrameType.SETTINGS and not self._settings_received:
             raise MissingSettingsError
 
+        if frame_type == FrameType.SETTINGS and self._settings_received:
+            # RFC 9114 section 7.2.4
+            raise FrameUnexpected("SETTINGS have already been received")
+        elif frame_type == FrameType.MAX_PUSH_ID and self._is_client:
+            # RFC 9114 section 7.2.7
+            raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
+        elif frame_type in (
+            FrameType.DATA,
+            FrameType.HEADERS,
+            FrameType.PUSH_PROMISE,
+            *RESERVED_FRAME_TYPES,
+        ):
+            # RFC 9114 sections 7.2.1, 7.2.2, 7.2.5 and 7.2.8
+            raise FrameUnexpected("Invalid frame type on control stream")
+
+    def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> None:
+        """
+        Handle a frame received on the peer's control stream.
+
+        The frame type must have been validated by `_check_control_frame_type`.
+        """
         if frame_type == FrameType.SETTINGS:
-            if self._settings_received:
-                raise FrameUnexpected("SETTINGS have already been received")
             settings = parse_settings(frame_data)
             self._validate_settings(settings)
             self._received_settings = settings
@@ -702,16 +727,7 @@ class H3Connection:
             self._quic.send_stream_data(self._local_encoder_stream_id, encoder)
             self._settings_received = True
         elif frame_type == FrameType.MAX_PUSH_ID:
-            if self._is_client:
-                raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
             self._max_push_id = parse_max_push_id(frame_data)
-        elif frame_type in (
-            FrameType.DATA,
-            FrameType.HEADERS,
-            FrameType.PUSH_PROMISE,
-            *RESERVED_FRAME_TYPES,
-        ):
-            raise FrameUnexpected("Invalid frame type on control stream")
 
     def _check_content_length(self, stream: H3Stream):
         if (
@@ -802,9 +818,7 @@ class H3Connection:
                     stream_ended=stream_ended,
                 )
             )
-        elif frame_type == FrameType.PUSH_PROMISE and stream.push_id is None:
-            if not self._is_client:
-                raise FrameUnexpected("Clients must not send PUSH_PROMISE")
+        elif frame_type == FrameType.PUSH_PROMISE:
             frame_buf = Buffer(data=frame_data)
             push_id = frame_buf.pull_uint_var()
             headers = self._decode_headers(
@@ -833,21 +847,38 @@ class H3Connection:
                     headers=headers, push_id=push_id, stream_id=stream.stream_id
                 )
             )
+
+        return http_events
+
+    def _check_request_or_push_frame_type(
+        self, frame_type: int, stream: H3Stream
+    ) -> None:
+        """
+        Check a frame type received on a request or push stream.
+
+        This is called as soon as the frame header is parsed, so that invalid
+        frames are rejected without buffering their payload.
+        """
+        if (
+            frame_type == FrameType.PUSH_PROMISE
+            and stream.push_id is None
+            and not self._is_client
+        ):
+            # RFC 9114 section 7.2.5
+            raise FrameUnexpected("Clients must not send PUSH_PROMISE")
         elif frame_type in (
             FrameType.CANCEL_PUSH,
             FrameType.SETTINGS,
-            FrameType.PUSH_PROMISE,
             FrameType.GOAWAY,
             FrameType.MAX_PUSH_ID,
             *RESERVED_FRAME_TYPES,
-        ):
+        ) or (frame_type == FrameType.PUSH_PROMISE and stream.push_id is not None):
+            # RFC 9114 sections 4.1 and 7.2.3 to 7.2.8
             raise FrameUnexpected(
                 "Invalid frame type on request stream"
                 if stream.push_id is None
                 else "Invalid frame type on push stream"
             )
-
-        return http_events
 
     def _init_connection(self) -> None:
         # send our settings
@@ -994,6 +1025,8 @@ class H3Connection:
                     break
                 consumed = buf.tell()
 
+                self._check_request_or_push_frame_type(stream.frame_type, stream)
+
                 # WEBTRANSPORT_STREAM frames last until the end of the stream
                 if stream.frame_type == FrameType.WEBTRANSPORT_STREAM:
                     stream.session_id = stream.frame_size
@@ -1032,6 +1065,23 @@ class H3Connection:
 
             # check how much data is available
             chunk_size = min(stream.frame_size, buf.capacity - consumed)
+
+            # Unknown frame types MUST be ignored (RFC 9114 section 7.2.8 and
+            # section 9) and their length is unbounded, so discard their payload
+            # as it arrives instead of buffering it (RFC 9114 section 10.5).
+            if stream.frame_type not in (
+                FrameType.DATA,
+                FrameType.HEADERS,
+                FrameType.PUSH_PROMISE,
+            ):
+                buf.seek(consumed + chunk_size)
+                consumed = buf.tell()
+                stream.frame_size -= chunk_size
+                if not stream.frame_size:
+                    stream.frame_size = None
+                    stream.frame_type = None
+                continue
+
             if stream.frame_type != FrameType.DATA and chunk_size < stream.frame_size:
                 break
 
@@ -1119,16 +1169,45 @@ class H3Connection:
                 if stream_ended:
                     raise ClosedCriticalStream("Closing control stream is not allowed")
 
-                # fetch next frame
-                try:
-                    frame_type = buf.pull_uint_var()
-                    frame_length = buf.pull_uint_var()
-                    frame_data = buf.pull_bytes(frame_length)
-                except BufferReadError:
-                    break
-                consumed = buf.tell()
+                # fetch next frame header
+                if stream.frame_size is None:
+                    try:
+                        stream.frame_type = buf.pull_uint_var()
+                        stream.frame_size = buf.pull_uint_var()
+                    except BufferReadError:
+                        break
+                    consumed = buf.tell()
 
-                self._handle_control_frame(frame_type, frame_data)
+                    self._check_control_frame_type(stream.frame_type)
+
+                frame_type = stream.frame_type
+                frame_size = stream.frame_size
+                available = buf.capacity - consumed
+                if frame_type in (FrameType.SETTINGS, FrameType.MAX_PUSH_ID):
+                    # wait for the complete frame
+                    if available < frame_size:
+                        break
+                    frame_data = buf.pull_bytes(frame_size)
+                    consumed = buf.tell()
+                    stream.frame_size = None
+                    stream.frame_type = None
+
+                    self._handle_control_frame(frame_type, frame_data)
+                else:
+                    # Unknown frame types MUST be ignored (RFC 9114 section
+                    # 7.2.8 and section 9) and their length is unbounded, so
+                    # discard their payload as it arrives instead of buffering
+                    # it (RFC 9114 section 10.5). The same applies to frames
+                    # whose payload we do not use, such as GOAWAY.
+                    if available == 0 and frame_size > 0:
+                        break
+                    chunk_size = min(frame_size, available)
+                    buf.seek(consumed + chunk_size)
+                    consumed = buf.tell()
+                    stream.frame_size = frame_size - chunk_size
+                    if not stream.frame_size:
+                        stream.frame_size = None
+                        stream.frame_type = None
             elif stream.stream_type == StreamType.PUSH:
                 # fetch push id
                 if stream.push_id is None:

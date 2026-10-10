@@ -297,6 +297,146 @@ class H3ConnectionTest(TestCase):
         self.assertIsNone(quic_server.closed)
         self.assertEqual(h3_server._max_push_id, 5)
 
+    def test_handle_control_frame_settings_fragmented(self):
+        """
+        We should handle SETTINGS received one byte at a time.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        data = encode_uint_var(StreamType.CONTROL) + encode_frame(
+            FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)
+        )
+        for c in data:
+            self.assertIsNone(h3_server.received_settings)
+            h3_server.handle_event(
+                StreamDataReceived(stream_id=2, data=bytes([c]), end_stream=False)
+            )
+        self.assertIsNone(quic_server.closed)
+        self.assertEqual(h3_server.received_settings, DUMMY_SETTINGS)
+
+    def test_handle_control_frame_unknown_before_settings(self):
+        """
+        An unknown frame does not satisfy the requirement for SETTINGS to be
+        the first frame on the control stream, see RFC 9114 section 9.
+
+        The error must be detected from the frame header alone.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_uint_var(0x21)
+                + encode_uint_var(1000000),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(quic_server.closed, (ErrorCode.H3_MISSING_SETTINGS, ""))
+
+    def test_handle_control_frame_unknown_fragmented(self):
+        """
+        The payload of unknown frames must be discarded as it is received,
+        see RFC 9114 section 7.2.8 and section 9.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # receive SETTINGS
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)),
+                end_stream=False,
+            )
+        )
+        self.assertIsNone(quic_server.closed)
+
+        # receive unknown frames, the last byte of the second one is withheld
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_frame(0x21, b"")
+                + encode_uint_var(0x40)
+                + encode_uint_var(10000),
+                end_stream=False,
+            )
+        )
+        for i in range(9):
+            h3_server.handle_event(
+                StreamDataReceived(stream_id=2, data=b"x" * 1111, end_stream=False)
+            )
+            self.assertIsNone(quic_server.closed)
+            self.assertEqual(h3_server._stream[2].buffer, b"")
+            self.assertEqual(h3_server._stream[2].frame_size, 10000 - 1111 * (i + 1))
+
+        # receive the last byte and MAX_PUSH_ID
+        self.assertIsNone(h3_server._max_push_id)
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=b"x" + encode_frame(FrameType.MAX_PUSH_ID, encode_uint_var(5)),
+                end_stream=False,
+            )
+        )
+        self.assertIsNone(quic_server.closed)
+        self.assertEqual(h3_server._max_push_id, 5)
+
+    def test_handle_control_frame_wrong_frame_type_header_only(self):
+        """
+        Frames which are not allowed on the control stream must be rejected
+        from the frame header alone, without buffering their payload.
+        """
+        for is_client, frame_type, reason in [
+            (False, FrameType.DATA, "Invalid frame type on control stream"),
+            (False, FrameType.HEADERS, "Invalid frame type on control stream"),
+            (False, FrameType.PUSH_PROMISE, "Invalid frame type on control stream"),
+            (False, 0x2, "Invalid frame type on control stream"),
+            (False, 0x6, "Invalid frame type on control stream"),
+            (False, 0x8, "Invalid frame type on control stream"),
+            (False, 0x9, "Invalid frame type on control stream"),
+            (False, FrameType.SETTINGS, "SETTINGS have already been received"),
+            (True, FrameType.MAX_PUSH_ID, "Servers must not send MAX_PUSH_ID"),
+        ]:
+            with self.subTest(is_client=is_client, frame_type=frame_type):
+                quic = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=is_client)
+                )
+                h3 = H3Connection(quic)
+                stream_id = 3 if is_client else 2
+
+                # receive SETTINGS
+                h3.handle_event(
+                    StreamDataReceived(
+                        stream_id=stream_id,
+                        data=encode_uint_var(StreamType.CONTROL)
+                        + encode_frame(
+                            FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)
+                        ),
+                        end_stream=False,
+                    )
+                )
+                self.assertIsNone(quic.closed)
+
+                # receive frame header only
+                h3.handle_event(
+                    StreamDataReceived(
+                        stream_id=stream_id,
+                        data=encode_uint_var(frame_type) + encode_uint_var(1000000),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(quic.closed, (ErrorCode.H3_FRAME_UNEXPECTED, reason))
+
     def test_handle_control_frame_max_push_id_from_client_before_settings(self):
         """
         A server should not receive MAX_PUSH_ID before SETTINGS.
@@ -493,6 +633,46 @@ class H3ConnectionTest(TestCase):
                         data=encode_uint_var(StreamType.PUSH)
                         + encode_uint_var(0)  # push ID
                         + encode_frame(frame_type, b""),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(
+                    quic_client.closed,
+                    (
+                        ErrorCode.H3_FRAME_UNEXPECTED,
+                        "Invalid frame type on push stream",
+                    ),
+                )
+
+    def test_handle_push_frame_wrong_frame_type_header_only(self):
+        """
+        Frames which are not allowed on a push stream must be rejected from
+        the frame header alone, without buffering their payload.
+        """
+        for frame_type in [
+            FrameType.CANCEL_PUSH,
+            FrameType.SETTINGS,
+            FrameType.PUSH_PROMISE,
+            FrameType.GOAWAY,
+            FrameType.MAX_PUSH_ID,
+            0x2,
+            0x6,
+            0x8,
+            0x9,
+        ]:
+            with self.subTest(frame_type=frame_type):
+                quic_client = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=True)
+                )
+                h3_client = H3Connection(quic_client)
+
+                h3_client.handle_event(
+                    StreamDataReceived(
+                        stream_id=15,
+                        data=encode_uint_var(StreamType.PUSH)
+                        + encode_uint_var(0)  # push ID
+                        + encode_uint_var(frame_type)
+                        + encode_uint_var(1000000),
                         end_stream=False,
                     )
                 )
@@ -771,6 +951,147 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(events, [])
         self.assertIsNone(quic_server.closed)
+
+    def test_handle_request_frame_wrong_frame_type_header_only(self):
+        """
+        Frames which are not allowed on a request stream must be rejected from
+        the frame header alone, without buffering their payload.
+        """
+        for is_client, frame_type, reason in [
+            (False, FrameType.CANCEL_PUSH, "Invalid frame type on request stream"),
+            (False, FrameType.SETTINGS, "Invalid frame type on request stream"),
+            (False, FrameType.PUSH_PROMISE, "Clients must not send PUSH_PROMISE"),
+            (False, FrameType.GOAWAY, "Invalid frame type on request stream"),
+            (False, FrameType.MAX_PUSH_ID, "Invalid frame type on request stream"),
+            (False, 0x2, "Invalid frame type on request stream"),
+            (False, 0x6, "Invalid frame type on request stream"),
+            (False, 0x8, "Invalid frame type on request stream"),
+            (False, 0x9, "Invalid frame type on request stream"),
+            (True, FrameType.SETTINGS, "Invalid frame type on request stream"),
+        ]:
+            with self.subTest(is_client=is_client, frame_type=frame_type):
+                quic = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=is_client)
+                )
+                h3 = H3Connection(quic)
+
+                h3.handle_event(
+                    StreamDataReceived(
+                        stream_id=0,
+                        data=encode_uint_var(frame_type) + encode_uint_var(1000000),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(quic.closed, (ErrorCode.H3_FRAME_UNEXPECTED, reason))
+
+    def test_handle_request_frame_unknown(self):
+        """
+        Unknown frames must be ignored, see RFC 9114 section 7.2.8 and
+        section 9.
+        """
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # send request headers
+            stream_id = quic_client.get_next_available_stream_id()
+            headers = [
+                (b":method", b"POST"),
+                (b":scheme", b"https"),
+                (b":authority", b"localhost"),
+                (b":path", b"/"),
+            ]
+            h3_client.send_headers(stream_id=stream_id, headers=headers)
+            headers_data = b"".join(
+                e.data for e in quic_client.stream_queue if e.stream_id == stream_id
+            )
+
+            # receive unknown frames around the HEADERS and DATA frames
+            events = h3_server.handle_event(
+                StreamDataReceived(
+                    stream_id=stream_id,
+                    data=encode_frame(0x21, b"")
+                    + headers_data
+                    + encode_frame(0x40, b"unknown")
+                    + encode_frame(FrameType.DATA, b"hello")
+                    + encode_frame(0x5F, b"x" * 1000)
+                    + encode_frame(FrameType.DATA, b"world"),
+                    end_stream=True,
+                )
+            )
+            self.assertIsNone(quic_server.closed)
+            self.assertEqual(
+                events,
+                [
+                    HeadersReceived(
+                        headers=headers, stream_id=stream_id, stream_ended=False
+                    ),
+                    DataReceived(
+                        data=b"hello", stream_id=stream_id, stream_ended=False
+                    ),
+                    DataReceived(data=b"world", stream_id=stream_id, stream_ended=True),
+                ],
+            )
+
+    def test_handle_request_frame_unknown_fragmented(self):
+        """
+        The payload of unknown frames must be discarded as it is received,
+        see RFC 9114 section 7.2.8 and section 9.
+        """
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # send request headers
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"POST"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+            )
+            events = h3_transfer(quic_client, h3_server)
+            self.assertEqual(len(events), 1)
+            self.assertIsInstance(events[0], HeadersReceived)
+
+            # receive an unknown frame, the last byte is withheld
+            events = h3_server.handle_event(
+                StreamDataReceived(
+                    stream_id=stream_id,
+                    data=encode_uint_var(0x21) + encode_uint_var(10000),
+                    end_stream=False,
+                )
+            )
+            self.assertEqual(events, [])
+            for i in range(9):
+                events = h3_server.handle_event(
+                    StreamDataReceived(
+                        stream_id=stream_id, data=b"x" * 1111, end_stream=False
+                    )
+                )
+                self.assertEqual(events, [])
+                self.assertIsNone(quic_server.closed)
+                self.assertEqual(h3_server._stream[stream_id].buffer, b"")
+                self.assertEqual(
+                    h3_server._stream[stream_id].frame_size, 10000 - 1111 * (i + 1)
+                )
+
+            # receive the last byte and DATA
+            events = h3_server.handle_event(
+                StreamDataReceived(
+                    stream_id=stream_id,
+                    data=b"x" + encode_frame(FrameType.DATA, b"hello"),
+                    end_stream=True,
+                )
+            )
+            self.assertIsNone(quic_server.closed)
+            self.assertEqual(
+                events,
+                [DataReceived(data=b"hello", stream_id=stream_id, stream_ended=True)],
+            )
 
     def test_request(self):
         with h3_client_and_server() as (quic_client, quic_server):
