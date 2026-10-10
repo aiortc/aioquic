@@ -2,6 +2,8 @@
 
 #include <Python.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define MODULE_NAME "aioquic._buffer"
 
@@ -56,7 +58,7 @@ static void
 Buffer_dealloc(BufferObject *self)
 {
     free(self->base);
-    PyTypeObject *tp = Py_TYPE(self);
+    PyTypeObject *tp = Py_TYPE((PyObject *)self);
     freefunc free = PyType_GetSlot(tp, Py_tp_free);
     free(self);
     Py_DECREF(tp);
