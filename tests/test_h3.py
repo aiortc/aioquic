@@ -242,6 +242,61 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on control stream"),
         )
 
+    def test_handle_control_frame_reserved(self):
+        """
+        Frame types reserved from HTTP/2 must be rejected on the control stream,
+        see RFC 9114 section 7.2.8.
+        """
+        for frame_type in [0x2, 0x6, 0x8, 0x9]:
+            with self.subTest(frame_type=frame_type):
+                quic_server = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=False)
+                )
+                h3_server = H3Connection(quic_server)
+
+                h3_server.handle_event(
+                    StreamDataReceived(
+                        stream_id=2,
+                        data=encode_uint_var(StreamType.CONTROL)
+                        + encode_frame(
+                            FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)
+                        )
+                        + encode_frame(frame_type, b""),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(
+                    quic_server.closed,
+                    (
+                        ErrorCode.H3_FRAME_UNEXPECTED,
+                        "Invalid frame type on control stream",
+                    ),
+                )
+
+    def test_handle_control_frame_unknown(self):
+        """
+        Unknown frame types must be ignored on the control stream, including
+        DUPLICATE_PUSH which only existed in drafts, see RFC 9114 section 9.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS))
+                + encode_frame(0xE, encode_uint_var(0))
+                + encode_frame(0x21, b"unknown")
+                + encode_frame(FrameType.MAX_PUSH_ID, encode_uint_var(5)),
+                end_stream=False,
+            )
+        )
+        self.assertIsNone(quic_server.closed)
+        self.assertEqual(h3_server._max_push_id, 5)
+
     def test_handle_control_frame_max_push_id_from_client_before_settings(self):
         """
         A server should not receive MAX_PUSH_ID before SETTINGS.
@@ -419,6 +474,35 @@ class H3ConnectionTest(TestCase):
             quic_client.closed,
             (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on push stream"),
         )
+
+    def test_handle_push_frame_reserved(self):
+        """
+        Frame types reserved from HTTP/2 must be rejected on a push stream,
+        see RFC 9114 section 7.2.8.
+        """
+        for frame_type in [0x2, 0x6, 0x8, 0x9]:
+            with self.subTest(frame_type=frame_type):
+                quic_client = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=True)
+                )
+                h3_client = H3Connection(quic_client)
+
+                h3_client.handle_event(
+                    StreamDataReceived(
+                        stream_id=15,
+                        data=encode_uint_var(StreamType.PUSH)
+                        + encode_uint_var(0)  # push ID
+                        + encode_frame(frame_type, b""),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(
+                    quic_client.closed,
+                    (
+                        ErrorCode.H3_FRAME_UNEXPECTED,
+                        "Invalid frame type on push stream",
+                    ),
+                )
 
     def test_handle_qpack_decoder_duplicate(self):
         """
@@ -640,6 +724,53 @@ class H3ConnectionTest(TestCase):
             quic_server.closed,
             (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on request stream"),
         )
+
+    def test_handle_request_frame_reserved(self):
+        """
+        Frame types reserved from HTTP/2 must be rejected on a request stream,
+        see RFC 9114 section 7.2.8.
+        """
+        for frame_type in [0x2, 0x6, 0x8, 0x9]:
+            with self.subTest(frame_type=frame_type):
+                quic_server = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=False)
+                )
+                h3_server = H3Connection(quic_server)
+
+                h3_server.handle_event(
+                    StreamDataReceived(
+                        stream_id=0,
+                        data=encode_frame(frame_type, b""),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(
+                    quic_server.closed,
+                    (
+                        ErrorCode.H3_FRAME_UNEXPECTED,
+                        "Invalid frame type on request stream",
+                    ),
+                )
+
+    def test_handle_request_frame_unknown_duplicate_push(self):
+        """
+        DUPLICATE_PUSH only existed in drafts, it is now an unknown frame type
+        which must be ignored, see RFC 9114 section 9.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        events = h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=0,
+                data=encode_frame(0xE, encode_uint_var(0)),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(events, [])
+        self.assertIsNone(quic_server.closed)
 
     def test_request(self):
         with h3_client_and_server() as (quic_client, quic_server):
