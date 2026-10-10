@@ -1,6 +1,22 @@
 Changelog
 =========
 
+1.4.0
+-----
+
+* Perform header protection and payload encryption in Python using
+  `cryptography`_ instead of a C extension linked to `OpenSSL`_. This fixes
+  memory safety issues when handling malformed packets, lifts the 1500-byte
+  limit on received packets and removes the need for OpenSSL development
+  headers when building from source.
+* Discard duplicate packets as required by :rfc:`9000` section 12.3.
+* Limit the number of network paths per connection.
+* Do not reply to Version Negotiation packets with another Version
+  Negotiation packet.
+* Discard unknown HTTP/3 frames incrementally instead of buffering them.
+* Handle HTTP/3 frame types as defined by :rfc:`9114`.
+* Add support for Python 3.15, drop support for Python 3.10.
+
 1.3.0
 -----
 
