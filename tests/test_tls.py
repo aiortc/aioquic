@@ -850,6 +850,27 @@ class ContextTest(TestCase):
         second_handshake_bad_binder()
         second_handshake_bad_pre_shared_key()
 
+    def test_large_session_ticket(self):
+        now = tls.utcnow()
+        ticket = bytes(range(256)) * 8
+
+        client = self.create_client()
+        client.session_ticket = tls.SessionTicket(
+            age_add=0,
+            cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
+            not_valid_after=now + datetime.timedelta(hours=1),
+            not_valid_before=now - datetime.timedelta(seconds=1),
+            resumption_secret=bytes(48),
+            server_name="localhost",
+            ticket=ticket,
+        )
+
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+
+        hello = pull_client_hello(Buffer(data=merge_buffers(client_buf)))
+        self.assertEqual(hello.pre_shared_key.identities[0][0], ticket)
+
 
 class TlsTest(TestCase):
     def test_pull_block_incomplete_read(self):
