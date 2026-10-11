@@ -3243,6 +3243,65 @@ class H3ConnectionTest(TestCase):
                     headers=[(b":status", b"103")],
                 )
 
+    def test_send_switching_protocols_headers(self):
+        """HTTP/3 does not support the 101 Switching Protocols response."""
+        with h3_fake_client_and_server() as (_, quic_server):
+            h3_server = H3Connection(quic_server)
+            stream_id = 0
+
+            with self.assertRaises(MessageError):
+                h3_server.send_headers(
+                    stream_id=stream_id,
+                    headers=[(b":status", b"101")],
+                )
+
+    def test_send_invalid_informational_status(self):
+        """Response status codes must be integers."""
+        with h3_fake_client_and_server() as (_, quic_server):
+            h3_server = H3Connection(quic_server)
+            stream_id = 0
+
+            with self.assertRaises(MessageError):
+                h3_server.send_headers(
+                    stream_id=stream_id,
+                    headers=[(b":status", b"invalid")],
+                )
+
+    def test_receive_informational_headers_cannot_end_stream(self):
+        """An informational response cannot end the stream."""
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+            )
+            h3_transfer(quic_client, h3_server)
+
+            h3_client.handle_event(
+                StreamDataReceived(
+                    stream_id=stream_id,
+                    data=encode_frame(
+                        FrameType.HEADERS,
+                        h3_server._encode_headers(stream_id, [(b":status", b"103")]),
+                    ),
+                    end_stream=True,
+                )
+            )
+            self.assertEqual(
+                quic_client.closed,
+                (
+                    ErrorCode.H3_FRAME_UNEXPECTED,
+                    "Informational response HEADERS frame cannot end stream",
+                ),
+            )
+
 
 class H3ParserTest(TestCase):
     def test_parse_settings_duplicate_identifier(self):

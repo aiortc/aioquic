@@ -900,7 +900,7 @@ class H3Connection:
 
             if not (
                 self._is_client and is_informational
-            ):  # informational response headers cant change state to AFTER_HEADERS
+            ):  # informational response headers must not advance the state
                 if stream.headers_recv_state == HeadersState.INITIAL:
                     stream.headers_recv_state = HeadersState.AFTER_HEADERS
                 else:
