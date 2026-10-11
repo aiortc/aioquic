@@ -248,6 +248,13 @@ class ContextTest(TestCase):
             ),
         )
 
+    def test_client_bad_hello_invalid_key_share(self):
+        self.handshake_with_client_input_corruption(
+            # Mess with key share public key.
+            lambda x: x[:58] + b"\x05" + x[59:],
+            tls.AlertIllegalParameter("ServerHello has an invalid key share"),
+        )
+
     def test_client_bad_hello_key_share(self):
         self.handshake_with_client_input_corruption(
             # Mess with key share group.
@@ -286,6 +293,42 @@ class ContextTest(TestCase):
             lambda x: x[:-4] + bytes(4),
             tls.AlertDecryptError(),
         )
+
+    def test_server_invalid_key_share(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP256R1]
+        server = self.create_server()
+
+        # Send client hello with a public key which is not on the curve.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        public_key = tls.encode_public_key(client._ec_private_keys[0].public_key())[1]
+        server_input = merge_buffers(client_buf).replace(
+            public_key, b"\x05" + public_key[1:]
+        )
+
+        with self.assertRaises(tls.AlertIllegalParameter) as cm:
+            server.handle_message(server_input, create_buffers())
+        self.assertEqual(str(cm.exception), "ClientHello has an invalid key share")
+
+    def test_server_invalid_key_share_x25519_all_zero(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.X25519]
+        server = self.create_server()
+
+        # Send client hello with an all-zero public key, for which the key
+        # exchange fails.
+        client_buf = create_buffers()
+        try:
+            client.handle_message(b"", client_buf)
+        except UnsupportedAlgorithm as exc:
+            self.skipTest(str(exc))
+        public_key = tls.encode_public_key(client._x25519_private_key.public_key())[1]
+        server_input = merge_buffers(client_buf).replace(public_key, bytes(32))
+
+        with self.assertRaises(tls.AlertIllegalParameter) as cm:
+            server.handle_message(server_input, create_buffers())
+        self.assertEqual(str(cm.exception), "ClientHello has an invalid key share")
 
     def test_server_unexpected_message(self):
         server = self.create_server()

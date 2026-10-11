@@ -1651,25 +1651,28 @@ class Context:
         self._key_schedule_proxy = None
 
         # perform key exchange
-        peer_public_key = decode_public_key(peer_hello.key_share)
         shared_key: Optional[bytes] = None
-        if (
-            isinstance(peer_public_key, x25519.X25519PublicKey)
-            and self._x25519_private_key is not None
-        ):
-            shared_key = self._x25519_private_key.exchange(peer_public_key)
-        elif (
-            isinstance(peer_public_key, x448.X448PublicKey)
-            and self._x448_private_key is not None
-        ):
-            shared_key = self._x448_private_key.exchange(peer_public_key)
-        elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
-            for ec_private_key in self._ec_private_keys:
-                if (
-                    ec_private_key.public_key().curve.__class__
-                    == peer_public_key.curve.__class__
-                ):
-                    shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
+        try:
+            peer_public_key = decode_public_key(peer_hello.key_share)
+            if (
+                isinstance(peer_public_key, x25519.X25519PublicKey)
+                and self._x25519_private_key is not None
+            ):
+                shared_key = self._x25519_private_key.exchange(peer_public_key)
+            elif (
+                isinstance(peer_public_key, x448.X448PublicKey)
+                and self._x448_private_key is not None
+            ):
+                shared_key = self._x448_private_key.exchange(peer_public_key)
+            elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
+                for ec_private_key in self._ec_private_keys:
+                    if (
+                        ec_private_key.public_key().curve.__class__
+                        == peer_public_key.curve.__class__
+                    ):
+                        shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
+        except ValueError:
+            raise AlertIllegalParameter("ServerHello has an invalid key share")
         if shared_key is None:
             raise AlertIllegalParameter(
                 "ServerHello has a key share we did not advertise"
@@ -1978,24 +1981,29 @@ class Context:
             ec.EllipticCurvePublicKey, x25519.X25519PublicKey, x448.X448PublicKey
         ]
         shared_key: Optional[bytes] = None
-        for key_share in peer_hello.key_share:
-            peer_public_key = decode_public_key(key_share)
-            if isinstance(peer_public_key, x25519.X25519PublicKey):
-                self._x25519_private_key = x25519.X25519PrivateKey.generate()
-                public_key = self._x25519_private_key.public_key()
-                shared_key = self._x25519_private_key.exchange(peer_public_key)
-                break
-            elif isinstance(peer_public_key, x448.X448PublicKey):
-                self._x448_private_key = x448.X448PrivateKey.generate()
-                public_key = self._x448_private_key.public_key()
-                shared_key = self._x448_private_key.exchange(peer_public_key)
-                break
-            elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
-                ec_private_key = ec.generate_private_key(GROUP_TO_CURVE[key_share[0]]())
-                self._ec_private_keys.append(ec_private_key)
-                public_key = ec_private_key.public_key()
-                shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
-                break
+        try:
+            for key_share in peer_hello.key_share:
+                peer_public_key = decode_public_key(key_share)
+                if isinstance(peer_public_key, x25519.X25519PublicKey):
+                    self._x25519_private_key = x25519.X25519PrivateKey.generate()
+                    public_key = self._x25519_private_key.public_key()
+                    shared_key = self._x25519_private_key.exchange(peer_public_key)
+                    break
+                elif isinstance(peer_public_key, x448.X448PublicKey):
+                    self._x448_private_key = x448.X448PrivateKey.generate()
+                    public_key = self._x448_private_key.public_key()
+                    shared_key = self._x448_private_key.exchange(peer_public_key)
+                    break
+                elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
+                    ec_private_key = ec.generate_private_key(
+                        GROUP_TO_CURVE[key_share[0]]()
+                    )
+                    self._ec_private_keys.append(ec_private_key)
+                    public_key = ec_private_key.public_key()
+                    shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
+                    break
+        except ValueError:
+            raise AlertIllegalParameter("ClientHello has an invalid key share")
         if shared_key is None:
             raise AlertHandshakeFailure("No supported key share")
 
