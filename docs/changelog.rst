@@ -1,6 +1,39 @@
 Changelog
 =========
 
+1.5.0
+-----
+
+* Fix several ways a peer could make memory usage grow without bound:
+
+  * Retire HTTP/3 unidirectional streams once they end, and HTTP/3 streams
+    which are reset or stopped by the peer, or which end while blocked on
+    QPACK.
+  * Stop delivering stream events after a stream's receiving side has
+    finished, so a duplicate FIN or RESET_STREAM is not reported again.
+  * Forget peer connection ID sequence numbers below ``retire_prior_to``.
+
+* When a reset stream is reset again or receives more data, do not count its
+  final size against connection-level flow control a second time. Counting it
+  twice could close a well-behaved peer's connection with FLOW_CONTROL_ERROR.
+* Close the connection with ``H3_FRAME_ERROR`` when a SETTINGS or PUSH_PROMISE
+  frame is truncated, instead of raising an exception to the application.
+* Abort the TLS handshake with an ``illegal_parameter`` alert when the peer's
+  key share is invalid, and only accept key shares for groups the server
+  supports.
+* Stop using assertions to validate data received from the peer, so malformed
+  input closes the connection or drops the packet, including when running with
+  ``-O``.
+* Raise :class:`ValueError` for invalid arguments and :class:`RuntimeError`
+  for calls made in the wrong state, such as writing to a stream after it has
+  ended or been reset, instead of failing an assertion.
+* Send a QPACK Stream Cancellation when a stream with a blocked header block
+  is reset, and treat resetting or stopping an HTTP/3 control or QPACK stream
+  as a connection error, as :rfc:`9114` and :rfc:`9204` require.
+* Do not send a FIN when closing the writer of a receive-only stream in the
+  :doc:`asyncio API <asyncio>`.
+* Require `pylsqpack`_ 1.0 or later.
+
 1.4.0
 -----
 
@@ -90,3 +123,4 @@ Changelog
 .. _cryptography: https://cryptography.io/
 .. _musllinux: https://peps.python.org/pep-0656/
 .. _OpenSSL: https://www.openssl.org/
+.. _pylsqpack: https://github.com/aiortc/pylsqpack
