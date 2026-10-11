@@ -884,9 +884,19 @@ class QuicConnection:
 
             # Server initialization.
             if not self._is_client and self._state == QuicConnectionState.FIRSTFLIGHT:
-                assert header.packet_type == QuicPacketType.INITIAL, (
-                    "first packet must be INITIAL"
-                )
+                # Nothing can be decrypted until we have received an INITIAL packet.
+                if header.packet_type != QuicPacketType.INITIAL:
+                    if self._quic_logger is not None:
+                        self._quic_logger.log_event(
+                            category="transport",
+                            event="packet_dropped",
+                            data={
+                                "trigger": "key_unavailable",
+                                "raw": {"length": header.packet_length},
+                            },
+                        )
+                    return
+
                 crypto_frame_required = True
                 self._network_paths = [network_path]
                 self._version = header.version

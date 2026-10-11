@@ -1351,6 +1351,22 @@ class QuicConnectionTest(TestCase):
             ]
             self.assertEqual(triggers.count("duplicate"), len(datagrams))
 
+    def test_receive_datagram_first_not_initial(self):
+        server = create_standalone_server(self)
+
+        # Server receives a 1-RTT packet before any INITIAL packet.
+        datagram = bytes([0x40]) + bytes(8) + bytes(40)
+        server.receive_datagram(datagram, CLIENT_ADDR, now=time.time())
+
+        # The packet is dropped.
+        log = server.configuration.quic_logger.to_dict()
+        triggers = [
+            event["data"]["trigger"]
+            for event in log["traces"][0]["events"]
+            if event["name"] == "transport:packet_dropped"
+        ]
+        self.assertEqual(triggers, ["key_unavailable"])
+
     def test_receive_datagram_garbage(self):
         client = create_standalone_client(self)
 

@@ -144,6 +144,10 @@ class DatagramError(ProtocolError):
     error_code = ErrorCode.H3_DATAGRAM_ERROR
 
 
+class FrameError(ProtocolError):
+    error_code = ErrorCode.H3_FRAME_ERROR
+
+
 class FrameUnexpected(ProtocolError):
     error_code = ErrorCode.H3_FRAME_UNEXPECTED
 
@@ -183,8 +187,12 @@ def encode_settings(settings: dict[int, int]) -> bytes:
 
 def parse_max_push_id(data: bytes) -> int:
     buf = Buffer(data=data)
-    max_push_id = buf.pull_uint_var()
-    assert buf.eof()
+    try:
+        max_push_id = buf.pull_uint_var()
+    except BufferReadError:
+        raise FrameError("Could not parse MAX_PUSH_ID frame")
+    if not buf.eof():
+        raise FrameError("MAX_PUSH_ID frame has trailing data")
     return max_push_id
 
 

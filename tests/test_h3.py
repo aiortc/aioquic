@@ -493,6 +493,36 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "Servers must not send MAX_PUSH_ID"),
         )
 
+    def test_handle_control_frame_max_push_id_malformed(self):
+        """
+        A server should reject a MAX_PUSH_ID frame which is empty or has
+        trailing data.
+        """
+        for frame_data, reason_phrase in [
+            (b"", "Could not parse MAX_PUSH_ID frame"),
+            (b"\x05\x00", "MAX_PUSH_ID frame has trailing data"),
+        ]:
+            with self.subTest(frame_data=frame_data):
+                quic_server = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=False)
+                )
+                h3_server = H3Connection(quic_server)
+
+                h3_server.handle_event(
+                    StreamDataReceived(
+                        stream_id=2,
+                        data=encode_uint_var(StreamType.CONTROL)
+                        + encode_frame(
+                            FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)
+                        )
+                        + encode_frame(FrameType.MAX_PUSH_ID, frame_data),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(
+                    quic_server.closed, (ErrorCode.H3_FRAME_ERROR, reason_phrase)
+                )
+
     def test_handle_control_settings_twice(self):
         """
         We should not receive HEADERS on the control stream.
