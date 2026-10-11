@@ -30,11 +30,11 @@ from cryptography.hazmat.primitives.asymmetric import (
     ec,
     ed448,
     ed25519,
+    mlkem,
     padding,
     rsa,
     x448,
     x25519,
-    mlkem,
 )
 from cryptography.hazmat.primitives.asymmetric.types import (
     CertificateIssuerPublicKeyTypes,
@@ -1138,21 +1138,26 @@ GROUP_TO_CURVE: dict = {
 }
 CURVE_TO_GROUP = dict((v, k) for k, v in GROUP_TO_CURVE.items())
 
-GROUP_TO_MLKEM: dict[Group, tuple[type, type]] = {
+GROUP_TO_MLKEM: dict = {
     Group.MLKEM768: (mlkem.MLKEM768PrivateKey, mlkem.MLKEM768PublicKey),
     Group.MLKEM1024: (mlkem.MLKEM1024PrivateKey, mlkem.MLKEM1024PublicKey),
 }
 
-HYBRID_MLKEM_GROUPS: dict[Group, tuple[Group, Group]] = {
-    Group.X25519MLKEM768: (Group.X25519, Group.MLKEM768),
+# The key shares and the shared secret of a hybrid group are the concatenation
+# of those of its components, in this order (draft-ietf-tls-ecdhe-mlkem).
+HYBRID_GROUPS: dict[Group, tuple[Group, Group]] = {
     Group.SECP256R1MLKEM768: (Group.SECP256R1, Group.MLKEM768),
     Group.SECP384R1MLKEM1024: (Group.SECP384R1, Group.MLKEM1024),
+    Group.X25519MLKEM768: (Group.MLKEM768, Group.X25519),
 }
 
-HYBRID_MLKEM_CLASSICAL_PK_SIZE: dict[Group, int] = {
-    Group.X25519MLKEM768: 32,
-    Group.SECP256R1MLKEM768: 65,
-    Group.SECP384R1MLKEM1024: 97,
+# The sizes of the client and server key shares of the hybrid group components.
+HYBRID_COMPONENT_KEY_SHARE_SIZES: dict[Group, tuple[int, int]] = {
+    Group.MLKEM768: (1184, 1088),
+    Group.MLKEM1024: (1568, 1568),
+    Group.SECP256R1: (65, 65),
+    Group.SECP384R1: (97, 97),
+    Group.X25519: (32, 32),
 }
 
 GROUP_NAMES: dict[str, Group] = {
@@ -1185,14 +1190,129 @@ GROUP_NAMES: dict[str, Group] = {
 }
 
 
-def mlkem_generate_private_key(group: Group):
-    priv_cls, _ = GROUP_TO_MLKEM[group]
-    return priv_cls.generate()
+KeyExchangePrivateKey = Union[
+    ec.EllipticCurvePrivateKey,
+    mlkem.MLKEM768PrivateKey,
+    mlkem.MLKEM1024PrivateKey,
+    x25519.X25519PrivateKey,
+    x448.X448PrivateKey,
+]
 
 
-def mlkem_public_key_from_bytes(group: Group, data: bytes):
-    _, pub_cls = GROUP_TO_MLKEM[group]
-    return pub_cls.from_public_bytes(data)
+class KeyExchange:
+    """
+    The client side of a key exchange in a group.
+
+    The client sends `key_share` to the server, which replies with its own key
+    share obtained from :meth:`respond`. The client then obtains the shared
+    secret from the server's key share using :meth:`complete`.
+
+    Invalid key shares raise a :class:`ValueError`.
+    """
+
+    def __init__(self, group: Group) -> None:
+        self.group = group
+        self.key_share: bytes
+        self._components: list[KeyExchange] = []
+        self._private_key: Optional[KeyExchangePrivateKey] = None
+
+        if group in HYBRID_GROUPS:
+            self._components = [KeyExchange(g) for g in HYBRID_GROUPS[group]]
+            self.key_share = b"".join(c.key_share for c in self._components)
+        elif group in GROUP_TO_MLKEM:
+            mlkem_private_key = GROUP_TO_MLKEM[group][0].generate()
+            self._private_key = mlkem_private_key
+            self.key_share = mlkem_private_key.public_key().public_bytes_raw()
+        else:
+            ecdh_private_key: Union[
+                ec.EllipticCurvePrivateKey, x25519.X25519PrivateKey, x448.X448PrivateKey
+            ]
+            if group == Group.X25519:
+                ecdh_private_key = x25519.X25519PrivateKey.generate()
+            elif group == Group.X448:
+                ecdh_private_key = x448.X448PrivateKey.generate()
+            elif group in GROUP_TO_CURVE:
+                ecdh_private_key = ec.generate_private_key(GROUP_TO_CURVE[group]())
+            else:
+                raise ValueError(f"Unsupported key exchange group {group!r}")
+            self._private_key = ecdh_private_key
+            self.key_share = encode_public_key(ecdh_private_key.public_key())[1]
+
+    def complete(self, server_key_share: bytes) -> bytes:
+        """
+        Return the shared secret, given the server's key share.
+        """
+        if self._components:
+            return b"".join(
+                component.complete(component_key_share)
+                for component, component_key_share in zip(
+                    self._components,
+                    split_hybrid_key_share(self.group, server_key_share, False),
+                )
+            )
+
+        private_key = self._private_key
+        if isinstance(
+            private_key, (mlkem.MLKEM768PrivateKey, mlkem.MLKEM1024PrivateKey)
+        ):
+            return private_key.decapsulate(server_key_share)
+
+        public_key = decode_public_key((self.group, server_key_share))
+        if isinstance(private_key, ec.EllipticCurvePrivateKey) and isinstance(
+            public_key, ec.EllipticCurvePublicKey
+        ):
+            return private_key.exchange(ec.ECDH(), public_key)
+        elif isinstance(private_key, x25519.X25519PrivateKey) and isinstance(
+            public_key, x25519.X25519PublicKey
+        ):
+            return private_key.exchange(public_key)
+        else:
+            assert isinstance(private_key, x448.X448PrivateKey) and isinstance(
+                public_key, x448.X448PublicKey
+            )
+            return private_key.exchange(public_key)
+
+    @classmethod
+    def respond(cls, group: Group, client_key_share: bytes) -> tuple[bytes, bytes]:
+        """
+        Return the shared secret and the server's key share, given the client's
+        key share.
+        """
+        if group in HYBRID_GROUPS:
+            results = [
+                cls.respond(component_group, component_key_share)
+                for component_group, component_key_share in zip(
+                    HYBRID_GROUPS[group],
+                    split_hybrid_key_share(group, client_key_share, True),
+                )
+            ]
+            return (
+                b"".join(shared_secret for shared_secret, _ in results),
+                b"".join(key_share for _, key_share in results),
+            )
+        elif group in GROUP_TO_MLKEM:
+            public_key = GROUP_TO_MLKEM[group][1].from_public_bytes(client_key_share)
+            shared_secret, ciphertext = public_key.encapsulate()
+            return (shared_secret, ciphertext)
+        else:
+            key_exchange = cls(group)
+            return (key_exchange.complete(client_key_share), key_exchange.key_share)
+
+
+def split_hybrid_key_share(
+    group: Group, key_share: bytes, is_client: bool
+) -> tuple[bytes, bytes]:
+    """
+    Split the key share of a hybrid group into the key shares of its components.
+    """
+    size_index = 0 if is_client else 1
+    first_size, second_size = (
+        HYBRID_COMPONENT_KEY_SHARE_SIZES[component][size_index]
+        for component in HYBRID_GROUPS[group]
+    )
+    if len(key_share) != first_size + second_size:
+        raise ValueError(f"Invalid key share length for group {group!r}")
+    return (key_share[:first_size], key_share[first_size:])
 
 
 def cipher_suite_hash(cipher_suite: CipherSuite) -> hashes.HashAlgorithm:
@@ -1372,45 +1492,48 @@ class Context:
             self._signature_algorithms.append(SignatureAlgorithm.ED25519)
         if default_backend().ed448_supported():
             self._signature_algorithms.append(SignatureAlgorithm.ED448)
-        self._supported_groups = []
-        if ssl_groups is not None:
-            mlkem_supported = default_backend().mlkem_supported()
-            x25519_supported = default_backend().x25519_supported()
-            x448_supported = default_backend().x448_supported()
-            available_groups: dict[Group, bool] = {
-                Group.SECP256R1: True,
-                Group.SECP384R1: True,
-                Group.SECP521R1: True,
-                Group.X25519: x25519_supported,
-                Group.X448: x448_supported,
-                Group.MLKEM768: mlkem_supported,
-                Group.MLKEM1024: mlkem_supported,
-                Group.X25519MLKEM768: mlkem_supported and x25519_supported,
-                Group.SECP256R1MLKEM768: mlkem_supported,
-                Group.SECP384R1MLKEM1024: mlkem_supported,
-            }
-            seen: set[Group] = set()
+        mlkem_supported = default_backend().mlkem_supported()
+        x25519_supported = default_backend().x25519_supported()
+        available_groups = {
+            Group.MLKEM768: mlkem_supported,
+            Group.MLKEM1024: mlkem_supported,
+            Group.SECP256R1: True,
+            Group.SECP256R1MLKEM768: mlkem_supported,
+            Group.SECP384R1: True,
+            Group.SECP384R1MLKEM1024: mlkem_supported,
+            Group.SECP521R1: True,
+            Group.X25519: x25519_supported,
+            Group.X25519MLKEM768: mlkem_supported and x25519_supported,
+            Group.X448: default_backend().x448_supported(),
+        }
+        if ssl_groups is None:
+            groups = [
+                Group.X25519MLKEM768,
+                Group.X25519,
+                Group.SECP256R1,
+                Group.SECP384R1,
+                Group.X448,
+            ]
+            # The client sends a key share for each of its groups, so only the
+            # server supports the larger groups by default.
+            if not is_client:
+                groups += [
+                    Group.SECP256R1MLKEM768,
+                    Group.SECP384R1MLKEM1024,
+                    Group.MLKEM768,
+                    Group.MLKEM1024,
+                ]
+        else:
+            groups = []
             for name in ssl_groups.split(":"):
                 group = GROUP_NAMES.get(name.strip())
                 if group is None:
                     raise ValueError(f"Unknown TLS group: {name.strip()!r}")
-                if available_groups.get(group, False) and group not in seen:
-                    seen.add(group)
-                    self._supported_groups.append(group)
-        else:
-            if default_backend().mlkem_supported() and default_backend().x25519_supported():
-                self._supported_groups.append(Group.X25519MLKEM768)
-            if default_backend().x25519_supported():
-                self._supported_groups.append(Group.X25519)
-            self._supported_groups.append(Group.SECP256R1)
-            self._supported_groups.append(Group.SECP384R1)
-            if default_backend().x448_supported():
-                self._supported_groups.append(Group.X448)
-            if default_backend().mlkem_supported():
-                self._supported_groups.append(Group.SECP256R1MLKEM768)
-                self._supported_groups.append(Group.SECP384R1MLKEM1024)
-                self._supported_groups.append(Group.MLKEM768)
-                self._supported_groups.append(Group.MLKEM1024)
+                groups.append(group)
+        self._supported_groups: list[Group] = []
+        for group in groups:
+            if available_groups[group] and group not in self._supported_groups:
+                self._supported_groups.append(group)
         self._supported_versions = [TLS_VERSION_1_3]
 
         # state
@@ -1431,11 +1554,7 @@ class Context:
         self._dec_key: Optional[bytes] = None
         self.__logger = logger
 
-        self._ec_private_keys: list[ec.EllipticCurvePrivateKey] = []
-        self._x25519_private_key: Optional[x25519.X25519PrivateKey] = None
-        self._x448_private_key: Optional[x448.X448PrivateKey] = None
-        self._mlkem_private_keys: dict[Group, Any] = {}
-        self._hybrid_private_keys: dict[Group, tuple[Any, Any]] = {}
+        self._key_exchanges: dict[int, KeyExchange] = {}
 
         if is_client:
             self.client_random = os.urandom(32)
@@ -1621,49 +1740,13 @@ class Context:
         supported_groups: list[int] = []
 
         for group in self._supported_groups:
-            if group == Group.X25519:
-                self._x25519_private_key = x25519.X25519PrivateKey.generate()
-                key_share.append(
-                    encode_public_key(self._x25519_private_key.public_key())
-                )
-                supported_groups.append(Group.X25519)
-            elif group == Group.X448:
-                self._x448_private_key = x448.X448PrivateKey.generate()
-                key_share.append(encode_public_key(self._x448_private_key.public_key()))
-                supported_groups.append(Group.X448)
-            elif group == Group.GREASE:
+            if group == Group.GREASE:
                 key_share.append((Group.GREASE, b"\x00"))
-                supported_groups.append(Group.GREASE)
-            elif group in GROUP_TO_CURVE:
-                ec_private_key = ec.generate_private_key(GROUP_TO_CURVE[group]())
-                self._ec_private_keys.append(ec_private_key)
-                key_share.append(encode_public_key(ec_private_key.public_key()))
-                supported_groups.append(group)
-            elif group in GROUP_TO_MLKEM:
-                mlkem_priv = mlkem_generate_private_key(group)
-                self._mlkem_private_keys[group] = mlkem_priv
-                ek = mlkem_priv.public_key().public_bytes_raw()
-                key_share.append((group, ek))
-                supported_groups.append(group)
-            elif group in HYBRID_MLKEM_GROUPS:
-                classical_group, mlkem_group = HYBRID_MLKEM_GROUPS[group]
-                mlkem_priv = mlkem_generate_private_key(mlkem_group)
-                mlkem_ek = mlkem_priv.public_key().public_bytes_raw()
-                if classical_group == Group.X25519:
-                    classical_priv = x25519.X25519PrivateKey.generate()
-                    classical_pk = classical_priv.public_key().public_bytes(
-                        Encoding.Raw, PublicFormat.Raw
-                    )
-                else:
-                    classical_priv = ec.generate_private_key(
-                        GROUP_TO_CURVE[classical_group]()
-                    )
-                    classical_pk = classical_priv.public_key().public_bytes(
-                        Encoding.X962, PublicFormat.UncompressedPoint
-                    )
-                key_share.append((group, mlkem_ek + classical_pk))
-                supported_groups.append(group)
-                self._hybrid_private_keys[group] = (classical_priv, mlkem_priv)
+            else:
+                key_exchange = KeyExchange(group)
+                self._key_exchanges[group] = key_exchange
+                key_share.append((group, key_exchange.key_share))
+            supported_groups.append(group)
 
         assert len(key_share), "no key share entries"
 
@@ -1780,47 +1863,18 @@ class Context:
         self._key_schedule_proxy = None
 
         # perform key exchange
-        peer_group, peer_data = peer_hello.key_share
-        shared_key: Optional[bytes] = None
-        if peer_group in self._mlkem_private_keys:
-            shared_key = self._mlkem_private_keys[peer_group].decapsulate(peer_data)
-        elif peer_group in self._hybrid_private_keys:
-            classical_priv, mlkem_priv = self._hybrid_private_keys[peer_group]
-            classical_size = HYBRID_MLKEM_CLASSICAL_PK_SIZE[peer_group]
-            mlkem_ct, classical_data = peer_data[:-classical_size], peer_data[-classical_size:]
-            if isinstance(classical_priv, x25519.X25519PrivateKey):
-                classical_ss = classical_priv.exchange(
-                    x25519.X25519PublicKey.from_public_bytes(classical_data)
-                )
-            else:
-                classical_ss = classical_priv.exchange(
-                    ec.ECDH(),
-                    ec.EllipticCurvePublicKey.from_encoded_point(
-                        classical_priv.public_key().curve, classical_data
-                    ),
-                )
-            mlkem_ss = mlkem_priv.decapsulate(mlkem_ct)
-            shared_key = mlkem_ss + classical_ss
-        else:
-            peer_public_key = decode_public_key(peer_hello.key_share)
-            if (
-                isinstance(peer_public_key, x25519.X25519PublicKey)
-                and self._x25519_private_key is not None
-            ):
-                shared_key = self._x25519_private_key.exchange(peer_public_key)
-            elif (
-                isinstance(peer_public_key, x448.X448PublicKey)
-                and self._x448_private_key is not None
-            ):
-                shared_key = self._x448_private_key.exchange(peer_public_key)
-            elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
-                for ec_private_key in self._ec_private_keys:
-                    if (
-                        ec_private_key.public_key().curve.__class__
-                        == peer_public_key.curve.__class__
-                    ):
-                        shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
-        assert shared_key is not None
+        if (
+            peer_hello.key_share is None
+            or peer_hello.key_share[0] not in self._key_exchanges
+        ):
+            raise AlertIllegalParameter(
+                "ServerHello has no key share for a group we offered"
+            )
+        peer_group, peer_key_share = peer_hello.key_share
+        try:
+            shared_key = self._key_exchanges[peer_group].complete(peer_key_share)
+        except ValueError:
+            raise AlertIllegalParameter("ServerHello has an invalid key share")
 
         self.key_schedule.update_hash(input_buf.data)
         self.key_schedule.extract(shared_key)
@@ -2121,77 +2175,16 @@ class Context:
             self.key_schedule.update_hash(input_buf.data)
 
         # perform key exchange
-        shared_key: Optional[bytes] = None
-        server_key_share: Optional[KeyShareEntry] = None
-        client_key_shares: dict[int, bytes] = {ks[0]: ks[1] for ks in peer_hello.key_share}
-
-        for group in self._supported_groups:
-            if group not in client_key_shares:
-                continue
-            client_data = client_key_shares[group]
-            if default_backend().mlkem_supported() and group in GROUP_TO_MLKEM:
-                client_ek = mlkem_public_key_from_bytes(group, client_data)
-                shared_key, mlkem_ct = client_ek.encapsulate()
-                server_key_share = (group, mlkem_ct)
-                break
-            elif default_backend().mlkem_supported() and group in HYBRID_MLKEM_GROUPS:
-                classical_group, mlkem_group = HYBRID_MLKEM_GROUPS[group]
-                classical_size = HYBRID_MLKEM_CLASSICAL_PK_SIZE[group]
-                mlkem_client_ek_bytes = client_data[:-classical_size]
-                classical_client_pk_bytes = client_data[-classical_size:]
-                if classical_group == Group.X25519:
-                    classical_priv = x25519.X25519PrivateKey.generate()
-                    classical_client_pub = x25519.X25519PublicKey.from_public_bytes(
-                        classical_client_pk_bytes
-                    )
-                    classical_ss = classical_priv.exchange(classical_client_pub)
-                    classical_server_pk = classical_priv.public_key().public_bytes(
-                        Encoding.Raw, PublicFormat.Raw
-                    )
-                else:
-                    classical_priv = ec.generate_private_key(
-                        GROUP_TO_CURVE[classical_group]()
-                    )
-                    classical_client_pub = ec.EllipticCurvePublicKey.from_encoded_point(
-                        GROUP_TO_CURVE[classical_group](), classical_client_pk_bytes
-                    )
-                    classical_ss = classical_priv.exchange(ec.ECDH(), classical_client_pub)
-                    classical_server_pk = classical_priv.public_key().public_bytes(
-                        Encoding.X962, PublicFormat.UncompressedPoint
-                    )
-                mlkem_client_ek = mlkem_public_key_from_bytes(
-                    mlkem_group, mlkem_client_ek_bytes
-                )
-                mlkem_ss, mlkem_ct = mlkem_client_ek.encapsulate()
-                shared_key = mlkem_ss + classical_ss
-                server_key_share = (group, mlkem_ct + classical_server_pk)
-                break
-            else:
-                peer_public_key = decode_public_key((group, client_data))
-                if isinstance(peer_public_key, x25519.X25519PublicKey):
-                    self._x25519_private_key = x25519.X25519PrivateKey.generate()
-                    shared_key = self._x25519_private_key.exchange(peer_public_key)
-                    server_key_share = encode_public_key(
-                        self._x25519_private_key.public_key()
-                    )
-                    break
-                elif isinstance(peer_public_key, x448.X448PublicKey):
-                    self._x448_private_key = x448.X448PrivateKey.generate()
-                    shared_key = self._x448_private_key.exchange(peer_public_key)
-                    server_key_share = encode_public_key(
-                        self._x448_private_key.public_key()
-                    )
-                    break
-                elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
-                    ec_private_key = ec.generate_private_key(
-                        GROUP_TO_CURVE[group]()
-                    )
-                    self._ec_private_keys.append(ec_private_key)
-                    shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
-                    server_key_share = encode_public_key(ec_private_key.public_key())
-                    break
-        assert shared_key is not None
-        assert server_key_share is not None
+        peer_key_shares = dict(peer_hello.key_share or [])
+        group = negotiate(
+            self._supported_groups,
+            list(peer_key_shares),
+            AlertHandshakeFailure("No supported key share"),
+        )
+        try:
+            shared_key, key_share = KeyExchange.respond(group, peer_key_shares[group])
+        except ValueError:
+            raise AlertIllegalParameter("ClientHello has an invalid key share")
 
         # send hello
         hello = ServerHello(
@@ -2199,7 +2192,7 @@ class Context:
             legacy_session_id=self.legacy_session_id,
             cipher_suite=cipher_suite,
             compression_method=compression_method,
-            key_share=server_key_share,
+            key_share=(group, key_share),
             pre_shared_key=pre_shared_key,
             supported_version=supported_version,
         )
