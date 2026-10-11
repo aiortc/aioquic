@@ -1983,6 +1983,8 @@ class Context:
         shared_key: Optional[bytes] = None
         try:
             for key_share in peer_hello.key_share:
+                if key_share[0] not in self._supported_groups:
+                    continue
                 peer_public_key = decode_public_key(key_share)
                 if isinstance(peer_public_key, x25519.X25519PublicKey):
                     self._x25519_private_key = x25519.X25519PrivateKey.generate()
