@@ -22,7 +22,13 @@ from aioquic.quic.connection import (
     stream_is_client_initiated,
     stream_is_unidirectional,
 )
-from aioquic.quic.events import DatagramFrameReceived, QuicEvent, StreamDataReceived
+from aioquic.quic.events import (
+    DatagramFrameReceived,
+    QuicEvent,
+    StopSendingReceived,
+    StreamDataReceived,
+    StreamReset,
+)
 from aioquic.quic.logger import QuicLoggerTrace
 
 logger = logging.getLogger("http3")
@@ -469,6 +475,10 @@ class H3Connection:
                     return self._receive_stream_data(event)
                 elif isinstance(event, DatagramFrameReceived):
                     return self._receive_datagram(event.data)
+                elif isinstance(event, StopSendingReceived):
+                    self._receive_stop_sending(event.stream_id)
+                elif isinstance(event, StreamReset):
+                    self._receive_stream_reset(event.stream_id)
             except ProtocolError as exc:
                 self._is_done = True
                 self._quic.close(
@@ -966,6 +976,24 @@ class H3Connection:
             DatagramReceived(data=data[buf.tell() :], stream_id=quarter_stream_id * 4)
         ]
 
+    def _receive_stop_sending(self, stream_id: int) -> None:
+        """
+        Handle the peer asking us to stop sending on a stream.
+        """
+        if stream_id in (
+            self._local_control_stream_id,
+            self._local_decoder_stream_id,
+            self._local_encoder_stream_id,
+        ):
+            raise ClosedCriticalStream("Stopping a critical stream is not allowed")
+
+        # The QUIC layer has already reset the sending part of the stream.
+        stream = self._stream.get(stream_id)
+        if stream is not None:
+            stream.sending_ended = True
+            if stream.is_ended():
+                self._stream.pop(stream_id)
+
     def _receive_stream_data(self, event: StreamDataReceived) -> list[H3Event]:
         stream_id = event.stream_id
         with self._get_or_create_stream(stream_id) as stream:
@@ -1329,6 +1357,36 @@ class H3Connection:
                 )
 
         return http_events
+
+    def _receive_stream_reset(self, stream_id: int) -> None:
+        """
+        Handle the peer resetting a stream.
+        """
+        if stream_id in (
+            self._peer_control_stream_id,
+            self._peer_decoder_stream_id,
+            self._peer_encoder_stream_id,
+        ):
+            raise ClosedCriticalStream("Resetting a critical stream is not allowed")
+
+        stream = self._stream.get(stream_id)
+
+        # Header blocks on the stream will not be decoded, let the peer's
+        # encoder know (RFC 9204 section 4.4.2).
+        if not stream_is_unidirectional(stream_id) or (
+            stream is not None and stream.stream_type == StreamType.PUSH
+        ):
+            decoder = self._decoder.cancel_stream(stream_id)
+            self._decoder_bytes_sent += len(decoder)
+            self._quic.send_stream_data(self._local_decoder_stream_id, decoder)
+
+        if stream is not None:
+            stream.blocked = False
+            stream.blocked_frame_size = None
+            stream.buffer = b""
+            stream.receiving_ended = True
+            if stream.is_ended():
+                self._stream.pop(stream_id)
 
     def _validate_settings(self, settings: dict[int, int]) -> None:
         for setting in [

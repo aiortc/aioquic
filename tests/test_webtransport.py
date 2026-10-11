@@ -277,6 +277,31 @@ class WebTransportTest(TestCase):
             # the stream is no longer tracked
             self.assertNotIn(stream_id, h3_server._stream)
 
+    def test_unidirectional_stream_reset(self):
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # Create session.
+            session_id = self._make_session(h3_client, h3_server)
+
+            # Send data on unidirectional stream, then reset it.
+            stream_id = h3_client.create_webtransport_stream(
+                session_id, is_unidirectional=True
+            )
+            quic_client.send_stream_data(stream_id, b"foo")
+            h3_transfer(quic_client, h3_server)
+            self.assertIn(stream_id, h3_server._stream)
+
+            quic_client.reset_stream(stream_id, error_code=0)
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+
+            # The stream is no longer tracked.
+            self.assertNotIn(stream_id, h3_server._stream)
+
     def test_datagram(self):
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,

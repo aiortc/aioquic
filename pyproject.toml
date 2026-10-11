@@ -28,7 +28,7 @@ classifiers = [
 dependencies = [
     "certifi",
     "cryptography>=43.0.0",
-    "pylsqpack>=0.3.3,<0.4.0",
+    "pylsqpack>=1.0.0,<2.0.0",
     "pyopenssl>=24",
     "service-identity>=24.1.0",
 ]
