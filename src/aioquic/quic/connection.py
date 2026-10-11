@@ -1968,6 +1968,11 @@ class QuicConnection:
             for cid in self._peer_cid_available
             if cid.sequence_number >= self._peer_retire_prior_to
         ]
+        self._peer_cid_sequence_numbers = set(
+            seq
+            for seq in self._peer_cid_sequence_numbers
+            if seq >= self._peer_retire_prior_to
+        )
         if (
             sequence_number >= self._peer_retire_prior_to
             and sequence_number not in self._peer_cid_sequence_numbers
