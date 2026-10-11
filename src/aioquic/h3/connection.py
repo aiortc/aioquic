@@ -1356,6 +1356,10 @@ class H3Connection:
                     )
                 )
 
+            # The stream may have ended while it was blocked.
+            if stream.is_ended():
+                self._stream.pop(stream_id)
+
         return http_events
 
     def _receive_stream_reset(self, stream_id: int) -> None:
