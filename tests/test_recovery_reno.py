@@ -200,6 +200,46 @@ class QuicPacketRecoveryRenoTest(TestCase):
         self.assertEqual(self.recovery._rtt_min, math.inf)
         self.assertEqual(self.recovery._rtt_smoothed, 0.0)
 
+    def test_on_ack_received_without_address_validation(self):
+        self.recovery.peer_completed_address_validation = False
+        self.recovery.on_packet_sent(
+            packet=ack_eliciting_packet(
+                epoch=tls.Epoch.INITIAL,
+                packet_type=QuicPacketType.INITIAL,
+                sent_time=0.0,
+            ),
+            space=self.INITIAL_SPACE,
+        )
+        self.recovery.on_loss_detection_timeout(now=0.2)
+        self.assertEqual(self.recovery._pto_count, 1)
+
+        # The PTO count is not reset by an INITIAL acknowledgment.
+        self.recovery.on_ack_received(
+            ack_rangeset=RangeSet([range(0, 1)]),
+            ack_delay=0.0,
+            now=0.3,
+            space=self.INITIAL_SPACE,
+        )
+        self.assertEqual(self.recovery._pto_count, 1)
+
+        # The PTO count is reset once the server validated the client's address.
+        self.recovery.peer_completed_address_validation = True
+        self.recovery.on_packet_sent(
+            packet=ack_eliciting_packet(
+                epoch=tls.Epoch.HANDSHAKE,
+                packet_type=QuicPacketType.HANDSHAKE,
+                sent_time=0.3,
+            ),
+            space=self.HANDSHAKE_SPACE,
+        )
+        self.recovery.on_ack_received(
+            ack_rangeset=RangeSet([range(0, 1)]),
+            ack_delay=0.0,
+            now=0.4,
+            space=self.HANDSHAKE_SPACE,
+        )
+        self.assertEqual(self.recovery._pto_count, 0)
+
     def test_on_packet_lost_crypto(self):
         packet = QuicSentPacket(
             epoch=tls.Epoch.INITIAL,
