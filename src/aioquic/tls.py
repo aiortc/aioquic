@@ -1435,20 +1435,17 @@ class Context:
                     input_buf,
                     output_buf[Epoch.INITIAL],
                     output_buf[Epoch.HANDSHAKE],
-                    output_buf[Epoch.ONE_RTT],
                 )
             else:
                 raise AlertUnexpectedMessage
         elif self.state == State.SERVER_EXPECT_CERTIFICATE:
             if message_type == HandshakeType.CERTIFICATE:
-                self._server_handle_certificate(input_buf, output_buf[Epoch.ONE_RTT])
+                self._server_handle_certificate(input_buf)
             else:
                 raise AlertUnexpectedMessage
         elif self.state == State.SERVER_EXPECT_CERTIFICATE_VERIFY:
             if message_type == HandshakeType.CERTIFICATE_VERIFY:
-                self._server_handle_certificate_verify(
-                    input_buf, output_buf[Epoch.ONE_RTT]
-                )
+                self._server_handle_certificate_verify(input_buf)
             else:
                 raise AlertUnexpectedMessage
         elif self.state == State.SERVER_EXPECT_FINISHED:
@@ -1832,7 +1829,7 @@ class Context:
             )
             self.new_session_ticket_cb(ticket)
 
-    def _server_expect_finished(self, onertt_buf: Buffer):
+    def _server_expect_finished(self) -> None:
         # anticipate client's FINISHED
         self._expected_verify_data = self.key_schedule.finished_verify_data(
             self._dec_key
@@ -1841,28 +1838,6 @@ class Context:
         push_finished(buf, Finished(verify_data=self._expected_verify_data))
         self.key_schedule.update_hash(buf.data)
 
-        # create a new session ticket
-        if (
-            self.new_session_ticket_cb is not None
-            and self._psk_key_exchange_mode is not None
-        ):
-            self._new_session_ticket = NewSessionTicket(
-                ticket_lifetime=86400,
-                ticket_age_add=struct.unpack("I", os.urandom(4))[0],
-                ticket_nonce=b"",
-                ticket=os.urandom(64),
-                max_early_data_size=self._max_early_data,
-            )
-
-            # send message
-            push_new_session_ticket(onertt_buf, self._new_session_ticket)
-
-            # notify application
-            ticket = self._build_session_ticket(
-                self._new_session_ticket, self.handshake_extensions
-            )
-            self.new_session_ticket_cb(ticket)
-
         self._set_state(State.SERVER_EXPECT_FINISHED)
 
     def _server_handle_hello(
@@ -1870,7 +1845,6 @@ class Context:
         input_buf: Buffer,
         initial_buf: Buffer,
         handshake_buf: Buffer,
-        onertt_buf: Buffer,
     ) -> None:
         peer_hello = pull_client_hello(input_buf)
 
@@ -2100,9 +2074,9 @@ class Context:
         if self._request_client_certificate:
             self._set_state(State.SERVER_EXPECT_CERTIFICATE)
         else:
-            self._server_expect_finished(onertt_buf)
+            self._server_expect_finished()
 
-    def _server_handle_certificate(self, input_buf: Buffer, output_buf: Buffer) -> None:
+    def _server_handle_certificate(self, input_buf: Buffer) -> None:
         certificate = pull_certificate(input_buf)
         self.key_schedule.update_hash(input_buf.data)
 
@@ -2110,18 +2084,16 @@ class Context:
             self._set_peer_certificate(certificate)
             self._set_state(State.SERVER_EXPECT_CERTIFICATE_VERIFY)
         else:
-            self._server_expect_finished(output_buf)
+            self._server_expect_finished()
 
-    def _server_handle_certificate_verify(
-        self, input_buf: Buffer, output_buf: Buffer
-    ) -> None:
+    def _server_handle_certificate_verify(self, input_buf: Buffer) -> None:
         verify = pull_certificate_verify(input_buf)
 
         # check signature
         self._check_certificate_verify_signature(verify)
 
         self.key_schedule.update_hash(input_buf.data)
-        self._server_expect_finished(output_buf)
+        self._server_expect_finished()
 
     def _server_handle_finished(self, input_buf: Buffer, output_buf: Buffer) -> None:
         finished = pull_finished(input_buf)
@@ -2139,6 +2111,29 @@ class Context:
             self.key_schedule.cipher_suite,
             self._dec_key,
         )
+
+        # Only send a session ticket once the client's FINISHED is received, as
+        # 1-RTT packets cannot be acknowledged before then (RFC 9001 section 4.5).
+        if (
+            self.new_session_ticket_cb is not None
+            and self._psk_key_exchange_mode is not None
+        ):
+            self._new_session_ticket = NewSessionTicket(
+                ticket_lifetime=86400,
+                ticket_age_add=struct.unpack("I", os.urandom(4))[0],
+                ticket_nonce=b"",
+                ticket=os.urandom(64),
+                max_early_data_size=self._max_early_data,
+            )
+
+            # send message
+            push_new_session_ticket(output_buf, self._new_session_ticket)
+
+            # notify application
+            ticket = self._build_session_ticket(
+                self._new_session_ticket, self.handshake_extensions
+            )
+            self.new_session_ticket_cb(ticket)
 
         self._set_state(State.SERVER_POST_HANDSHAKE)
 
