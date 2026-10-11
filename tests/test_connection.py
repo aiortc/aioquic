@@ -2220,6 +2220,48 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(cm.exception.frame_type, QuicFrameType.RESET_STREAM)
             self.assertEqual(cm.exception.reason_phrase, "Cannot change final size")
 
+    def test_handle_reset_stream_frame_flow_control(self):
+        stream_id = 0
+        reset_stream_data = (
+            encode_uint_var(stream_id)
+            + encode_uint_var(QuicErrorCode.NO_ERROR)
+            + encode_uint_var(8)
+        )
+        with client_and_server() as (client, server):
+            # client creates bidirectional stream
+            client.send_stream_data(stream_id=stream_id, data=b"hello")
+            consume_events(client)
+            used = client._local_max_data.used
+
+            # client receives RESET_STREAM at offset 8
+            client._handle_reset_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM,
+                Buffer(data=reset_stream_data),
+            )
+            self.assertEqual(client._local_max_data.used, used + 8)
+
+            # client receives the same RESET_STREAM again
+            client._handle_reset_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM,
+                Buffer(data=reset_stream_data),
+            )
+            self.assertEqual(client._local_max_data.used, used + 8)
+
+            # client receives data which was sent before the reset
+            client._handle_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.STREAM_BASE | 6,
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(0)
+                    + encode_uint_var(8)
+                    + b"01234567"
+                ),
+            )
+            self.assertEqual(client._local_max_data.used, used + 8)
+
     def test_handle_reset_stream_frame_over_max_data(self):
         stream_id = 0
         with client_and_server() as (client, server):
