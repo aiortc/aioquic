@@ -1983,6 +1983,27 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(client._peer_cid.sequence_number, 80)
             self.assertEqual(sequence_numbers(client._peer_cid_available), [])
 
+    def test_handle_new_connection_id_with_retire_prior_to_rotation(self):
+        with client_and_server() as (client, server):
+            for sequence_number in range(8, 108):
+                buf = new_connection_id(
+                    sequence_number=sequence_number, retire_prior_to=sequence_number
+                )
+
+                # client receives NEW_CONNECTION_ID
+                client._handle_new_connection_id_frame(
+                    client_receive_context(client),
+                    QuicFrameType.NEW_CONNECTION_ID,
+                    buf,
+                )
+
+                # Simulate the RETIRE_CONNECTION_ID frames being acknowledged.
+                client._retire_connection_ids.clear()
+
+            # Sequence numbers of retired CIDs are forgotten.
+            self.assertEqual(client._peer_cid.sequence_number, 107)
+            self.assertEqual(client._peer_cid_sequence_numbers, {107})
+
     def test_handle_excessive_new_connection_id_retires(self):
         with client_and_server() as (client, server):
             for i in range(25):
