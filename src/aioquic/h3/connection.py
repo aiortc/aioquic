@@ -200,8 +200,11 @@ def parse_settings(data: bytes) -> dict[int, int]:
     buf = Buffer(data=data)
     settings: dict[int, int] = {}
     while not buf.eof():
-        setting = buf.pull_uint_var()
-        value = buf.pull_uint_var()
+        try:
+            setting = buf.pull_uint_var()
+            value = buf.pull_uint_var()
+        except BufferReadError:
+            raise FrameError("Could not parse SETTINGS frame")
         if setting in RESERVED_SETTINGS:
             raise SettingsError("Setting identifier 0x%x is reserved" % setting)
         if setting in settings:
@@ -843,7 +846,10 @@ class H3Connection:
             )
         elif frame_type == FrameType.PUSH_PROMISE:
             frame_buf = Buffer(data=frame_data)
-            push_id = frame_buf.pull_uint_var()
+            try:
+                push_id = frame_buf.pull_uint_var()
+            except BufferReadError:
+                raise FrameError("Could not parse PUSH_PROMISE frame")
             headers = self._decode_headers(
                 stream.stream_id, frame_data[frame_buf.tell() :]
             )
