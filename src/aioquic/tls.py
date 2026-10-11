@@ -1670,7 +1670,10 @@ class Context:
                     == peer_public_key.curve.__class__
                 ):
                     shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
-        assert shared_key is not None
+        if shared_key is None:
+            raise AlertIllegalParameter(
+                "ServerHello has a key share we did not advertise"
+            )
 
         self.key_schedule.update_hash(input_buf.data)
         self.key_schedule.extract(shared_key)
@@ -1993,7 +1996,8 @@ class Context:
                 public_key = ec_private_key.public_key()
                 shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
                 break
-        assert shared_key is not None
+        if shared_key is None:
+            raise AlertHandshakeFailure("No supported key share")
 
         # send hello
         hello = ServerHello(

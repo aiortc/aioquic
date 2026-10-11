@@ -248,6 +248,15 @@ class ContextTest(TestCase):
             ),
         )
 
+    def test_client_bad_hello_key_share(self):
+        self.handshake_with_client_input_corruption(
+            # Mess with key share group.
+            lambda x: x[:54] + b"\xff\xff" + x[56:],
+            tls.AlertIllegalParameter(
+                "ServerHello has a key share we did not advertise"
+            ),
+        )
+
     def test_client_bad_hello_version(self):
         self.handshake_with_client_input_corruption(
             # Mess with supported version.
@@ -321,6 +330,16 @@ class ContextTest(TestCase):
         with self.assertRaises(tls.AlertHandshakeFailure) as cm:
             self._server_fail_hello(client, server)
         self.assertEqual(str(cm.exception), "No supported cipher suite")
+
+    def test_server_unsupported_group(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.GREASE]
+
+        server = self.create_server()
+
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            self._server_fail_hello(client, server)
+        self.assertEqual(str(cm.exception), "No supported key share")
 
     def test_server_unsupported_signature_algorithm(self):
         client = self.create_client()
