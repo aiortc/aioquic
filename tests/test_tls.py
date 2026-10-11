@@ -384,6 +384,17 @@ class ContextTest(TestCase):
             self._server_fail_hello(client, server)
         self.assertEqual(str(cm.exception), "No supported key share")
 
+    def test_server_unsupported_group_by_server(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP256R1]
+
+        server = self.create_server()
+        server._supported_groups = [tls.Group.SECP384R1]
+
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            self._server_fail_hello(client, server)
+        self.assertEqual(str(cm.exception), "No supported key share")
+
     def test_server_unsupported_signature_algorithm(self):
         client = self.create_client()
         client._signature_algorithms = [tls.SignatureAlgorithm.ED448]
@@ -739,6 +750,17 @@ class ContextTest(TestCase):
         server = self.create_server()
 
         self._handshake(client, server)
+
+    def test_handshake_with_server_supported_groups(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP256R1, tls.Group.SECP384R1]
+        server = self.create_server()
+        server._supported_groups = [tls.Group.SECP384R1]
+
+        self._handshake(client, server)
+
+        # The server skipped the key share for a group it does not support.
+        self.assertEqual(server._ec_private_keys[0].curve.name, "secp384r1")
 
     def test_handshake_with_x25519(self):
         client = self.create_client()
