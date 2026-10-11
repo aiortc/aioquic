@@ -222,6 +222,9 @@ class WebTransportTest(TestCase):
                 ],
             )
 
+            # the stream is no longer tracked
+            self.assertNotIn(stream_id, h3_server._stream)
+
     def test_unidirectional_stream_fragmented_frame(self):
         with h3_fake_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
@@ -270,6 +273,9 @@ class WebTransportTest(TestCase):
                     ),
                 ],
             )
+
+            # the stream is no longer tracked
+            self.assertNotIn(stream_id, h3_server._stream)
 
     def test_datagram(self):
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
