@@ -317,6 +317,28 @@ class H3ConnectionTest(TestCase):
         self.assertIsNone(quic_server.closed)
         self.assertEqual(h3_server.received_settings, DUMMY_SETTINGS)
 
+    def test_handle_control_frame_settings_truncated(self):
+        """
+        We should reject a SETTINGS frame which ends in the middle of a setting.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.CONTROL)
+                + encode_frame(FrameType.SETTINGS, b"\x01"),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (ErrorCode.H3_FRAME_ERROR, "Could not parse SETTINGS frame"),
+        )
+
     def test_handle_control_frame_unknown_before_settings(self):
         """
         An unknown frame does not satisfy the requirement for SETTINGS to be
@@ -915,6 +937,27 @@ class H3ConnectionTest(TestCase):
         self.assertEqual(
             quic_server.closed,
             (ErrorCode.H3_FRAME_UNEXPECTED, "Clients must not send PUSH_PROMISE"),
+        )
+
+    def test_handle_request_frame_push_promise_truncated(self):
+        """
+        A client should reject a PUSH_PROMISE frame without a push ID.
+        """
+        quic_client = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=True)
+        )
+        h3_client = H3Connection(quic_client)
+
+        h3_client.handle_event(
+            StreamDataReceived(
+                stream_id=0,
+                data=encode_frame(FrameType.PUSH_PROMISE, b""),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_client.closed,
+            (ErrorCode.H3_FRAME_ERROR, "Could not parse PUSH_PROMISE frame"),
         )
 
     def test_handle_request_frame_wrong_frame_type(self):
