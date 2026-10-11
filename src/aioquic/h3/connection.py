@@ -648,7 +648,9 @@ class H3Connection:
 
             if end_stream:
                 stream.finish_sending()
+
             frame_data = self._encode_headers(stream_id, headers)
+
             # log frame
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
@@ -658,6 +660,7 @@ class H3Connection:
                         length=len(frame_data), headers=headers, stream_id=stream_id
                     ),
                 )
+
             # update state and send headers
             if not informational_response_headers:
                 if stream.headers_send_state == HeadersState.INITIAL:
