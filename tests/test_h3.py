@@ -1642,6 +1642,19 @@ class H3ConnectionTest(TestCase):
                 end_stream=False,
             )
 
+    def test_send_push_promise_from_client(self):
+        """
+        Clients cannot send a push promise.
+        """
+        quic_client = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=True)
+        )
+        h3_client = H3Connection(quic_client)
+
+        with self.assertRaises(RuntimeError) as cm:
+            h3_client.send_push_promise(stream_id=0, headers=[])
+        self.assertEqual(str(cm.exception), "Only servers may send a push promise.")
+
     def test_blocked_stream(self):
         quic_client = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=True)

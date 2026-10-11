@@ -1,6 +1,7 @@
 import binascii
 from unittest import TestCase, skipIf
 
+from aioquic._crypto import AEAD, HeaderProtection
 from aioquic.buffer import Buffer
 from aioquic.quic.crypto import (
     INITIAL_CIPHER_SUITE,
@@ -126,6 +127,16 @@ class CryptoTest(TestCase):
             version=PROTOCOL_VERSION,
         )
         return pair
+
+    def test_aead_invalid_cipher_name(self):
+        with self.assertRaises(CryptoError) as cm:
+            AEAD(b"aes-128-ccm", bytes(16), bytes(12))
+        self.assertEqual(str(cm.exception), "Invalid cipher name: aes-128-ccm")
+
+    def test_aead_invalid_iv_length(self):
+        with self.assertRaises(CryptoError) as cm:
+            AEAD(b"aes-128-gcm", bytes(16), bytes(8))
+        self.assertEqual(str(cm.exception), "Invalid iv length")
 
     def test_derive_key_iv_hp(self):
         # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.1
@@ -337,6 +348,11 @@ class CryptoTest(TestCase):
             SHORT_SERVER_PACKET_NUMBER,
         )
         self.assertEqual(packet, SHORT_SERVER_ENCRYPTED_PACKET)
+
+    def test_header_protection_invalid_cipher_name(self):
+        with self.assertRaises(CryptoError) as cm:
+            HeaderProtection(b"aes-128-cbc", bytes(16))
+        self.assertEqual(str(cm.exception), "Invalid cipher name: aes-128-cbc")
 
     def test_key_update(self):
         pair1 = self.create_crypto(is_client=True)

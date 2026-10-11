@@ -288,7 +288,8 @@ class QuicLogger:
         return trace
 
     def end_trace(self, trace: QuicLoggerTrace) -> None:
-        assert trace in self._traces, "QuicLoggerTrace does not belong to QuicLogger"
+        if trace not in self._traces:
+            raise ValueError("QuicLoggerTrace does not belong to QuicLogger")
 
     def to_dict(self) -> dict[str, Any]:
         """

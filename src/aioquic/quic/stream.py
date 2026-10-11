@@ -341,8 +341,10 @@ class QuicStreamSender:
         """
         Write some data bytes to the QUIC stream.
         """
-        assert self._buffer_fin is None, "cannot call write() after FIN"
-        assert self._reset_error_code is None, "cannot call write() after reset()"
+        if self._buffer_fin is not None:
+            raise RuntimeError("Cannot send data after FIN")
+        if self._reset_error_code is not None:
+            raise RuntimeError("Cannot send data after the stream was reset")
         size = len(data)
 
         if size:

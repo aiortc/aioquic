@@ -28,6 +28,15 @@ class QuicLoggerTest(TestCase):
             {"qlog_format": "JSON", "qlog_version": "0.3", "traces": []},
         )
 
+    def test_end_trace_unknown(self):
+        logger = QuicLogger()
+        trace = QuicLogger().start_trace(is_client=True, odcid=bytes(8))
+        with self.assertRaises(ValueError) as cm:
+            logger.end_trace(trace)
+        self.assertEqual(
+            str(cm.exception), "QuicLoggerTrace does not belong to QuicLogger"
+        )
+
     def test_single_trace(self):
         logger = QuicLogger()
         trace = logger.start_trace(is_client=True, odcid=bytes(8))

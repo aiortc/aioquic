@@ -507,12 +507,15 @@ class H3Connection:
         If there are not available push IDs, an
         :class:`~aioquic.h3.exceptions.NoAvailablePushIDError` exception is raised.
 
+        If called by a client, a :class:`RuntimeError` exception is raised.
+
         .. aioquic_transmit::
 
         :param stream_id: The stream ID on which to send the data.
         :param headers: The HTTP request headers for this push.
         """
-        assert not self._is_client, "Only servers may send a push promise."
+        if self._is_client:
+            raise RuntimeError("Only servers may send a push promise.")
 
         # check stream ID is valid
         if not stream_is_request_response(stream_id):
