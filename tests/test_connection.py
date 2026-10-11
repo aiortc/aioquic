@@ -342,6 +342,26 @@ class QuicConnectionTest(TestCase):
             server_log = server.configuration.quic_logger.to_dict()
             self.assertGreater(len(server_log["traces"][0]["events"]), 20)
 
+    def test_connect_as_server(self):
+        server = create_standalone_server(self)
+
+        with self.assertRaises(RuntimeError) as cm:
+            server.connect(CLIENT_ADDR, now=time.time())
+        self.assertEqual(
+            str(cm.exception),
+            "connect() can only be called for clients and a single time",
+        )
+
+    def test_connect_twice(self):
+        client = create_standalone_client(self)
+
+        with self.assertRaises(RuntimeError) as cm:
+            client.connect(SERVER_ADDR, now=time.time())
+        self.assertEqual(
+            str(cm.exception),
+            "connect() can only be called for clients and a single time",
+        )
+
     def test_connect_with_alpn(self):
         with client_and_server(
             client_options={"alpn_protocols": ["h3", "hq-interop"]},
@@ -911,6 +931,64 @@ class QuicConnectionTest(TestCase):
             self.assertAlmostEqual(server.get_timer(), 60.625)  # idle timeout
             self.assertSentPackets(server, [0, 0, 0])
             self.assertEvents(server, [])
+
+    def test_init_with_invalid_arguments(self):
+        def server_configuration(**kwargs):
+            configuration = QuicConfiguration(is_client=False, **kwargs)
+            configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+            return configuration
+
+        for configuration, kwargs, message in [
+            (
+                QuicConfiguration(is_client=True, max_datagram_size=1000),
+                {},
+                "The smallest allowed maximum datagram size is 1200 bytes",
+            ),
+            (
+                QuicConfiguration(is_client=True),
+                {"original_destination_connection_id": bytes(8)},
+                "Cannot set original_destination_connection_id for a client",
+            ),
+            (
+                QuicConfiguration(is_client=True),
+                {"retry_source_connection_id": bytes(8)},
+                "Cannot set retry_source_connection_id for a client",
+            ),
+            (
+                server_configuration(),
+                {
+                    "original_destination_connection_id": bytes(8),
+                    "token_handler": lambda token: None,
+                },
+                "Cannot set `token_handler` for a server",
+            ),
+            (
+                server_configuration(token=b"token"),
+                {"original_destination_connection_id": bytes(8)},
+                "Cannot set `configuration.token` for a server",
+            ),
+            (
+                QuicConfiguration(is_client=False),
+                {"original_destination_connection_id": bytes(8)},
+                "SSL certificate is required for a server",
+            ),
+            (
+                QuicConfiguration(
+                    is_client=False, certificate=server_configuration().certificate
+                ),
+                {"original_destination_connection_id": bytes(8)},
+                "SSL private key is required for a server",
+            ),
+            (
+                server_configuration(),
+                {},
+                "original_destination_connection_id is required for a server",
+            ),
+        ]:
+            with self.subTest(message=message):
+                with self.assertRaises(ValueError) as cm:
+                    QuicConnection(configuration=configuration, **kwargs)
+                self.assertEqual(str(cm.exception), message)
 
     def test_initial_that_is_too_small(self):
         """
@@ -1489,6 +1567,15 @@ class QuicConnectionTest(TestCase):
             now=time.time(),
         )
         self.assertEqual(drop(client), 0)
+
+    def test_request_key_update_before_handshake(self):
+        client = create_standalone_client(self)
+
+        with self.assertRaises(RuntimeError) as cm:
+            client.request_key_update()
+        self.assertEqual(
+            str(cm.exception), "Cannot change key before handshake completes"
+        )
 
     def test_handle_ack_frame_ecn(self):
         client = create_standalone_client(self)

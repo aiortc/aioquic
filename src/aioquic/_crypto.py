@@ -25,8 +25,12 @@ class AEAD:
     _aead: Union[aead.AESGCM, aead.ChaCha20Poly1305]
 
     def __init__(self, cipher_name: bytes, key: bytes, iv: bytes) -> None:
-        assert cipher_name in (b"aes-128-gcm", b"aes-256-gcm", b"chacha20-poly1305")
-        assert len(iv) == AEAD_NONCE_LENGTH
+        if cipher_name not in (b"aes-128-gcm", b"aes-256-gcm", b"chacha20-poly1305"):
+            raise CryptoError(
+                f"Invalid cipher name: {cipher_name.decode(errors='replace')}"
+            )
+        if len(iv) != AEAD_NONCE_LENGTH:
+            raise CryptoError("Invalid iv length")
 
         if cipher_name == b"chacha20-poly1305":
             self._aead = aead.ChaCha20Poly1305(key)
@@ -59,7 +63,10 @@ class HeaderProtection:
     _encryptor: CipherContext
 
     def __init__(self, cipher_name: bytes, key: bytes) -> None:
-        assert cipher_name in (b"aes-128-ecb", b"aes-256-ecb", b"chacha20")
+        if cipher_name not in (b"aes-128-ecb", b"aes-256-ecb", b"chacha20"):
+            raise CryptoError(
+                f"Invalid cipher name: {cipher_name.decode(errors='replace')}"
+            )
 
         self._is_chacha20 = cipher_name == b"chacha20"
         if self._is_chacha20:

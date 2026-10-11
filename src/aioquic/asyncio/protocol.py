@@ -140,7 +140,8 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         """
         Wait for the TLS handshake to complete.
         """
-        assert self._connected_waiter is None, "already awaiting connected"
+        if self._connected_waiter is not None:
+            raise RuntimeError("Already awaiting connected")
         if not self._connected:
             self._connected_waiter = self._loop.create_future()
             await asyncio.shield(self._connected_waiter)

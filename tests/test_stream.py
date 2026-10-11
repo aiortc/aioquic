@@ -811,3 +811,21 @@ class QuicStreamTest(TestCase):
         self.assertFalse(stream.sender.reset_pending)
         self.assertTrue(stream.sender.buffer_is_empty)
         self.assertTrue(stream.sender.is_finished)
+
+    def test_sender_write_after_fin(self):
+        stream = QuicStream()
+        stream.sender.write(b"data", end_stream=True)
+
+        with self.assertRaises(RuntimeError) as cm:
+            stream.sender.write(b"more")
+        self.assertEqual(str(cm.exception), "Cannot send data after FIN")
+
+    def test_sender_write_after_reset(self):
+        stream = QuicStream()
+        stream.sender.reset(QuicErrorCode.NO_ERROR)
+
+        with self.assertRaises(RuntimeError) as cm:
+            stream.sender.write(b"data")
+        self.assertEqual(
+            str(cm.exception), "Cannot send data after the stream was reset"
+        )

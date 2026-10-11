@@ -527,6 +527,25 @@ class HighLevelTest(TestCase):
         server.close()
 
     @asynctest
+    async def test_wait_connected_twice(self) -> None:
+        configuration = QuicConfiguration(is_client=True, idle_timeout=5)
+        configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+        async with connect(
+            self.server_host,
+            self.bogus_port,
+            configuration=configuration,
+            wait_connected=False,
+        ) as client:
+            waiter = asyncio.ensure_future(client.wait_connected())
+            await asyncio.sleep(0)
+
+            with self.assertRaises(RuntimeError) as cm:
+                await client.wait_connected()
+            self.assertEqual(str(cm.exception), "Already awaiting connected")
+
+            waiter.cancel()
+
+    @asynctest
     async def test_combined_key(self) -> None:
         config1 = QuicConfiguration()
         config2 = QuicConfiguration()
