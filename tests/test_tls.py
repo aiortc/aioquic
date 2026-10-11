@@ -464,7 +464,7 @@ class ContextTest(TestCase):
         # Handle client hello.
         #
         # Send server hello, encrypted extensions, certificate, certificate verify,
-        # finished, (session ticket).
+        # finished.
         server_buf = create_buffers()
         server.handle_message(server_input, server_buf)
         self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
@@ -475,7 +475,7 @@ class ContextTest(TestCase):
         reset_buffers(server_buf)
 
         # Handle server hello, encrypted extensions, certificate, certificate verify,
-        # finished, (session ticket).
+        # finished.
         #
         # Send finished.
         client.handle_message(client_input, client_buf)
@@ -485,10 +485,21 @@ class ContextTest(TestCase):
         reset_buffers(client_buf)
 
         # Handle finished.
+        #
+        # Send (session ticket).
         server.handle_message(server_input, server_buf)
         self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
         client_input = merge_buffers(server_buf)
-        self.assertEqual(len(client_input), 0)
+        if server.new_session_ticket_cb is None:
+            self.assertEqual(len(client_input), 0)
+        else:
+            self.assertEqual(len(client_input), 89)
+        reset_buffers(server_buf)
+
+        # Handle (session ticket).
+        client.handle_message(client_input, client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+        self.assertEqual(len(merge_buffers(client_buf)), 0)
 
         # check keys match
         self.assertEqual(client._dec_key, server._enc_key)

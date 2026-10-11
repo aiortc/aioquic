@@ -1022,6 +1022,68 @@ class QuicConnectionTest(TestCase):
         # Look for the drop event.
         self.assertPacketDropped(server, "initial_packet_datagram_too_small")
 
+    def test_connect_with_lost_client_finished_and_session_ticket(self):
+        """
+        Check the server does not send a session ticket before the client's
+        FINISHED is received, as 1-RTT packets cannot be acknowledged until then.
+        """
+        client_tickets = []
+        ticket_store = SessionTicketStore()
+
+        with client_and_server(
+            client_kwargs={"session_ticket_handler": client_tickets.append},
+            handshake=False,
+            server_kwargs={"session_ticket_handler": ticket_store.add},
+        ) as (client, server):
+            # Client sends INITIAL.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+
+            # Server receives INITIAL, sends INITIAL + HANDSHAKE.
+            now += TICK
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertSentPackets(server, [1, 2, 0])
+
+            # Client receives INITIAL + HANDSHAKE, sends FINISHED which is lost.
+            now += TICK
+            for data, addr in items:
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            lost_items = client.datagrams_to_send(now=now)
+
+            # Server's PTO fires, it retransmits HANDSHAKE.
+            now = server.get_timer()
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+
+            # No session ticket has been issued or sent.
+            self.assertEqual(ticket_store.tickets, {})
+            self.assertFalse(
+                any(
+                    packet.is_crypto_packet
+                    for packet in server._spaces[
+                        tls.Epoch.ONE_RTT
+                    ].sent_packets.values()
+                )
+            )
+
+            # Server receives FINISHED, sends session ticket.
+            now += TICK
+            for data, addr in lost_items:
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+            self.assertEqual(len(ticket_store.tickets), 1)
+
+            # Client receives session ticket.
+            now += TICK
+            for data, addr in server.datagrams_to_send(now=now):
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            self.assertEqual(len(client_tickets), 1)
+            self.assertEqual(
+                client_tickets[0].ticket, list(ticket_store.tickets.keys())[0]
+            )
+
     def test_connect_with_no_crypto_frame(self):
         def patch(client):
             """
@@ -1204,9 +1266,15 @@ class QuicConnectionTest(TestCase):
             server_kwargs={"session_ticket_handler": ticket_store.add},
             server_patch=patch,
         ) as (client, server):
-            # check handshake failed
-            event = client.next_event()
-            self.assertIsNone(event)
+            # The client rejects the session ticket.
+            self.assertEqual(
+                client._close_event,
+                events.ConnectionTerminated(
+                    error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="Invalid max_early_data value 12345",
+                ),
+            )
 
     def test_change_connection_id(self):
         with client_and_server() as (client, server):
