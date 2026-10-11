@@ -1588,7 +1588,11 @@ class Context:
             )
 
             # serialize hello without binder
-            tmp_buf = Buffer(capacity=1024)
+            #
+            # The hello can be larger than any fixed size, e.g. with a large
+            # session ticket, and it is later written to `output_buf`, so size
+            # this buffer after the space left in `output_buf`.
+            tmp_buf = Buffer(capacity=output_buf.capacity - output_buf.tell())
             push_client_hello(tmp_buf, hello)
 
             # calculate binder
