@@ -311,8 +311,10 @@ class QuicPacketRecovery:
 
         self._detect_loss(now=now, space=space)
 
-        # reset PTO count
-        self._pto_count = 0
+        # Reset the PTO count, unless the client is not yet certain the server
+        # has validated its address (RFC 9002 section 6.2.1).
+        if self.peer_completed_address_validation:
+            self._pto_count = 0
 
         if self._quic_logger is not None:
             self._log_metrics_updated(log_rtt=log_rtt)
