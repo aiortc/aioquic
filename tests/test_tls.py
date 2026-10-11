@@ -42,8 +42,9 @@ from aioquic.tls import (
     verify_certificate,
 )
 from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, mlkem, x25519
 
 from .utils import (
     SERVER_CACERTFILE,
@@ -101,9 +102,9 @@ def corrupt_hello_version(data: bytes) -> bytes:
 
 def create_buffers():
     return {
-        tls.Epoch.INITIAL: Buffer(capacity=4096),
-        tls.Epoch.HANDSHAKE: Buffer(capacity=4096),
-        tls.Epoch.ONE_RTT: Buffer(capacity=4096),
+        tls.Epoch.INITIAL: Buffer(capacity=16384),
+        tls.Epoch.HANDSHAKE: Buffer(capacity=16384),
+        tls.Epoch.ONE_RTT: Buffer(capacity=16384),
     }
 
 
@@ -116,11 +117,70 @@ def reset_buffers(buffers):
         buffers[k].seek(0)
 
 
+def respond_ecdh(curve, client_key_share):
+    """
+    Return the shared secret and the server's key share for an ECDH group.
+    """
+    private_key = ec.generate_private_key(curve())
+    shared_secret = private_key.exchange(
+        ec.ECDH(),
+        ec.EllipticCurvePublicKey.from_encoded_point(curve(), client_key_share),
+    )
+    return (
+        shared_secret,
+        private_key.public_key().public_bytes(
+            serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+        ),
+    )
+
+
+def respond_mlkem(public_key_class, client_key_share):
+    """
+    Return the shared secret and the server's key share for an ML-KEM group.
+    """
+    return public_key_class.from_public_bytes(client_key_share).encapsulate()
+
+
+def respond_x25519(client_key_share):
+    """
+    Return the shared secret and the server's key share for X25519.
+    """
+    private_key = x25519.X25519PrivateKey.generate()
+    shared_secret = private_key.exchange(
+        x25519.X25519PublicKey.from_public_bytes(client_key_share)
+    )
+    return (
+        shared_secret,
+        private_key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        ),
+    )
+
+
+# draft-ietf-tls-ecdhe-mlkem section 4: the components of the hybrid groups,
+# in the order of concatenation, with their client and server key share sizes.
+HYBRID_GROUP_COMPONENTS = {
+    tls.Group.SECP256R1MLKEM768: [
+        (65, 65, partial(respond_ecdh, ec.SECP256R1)),
+        (1184, 1088, partial(respond_mlkem, mlkem.MLKEM768PublicKey)),
+    ],
+    tls.Group.SECP384R1MLKEM1024: [
+        (97, 97, partial(respond_ecdh, ec.SECP384R1)),
+        (1568, 1568, partial(respond_mlkem, mlkem.MLKEM1024PublicKey)),
+    ],
+    tls.Group.X25519MLKEM768: [
+        (1184, 1088, partial(respond_mlkem, mlkem.MLKEM768PublicKey)),
+        (32, 32, respond_x25519),
+    ],
+}
+
+
 class ContextTest(TestCase):
     def assertClientHello(self, data: bytes):
         self.assertEqual(data[0], tls.HandshakeType.CLIENT_HELLO)
         self.assertGreaterEqual(len(data), 189)
-        self.assertLessEqual(len(data), 564)
+        # ML-KEM key shares (up to ~7500 bytes) expand the ClientHello significantly
+        self.assertLessEqual(len(data), 10000)
 
     def create_client(
         self, alpn_protocols=None, cadata=None, cafile=SERVER_CACERTFILE, **kwargs
@@ -397,7 +457,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 587)
-        self.assertLessEqual(len(client_input), 2316)
+        self.assertLessEqual(len(client_input), 5000)
 
         reset_buffers(server_buf)
 
@@ -462,7 +522,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 587)
-        self.assertLessEqual(len(client_input), 2316)
+        self.assertLessEqual(len(client_input), 5000)
 
         reset_buffers(server_buf)
 
@@ -520,7 +580,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 587)
-        self.assertLessEqual(len(client_input), 2316)
+        self.assertLessEqual(len(client_input), 5000)
 
         reset_buffers(server_buf)
 
@@ -698,6 +758,241 @@ class ContextTest(TestCase):
         except UnsupportedAlgorithm as exc:
             self.skipTest(str(exc))
 
+    def _skip_if_mlkem_unsupported(self):
+        if not default_backend().mlkem_supported():
+            self.skipTest("ML-KEM not supported by backend")
+
+    def test_handshake_with_mlkem768(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.MLKEM768]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_mlkem1024(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.MLKEM1024]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_x25519mlkem768(self):
+        self._skip_if_mlkem_unsupported()
+        if not default_backend().x25519_supported():
+            self.skipTest("X25519 not supported by backend")
+        client = self.create_client()
+        client._supported_groups = [tls.Group.X25519MLKEM768]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_secp256r1mlkem768(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP256R1MLKEM768]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_secp384r1mlkem1024(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP384R1MLKEM1024]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_supported_groups_default(self):
+        client = self.create_client()
+        server = self.create_server()
+        mlkem_groups = [
+            tls.Group.MLKEM768,
+            tls.Group.MLKEM1024,
+            tls.Group.SECP256R1MLKEM768,
+            tls.Group.SECP384R1MLKEM1024,
+        ]
+        if default_backend().mlkem_supported():
+            if default_backend().x25519_supported():
+                self.assertIn(tls.Group.X25519MLKEM768, client._supported_groups)
+                self.assertIn(tls.Group.X25519MLKEM768, server._supported_groups)
+            for group in mlkem_groups:
+                self.assertNotIn(group, client._supported_groups)
+                self.assertIn(group, server._supported_groups)
+        else:
+            for group in mlkem_groups + [tls.Group.X25519MLKEM768]:
+                self.assertNotIn(group, client._supported_groups)
+                self.assertNotIn(group, server._supported_groups)
+
+    def test_supported_groups_from_ssl_groups(self):
+        client = self.create_client(ssl_groups="secp384r1:P-256:secp384r1")
+        self.assertEqual(
+            client._supported_groups, [tls.Group.SECP384R1, tls.Group.SECP256R1]
+        )
+
+        with self.assertRaises(ValueError) as cm:
+            self.create_client(ssl_groups="secp256r1:bogus")
+        self.assertEqual(str(cm.exception), "Unknown TLS group: 'bogus'")
+
+    def test_key_exchange_hybrid_client(self):
+        """
+        Check the client side of hybrid key exchanges against an independent
+        implementation of draft-ietf-tls-ecdhe-mlkem.
+        """
+        self._skip_if_mlkem_unsupported()
+        for group, components in HYBRID_GROUP_COMPONENTS.items():
+            with self.subTest(group=group):
+                key_exchange = tls.KeyExchange(group)
+                self.assertEqual(
+                    len(key_exchange.key_share),
+                    sum(client_size for client_size, _, _ in components),
+                )
+
+                # Respond to each component of the client's key share.
+                shared_secret = b""
+                server_key_share = b""
+                offset = 0
+                for client_size, _, respond in components:
+                    component_secret, component_key_share = respond(
+                        key_exchange.key_share[offset : offset + client_size]
+                    )
+                    shared_secret += component_secret
+                    server_key_share += component_key_share
+                    offset += client_size
+
+                self.assertEqual(key_exchange.complete(server_key_share), shared_secret)
+
+    def test_key_exchange_hybrid_server(self):
+        self._skip_if_mlkem_unsupported()
+        for group, components in HYBRID_GROUP_COMPONENTS.items():
+            with self.subTest(group=group):
+                key_exchange = tls.KeyExchange(group)
+                shared_secret, server_key_share = tls.KeyExchange.respond(
+                    group, key_exchange.key_share
+                )
+                self.assertEqual(
+                    len(server_key_share),
+                    sum(server_size for _, server_size, _ in components),
+                )
+                self.assertEqual(key_exchange.complete(server_key_share), shared_secret)
+
+    def test_key_exchange_invalid_key_share(self):
+        self._skip_if_mlkem_unsupported()
+        for group in [tls.Group.MLKEM768, *HYBRID_GROUP_COMPONENTS]:
+            with self.subTest(group=group):
+                key_exchange = tls.KeyExchange(group)
+
+                # truncated client key share
+                with self.assertRaises(ValueError):
+                    tls.KeyExchange.respond(group, key_exchange.key_share[:-1])
+
+                # truncated server key share
+                _, server_key_share = tls.KeyExchange.respond(
+                    group, key_exchange.key_share
+                )
+                with self.assertRaises(ValueError):
+                    key_exchange.complete(server_key_share[:-1])
+
+    def test_handshake_with_invalid_client_key_share(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP256R1MLKEM768]
+        server = self.create_server()
+
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        server_input = merge_buffers(client_buf)
+
+        # Corrupt the encoding of the secp256r1 point which starts the key share.
+        key_share = client._key_exchanges[tls.Group.SECP256R1MLKEM768].key_share
+        self.assertEqual(key_share[0], 0x04)
+        server_input = server_input.replace(key_share, b"\x05" + key_share[1:])
+
+        with self.assertRaises(tls.AlertIllegalParameter) as cm:
+            server.handle_message(server_input, create_buffers())
+        self.assertEqual(str(cm.exception), "ClientHello has an invalid key share")
+
+    def test_handshake_with_no_supported_key_share(self):
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP256R1]
+        server = self.create_server(ssl_groups="secp384r1")
+
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        server_input = merge_buffers(client_buf)
+
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            server.handle_message(server_input, create_buffers())
+        self.assertEqual(str(cm.exception), "No supported key share")
+
+    def test_handshake_with_invalid_server_key_share(self):
+        # Corrupt the encoding of the secp256r1 point.
+        exception = self.handshake_with_server_key_share(
+            lambda key_share: (key_share[0], b"\x05" + key_share[1][1:])
+        )
+        self.assertEqual(str(exception), "ServerHello has an invalid key share")
+
+    def test_handshake_with_unexpected_server_key_share(self):
+        # Pretend the server chose a group the client did not offer.
+        exception = self.handshake_with_server_key_share(
+            lambda key_share: (tls.Group.SECP384R1, key_share[1])
+        )
+        self.assertEqual(
+            str(exception), "ServerHello has no key share for a group we offered"
+        )
+
+    def handshake_with_server_key_share(self, transform):
+        """
+        Perform a handshake where the ServerHello's key share is transformed,
+        and return the alert raised by the client.
+        """
+        client = self.create_client(ssl_groups="secp256r1")
+        server = self.create_server()
+
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        server_buf = create_buffers()
+        server.handle_message(merge_buffers(client_buf), server_buf)
+
+        hello = pull_server_hello(Buffer(data=server_buf[tls.Epoch.INITIAL].data))
+        hello.key_share = transform(hello.key_share)
+        client_input = Buffer(capacity=1024)
+        push_server_hello(client_input, hello)
+
+        with self.assertRaises(tls.AlertIllegalParameter) as cm:
+            client.handle_message(client_input.data, create_buffers())
+        return cm.exception
+
+    def test_key_exchange_unsupported_group(self):
+        with self.assertRaises(ValueError) as cm:
+            tls.KeyExchange(tls.Group.MLKEM512)
+        self.assertEqual(
+            str(cm.exception), "Unsupported key exchange group <Group.MLKEM512: 512>"
+        )
+
+    def test_mlkem768_client_hello_key_share_size(self):
+        self._skip_if_mlkem_unsupported()
+        client = self.create_client()
+        client._supported_groups = [tls.Group.MLKEM768]
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        data = client_buf[tls.Epoch.INITIAL].data
+        # MLKEM768 encapsulation key is 1184 bytes
+        self.assertGreater(len(data), 1184)
+
+    def test_hybrid_x25519mlkem768_client_hello_key_share_size(self):
+        self._skip_if_mlkem_unsupported()
+        if not default_backend().x25519_supported():
+            self.skipTest("X25519 not supported by backend")
+        client = self.create_client()
+        client._supported_groups = [tls.Group.X25519MLKEM768]
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        data = client_buf[tls.Epoch.INITIAL].data
+        # X25519 (32 bytes) + MLKEM768 (1184 bytes)
+        self.assertGreater(len(data), 32 + 1184)
+
     def test_session_ticket(self):
         client_tickets = []
         server_tickets = []
@@ -736,7 +1031,7 @@ class ContextTest(TestCase):
             )
 
         def second_handshake():
-            client = self.create_client()
+            client = self.create_client(ssl_groups="secp256r1")
             client.session_ticket = client_tickets[0]
 
             server = self.create_server()
@@ -813,7 +1108,7 @@ class ContextTest(TestCase):
             self.assertEqual(str(cm.exception), "PSK validation failed")
 
         def second_handshake_bad_pre_shared_key():
-            client = self.create_client()
+            client = self.create_client(ssl_groups="secp256r1")
             client.session_ticket = client_tickets[0]
 
             server = self.create_server()
@@ -850,8 +1145,32 @@ class ContextTest(TestCase):
         second_handshake_bad_binder()
         second_handshake_bad_pre_shared_key()
 
+    def test_large_session_ticket(self):
+        now = tls.utcnow()
+        ticket = bytes(range(256)) * 8
+
+        client = self.create_client()
+        client.session_ticket = tls.SessionTicket(
+            age_add=0,
+            cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
+            not_valid_after=now + datetime.timedelta(hours=1),
+            not_valid_before=now - datetime.timedelta(seconds=1),
+            resumption_secret=bytes(48),
+            server_name="localhost",
+            ticket=ticket,
+        )
+
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+
+        hello = pull_client_hello(Buffer(data=merge_buffers(client_buf)))
+        self.assertEqual(hello.pre_shared_key.identities[0][0], ticket)
+
 
 class TlsTest(TestCase):
+    def test_decode_public_key_unknown_group(self):
+        self.assertIsNone(tls.decode_public_key((tls.Group.GREASE, b"\x00")))
+
     def test_pull_block_incomplete_read(self):
         """
         If a block is not read until its end, an alert should be raised.

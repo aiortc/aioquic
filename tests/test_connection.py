@@ -36,6 +36,7 @@ from aioquic.quic.packet import (
 )
 from aioquic.quic.packet_builder import QuicDeliveryState, QuicPacketBuilder
 from aioquic.quic.recovery import QuicPacketPacer
+from cryptography.hazmat.backends import default_backend
 
 from .utils import (
     SERVER_CACERTFILE,
@@ -47,9 +48,11 @@ from .utils import (
 
 CLIENT_ADDR = ("1.2.3.4", 1234)
 CLIENT_HANDSHAKE_DATAGRAM_SIZES = [1200]
+# Classical groups only, so that the ClientHello fits in a single Initial packet.
+CLIENT_SSL_GROUPS = "secp256r1:secp384r1:x25519:x448"
 
 SERVER_ADDR = ("2.3.4.5", 4433)
-SERVER_INITIAL_DATAGRAM_SIZES = [1200, 1162]
+SERVER_INITIAL_DATAGRAM_SIZES = [1200, 1129]
 
 HANDSHAKE_COMPLETED_EVENTS = [
     events.HandshakeCompleted,
@@ -96,7 +99,9 @@ def consume_events(connection):
 def create_standalone_client(self, **client_options):
     client = QuicConnection(
         configuration=QuicConfiguration(
-            is_client=True, quic_logger=QuicLogger(), **client_options
+            is_client=True,
+            quic_logger=QuicLogger(),
+            **{"ssl_groups": CLIENT_SSL_GROUPS, **client_options},
         )
     )
     client._ack_delay = 0
@@ -155,7 +160,9 @@ def client_and_server(
     server_patch=lambda x: None,
 ):
     client_configuration = QuicConfiguration(
-        is_client=True, quic_logger=QuicLogger(), **client_options
+        is_client=True,
+        quic_logger=QuicLogger(),
+        **{"ssl_groups": CLIENT_SSL_GROUPS, **client_options},
     )
     client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
 
@@ -435,13 +442,60 @@ class QuicConnectionTest(TestCase):
                 tls.CipherSuite.CHACHA20_POLY1305_SHA256,
             )
 
+    def test_connect_with_default_groups(self):
+        with client_and_server(client_options={"ssl_groups": None}) as (
+            client,
+            server,
+        ):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+
+    @skipIf(not default_backend().mlkem_supported(), "ML-KEM is not supported")
+    def test_connect_with_mlkem_groups(self):
+        """
+        Check connection is established when the ClientHello carrying an
+        ML-KEM key share spans several INITIAL packets.
+        """
+        for ssl_groups in [
+            "MLKEM768",
+            "MLKEM1024",
+            "SECP256R1MLKEM768",
+            "SECP384R1MLKEM1024",
+            "X25519MLKEM768",
+        ]:
+            with (
+                self.subTest(ssl_groups=ssl_groups),
+                client_and_server(
+                    client_options={"ssl_groups": ssl_groups}, handshake=False
+                ) as (client, server),
+            ):
+                # client sends INITIAL
+                client.connect(SERVER_ADDR, now=time.time())
+                items = client.datagrams_to_send(now=time.time())
+                self.assertGreater(len(items), 1)
+
+                # RFC 9000 section 14.1: datagrams carrying INITIAL packets
+                # sent by the client are at least 1200 bytes.
+                for size in datagram_sizes(items):
+                    self.assertGreaterEqual(size, 1200)
+
+                # server receives INITIAL, handshake continues normally
+                for data, addr in items:
+                    server.receive_datagram(data, CLIENT_ADDR, now=time.time())
+                roundtrip_until_done(server, client)
+
+                # check handshake completed
+                self.check_handshake(client=client, server=server)
+
     def test_connect_with_custom_packet_size(self):
         """
         Check that the size of the initial QUIC packet corresponds to the
         packet size configuration.
         """
 
-        client_configuration = QuicConfiguration(is_client=True, max_datagram_size=1480)
+        client_configuration = QuicConfiguration(
+            is_client=True, max_datagram_size=1480, ssl_groups=CLIENT_SSL_GROUPS
+        )
         client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
 
         client = QuicConnection(configuration=client_configuration)

@@ -1466,6 +1466,7 @@ class QuicConnection:
             logger=self._logger,
             max_early_data=None if self._is_client else MAX_EARLY_DATA,
             server_name=self._configuration.server_name,
+            ssl_groups=self._configuration.ssl_groups,
             verify_mode=self._configuration.verify_mode,
         )
         self.tls.certificate = self._configuration.certificate

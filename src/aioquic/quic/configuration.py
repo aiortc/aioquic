@@ -118,6 +118,7 @@ class QuicConfiguration:
             QuicProtocolVersion.VERSION_2,
         ]
     )
+    ssl_groups: Optional[str] = None
     verify_mode: Optional[int] = None
 
     def load_cert_chain(
