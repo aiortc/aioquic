@@ -1802,6 +1802,18 @@ class H3ConnectionTest(TestCase):
         )
         h3_client = H3Connection(quic_client)
 
+        # Send request.
+        h3_client.send_headers(
+            stream_id=0,
+            headers=[
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":authority", b"localhost"),
+                (b":path", b"/"),
+            ],
+            end_stream=True,
+        )
+
         h3_client.handle_event(
             StreamDataReceived(
                 stream_id=3,
@@ -1865,6 +1877,9 @@ class H3ConnectionTest(TestCase):
                 ),
             ],
         )
+
+        # The stream is no longer tracked.
+        self.assertNotIn(0, h3_client._stream)
 
     def test_blocked_stream_reset(self):
         quic_client = FakeQuicConnection(
