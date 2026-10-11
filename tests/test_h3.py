@@ -1468,6 +1468,11 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
+            # push streams are no longer tracked
+            for push_stream_id in (push_stream_id_css, push_stream_id_js):
+                self.assertNotIn(push_stream_id, h3_client._stream)
+                self.assertNotIn(push_stream_id, h3_server._stream)
+
     def test_request_with_server_push_max_push_id(self):
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
@@ -1780,9 +1785,14 @@ class H3ConnectionTest(TestCase):
             h3_server = H3Connection(quic_server)
 
             quic_client.send_stream_data(
-                14, b"\xff\xff\xff\xff\xff\xff\xff\xfeGREASE is the word"
+                14,
+                b"\xff\xff\xff\xff\xff\xff\xff\xfeGREASE is the word",
+                end_stream=True,
             )
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
+
+            # the stream is no longer tracked
+            self.assertNotIn(14, h3_server._stream)
 
     def test_request_with_trailers(self):
         with h3_client_and_server() as (quic_client, quic_server):

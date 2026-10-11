@@ -17,7 +17,11 @@ from aioquic.h3.events import (
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import InvalidStreamTypeError, NoAvailablePushIDError
-from aioquic.quic.connection import QuicConnection, stream_is_unidirectional
+from aioquic.quic.connection import (
+    QuicConnection,
+    stream_is_client_initiated,
+    stream_is_unidirectional,
+)
 from aioquic.quic.events import DatagramFrameReceived, QuicEvent, StreamDataReceived
 from aioquic.quic.logger import QuicLoggerTrace
 
@@ -658,7 +662,15 @@ class H3Connection:
     @contextlib.contextmanager
     def _get_or_create_stream(self, stream_id: int) -> Generator[H3Stream]:
         if stream_id not in self._stream:
-            self._stream[stream_id] = H3Stream(stream_id)
+            stream = H3Stream(stream_id)
+            if stream_is_unidirectional(stream_id):
+                # A unidirectional stream only has one half, the other one is
+                # ended from the start.
+                if stream_is_client_initiated(stream_id) == self._is_client:
+                    stream.receiving_ended = True
+                else:
+                    stream.sending_ended = True
+            self._stream[stream_id] = stream
         stream = self._stream[stream_id]
         try:
             yield stream
