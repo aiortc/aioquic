@@ -262,6 +262,7 @@ class QuicStreamTest(TestCase):
             stream.receiver.handle_reset(final_size=4),
             StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
         )
+        self.assertEqual(stream.receiver.highest_offset, 4)
         self.assertTrue(stream.receiver.is_finished)
 
     def test_receiver_reset_after_fin(self):

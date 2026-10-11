@@ -72,7 +72,7 @@ class QuicStreamReceiver:
         if frame_end > self.highest_offset:
             self.highest_offset = frame_end
 
-        # once we are done receiving, data is either a duplicate or arrived
+        # if we were already done receiving, data is either a duplicate or arrived
         # after a reset, so there is nothing more to deliver
         if self.is_finished:
             return None
@@ -125,6 +125,8 @@ class QuicStreamReceiver:
         """
         if self._final_size is not None and final_size != self._final_size:
             raise FinalSizeError("Cannot change final size")
+        if final_size > self.highest_offset:
+            self.highest_offset = final_size
 
         # if we were already done receiving, there is nothing to report
         if self.is_finished:
