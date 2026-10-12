@@ -1,6 +1,25 @@
 Changelog
 =========
 
+1.6.1
+-----
+
+* Fix handshakes stalling under packet loss:
+
+  * Install the client's Handshake write key on receiving the ServerHello, as
+    :rfc:`8446` and :rfc:`9001` allow. If the server's EncryptedExtensions
+    was lost, the client could not acknowledge the server's Handshake
+    packets, which deadlocked against servers whose probes carry no data.
+  * Retransmit the oldest unacknowledged packet's data when the PTO fires,
+    instead of sending a bare PING, as :rfc:`9002` recommends. Lost data such
+    as HANDSHAKE_DONE or a request's STREAM frame no longer waits for the
+    probe's acknowledgement to be retransmitted.
+
+* Stop treating a PTO expiry or a CRYPTO data retransmission as a congestion
+  event, as :rfc:`9002` requires.
+* Fail pending requests and WebSocket reads in the `http3_client` example when
+  the connection terminates, instead of waiting indefinitely.
+
 1.6.0
 -----
 
