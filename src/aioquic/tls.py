@@ -252,6 +252,11 @@ def verify_certificate(
                     certificate, server_name
                 )
 
+        except ValueError as exc:
+            # The certificate's extensions are only parsed when accessed.
+            raise AlertBadCertificate(
+                "Certificate extensions could not be parsed"
+            ) from exc
         except (
             service_identity.CertificateError,
             service_identity.VerificationError,
