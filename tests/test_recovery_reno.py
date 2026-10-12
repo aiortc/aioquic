@@ -8,15 +8,51 @@ from aioquic.quic.rangeset import RangeSet
 from aioquic.quic.recovery import QuicPacketRecovery, QuicPacketSpace
 
 
+def ack_eliciting_packet(
+    *, epoch: tls.Epoch, packet_type: QuicPacketType, sent_time: float
+) -> QuicSentPacket:
+    return QuicSentPacket(
+        epoch=epoch,
+        in_flight=True,
+        is_ack_eliciting=True,
+        is_crypto_packet=False,
+        packet_number=0,
+        packet_type=packet_type,
+        sent_bytes=1280,
+        sent_time=sent_time,
+    )
+
+
 def send_probe():
     pass
+
+
+def take_rtt_sample(recovery: QuicPacketRecovery, space: QuicPacketSpace) -> None:
+    """
+    Send a packet at 0.0 and receive its acknowledgment at 0.1, which gives a
+    PTO period of 0.3 without max_ack_delay.
+    """
+    recovery.on_packet_sent(
+        packet=ack_eliciting_packet(
+            epoch=tls.Epoch.INITIAL,
+            packet_type=QuicPacketType.INITIAL,
+            sent_time=0.0,
+        ),
+        space=space,
+    )
+    recovery.on_ack_received(
+        ack_rangeset=RangeSet([range(0, 1)]),
+        ack_delay=0.0,
+        now=0.1,
+        space=space,
+    )
 
 
 class QuicPacketRecoveryRenoTest(TestCase):
     def setUp(self):
         self.INITIAL_SPACE = QuicPacketSpace()
         self.HANDSHAKE_SPACE = QuicPacketSpace()
-        self.ONE_RTT_SPACE = QuicPacketSpace()
+        self.ONE_RTT_SPACE = QuicPacketSpace(is_application_data=True)
 
         self.recovery = QuicPacketRecovery(
             congestion_control_algorithm="reno",
@@ -33,6 +69,64 @@ class QuicPacketRecoveryRenoTest(TestCase):
 
     def test_discard_space(self):
         self.recovery.discard_space(self.INITIAL_SPACE)
+
+    def test_get_loss_detection_time_application_data(self):
+        take_rtt_sample(self.recovery, self.INITIAL_SPACE)
+
+        # The PTO is not armed before the handshake is confirmed.
+        self.recovery.on_packet_sent(
+            packet=ack_eliciting_packet(
+                epoch=tls.Epoch.ONE_RTT,
+                packet_type=QuicPacketType.ONE_RTT,
+                sent_time=1.0,
+            ),
+            space=self.ONE_RTT_SPACE,
+        )
+        self.assertIsNone(self.recovery.get_loss_detection_time())
+
+        # The PTO is armed once the handshake is confirmed, including max_ack_delay.
+        self.recovery.handshake_confirmed = True
+        self.recovery.on_packet_sent(
+            packet=ack_eliciting_packet(
+                epoch=tls.Epoch.ONE_RTT,
+                packet_type=QuicPacketType.ONE_RTT,
+                sent_time=2.0,
+            ),
+            space=self.ONE_RTT_SPACE,
+        )
+        self.assertAlmostEqual(self.recovery.get_loss_detection_time(), 2.325)
+
+    def test_get_loss_detection_time_handshake(self):
+        take_rtt_sample(self.recovery, self.INITIAL_SPACE)
+
+        # The PTO does not include max_ack_delay.
+        self.recovery.on_packet_sent(
+            packet=ack_eliciting_packet(
+                epoch=tls.Epoch.HANDSHAKE,
+                packet_type=QuicPacketType.HANDSHAKE,
+                sent_time=1.0,
+            ),
+            space=self.HANDSHAKE_SPACE,
+        )
+        self.assertAlmostEqual(self.recovery.get_loss_detection_time(), 1.3)
+
+    def test_get_loss_detection_time_nothing_in_flight(self):
+        self.assertIsNone(self.recovery.get_loss_detection_time())
+
+    def test_get_loss_detection_time_without_address_validation(self):
+        self.recovery.peer_completed_address_validation = False
+        self.recovery.on_packet_sent(
+            packet=ack_eliciting_packet(
+                epoch=tls.Epoch.INITIAL,
+                packet_type=QuicPacketType.INITIAL,
+                sent_time=0.0,
+            ),
+            space=self.INITIAL_SPACE,
+        )
+        self.recovery.discard_space(self.INITIAL_SPACE)
+
+        # The client keeps the PTO armed with nothing in flight.
+        self.assertAlmostEqual(self.recovery.get_loss_detection_time(), 0.2)
 
     def test_on_ack_received_ack_eliciting(self):
         packet = QuicSentPacket(
