@@ -2974,6 +2974,44 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
         self.assertEqual(cm.exception.reason_phrase, "max_ack_delay must be < 2^14")
 
+    def test_parse_transport_parameters_with_bad_max_streams_bidi(self):
+        client = create_standalone_client(self)
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                initial_max_streams_bidi=STREAM_COUNT_MAX + 1,
+                original_destination_connection_id=client.original_destination_connection_id,
+            )
+        )
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(
+            cm.exception.reason_phrase, "initial_max_streams_bidi cannot exceed 2^60"
+        )
+
+    def test_parse_transport_parameters_with_bad_max_streams_uni(self):
+        client = create_standalone_client(self)
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                initial_max_streams_uni=STREAM_COUNT_MAX + 1,
+                original_destination_connection_id=client.original_destination_connection_id,
+            )
+        )
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(
+            cm.exception.reason_phrase, "initial_max_streams_uni cannot exceed 2^60"
+        )
+
     def test_parse_transport_parameters_with_bad_max_udp_payload_size(self):
         client = create_standalone_client(self)
 

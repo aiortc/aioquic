@@ -2809,6 +2809,14 @@ class QuicConnection:
                     frame_type=QuicFrameType.CRYPTO,
                     reason_phrase="max_ack_delay must be < 2^14",
                 )
+            for attr in ["initial_max_streams_bidi", "initial_max_streams_uni"]:
+                value = getattr(quic_transport_parameters, attr)
+                if value is not None and value > STREAM_COUNT_MAX:
+                    raise QuicConnectionError(
+                        error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                        frame_type=QuicFrameType.CRYPTO,
+                        reason_phrase=f"{attr} cannot exceed 2^60",
+                    )
             if quic_transport_parameters.max_udp_payload_size is not None and (
                 quic_transport_parameters.max_udp_payload_size
                 < SMALLEST_MAX_DATAGRAM_SIZE
