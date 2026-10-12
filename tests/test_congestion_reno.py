@@ -92,6 +92,16 @@ class RenoCongestionControlTest(TestCase):
             )
         self.assertEqual(self.reno.congestion_window, K_MINIMUM_WINDOW * 1280)
 
+    def test_persistent_congestion(self):
+        self.reno.on_packets_lost(
+            now=1.0, packets=[ack_eliciting_packet(sent_time=0.5)]
+        )
+
+        # The window collapses to the minimum and recovery ends.
+        self.reno.on_persistent_congestion()
+        self.assertEqual(self.reno.congestion_window, K_MINIMUM_WINDOW * 1280)
+        self.assertEqual(self.reno._congestion_recovery_start_time, 0.0)
+
     def test_rtt_increasing_exits_slow_start(self):
         # Get some low RTT samples.
         for i in range(10):

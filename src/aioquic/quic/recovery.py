@@ -12,6 +12,7 @@ from .rangeset import RangeSet
 K_PACKET_THRESHOLD = 3
 K_TIME_THRESHOLD = 9 / 8
 K_MICRO_SECOND = 0.000001
+K_PERSISTENT_CONGESTION_THRESHOLD = 3
 K_SECOND = 1.0
 
 
@@ -141,6 +142,7 @@ class QuicPacketRecovery:
 
         # loss detection
         self._pto_count = 0
+        self._rtt_first_sample_time = 0.0
         self._rtt_initial = initial_rtt
         self._rtt_initialized = False
         self._rtt_latest = 0.0
@@ -288,6 +290,7 @@ class QuicPacketRecovery:
                 self._rtt_latest -= ack_delay
 
             if not self._rtt_initialized:
+                self._rtt_first_sample_time = now
                 self._rtt_initialized = True
                 self._rtt_variance = latest_rtt / 2
                 self._rtt_smoothed = latest_rtt
@@ -390,7 +393,12 @@ class QuicPacketRecovery:
                 if space.loss_time is None or space.loss_time > packet_loss_time:
                     space.loss_time = packet_loss_time
 
-        self._on_packets_lost(now=now, packets=lost_packets, space=space)
+        self._on_packets_lost(
+            now=now,
+            packets=lost_packets,
+            persistent_congestion=self._in_persistent_congestion(packets=lost_packets),
+            space=space,
+        )
 
     def _get_loss_space(self) -> Optional[QuicPacketSpace]:
         loss_space = None
@@ -400,6 +408,43 @@ class QuicPacketRecovery:
             ):
                 loss_space = space
         return loss_space
+
+    def _in_persistent_congestion(self, *, packets: list[QuicSentPacket]) -> bool:
+        """
+        Check whether the loss of `packets` establishes persistent congestion
+        (RFC 9002 section 7.6.2).
+
+        The lost packets are a contiguous run of the sent packets, so a gap in
+        packet numbers means an intervening packet was acknowledged. It may
+        also have belonged to another space or been retransmitted on a PTO, in
+        which case we err on the side of not declaring persistent congestion.
+        """
+        if not self._rtt_initialized:
+            return False
+
+        duration = self.get_probe_timeout() * K_PERSISTENT_CONGESTION_THRESHOLD
+        previous_packet_number: int | None = None
+        start_time: float | None = None
+        for packet in packets:
+            # A gap in packet numbers ends the current period, as a packet sent
+            # in between may have been acknowledged.
+            if (
+                previous_packet_number is not None
+                and packet.packet_number != previous_packet_number + 1
+            ):
+                start_time = None
+            previous_packet_number = packet.packet_number
+
+            # Only ack-eliciting packets sent after the first RTT sample count.
+            if (
+                packet.is_ack_eliciting
+                and packet.sent_time > self._rtt_first_sample_time
+            ):
+                if start_time is None:
+                    start_time = packet.sent_time
+                elif packet.sent_time - start_time > duration:
+                    return True
+        return False
 
     def _log_metrics_updated(self, log_rtt=False) -> None:
         data: dict[str, Any] = self._cc.get_log_data()
@@ -419,7 +464,12 @@ class QuicPacketRecovery:
         )
 
     def _on_packets_lost(
-        self, *, now: float, packets: Iterable[QuicSentPacket], space: QuicPacketSpace
+        self,
+        *,
+        now: float,
+        packets: Iterable[QuicSentPacket],
+        persistent_congestion: bool = False,
+        space: QuicPacketSpace,
     ) -> None:
         lost_packets_cc = []
         for packet in packets:
@@ -449,6 +499,8 @@ class QuicPacketRecovery:
         # inform congestion controller
         if lost_packets_cc:
             self._cc.on_packets_lost(now=now, packets=lost_packets_cc)
+            if persistent_congestion:
+                self._cc.on_persistent_congestion()
             self._pacer.update_rate(
                 congestion_window=self._cc.congestion_window,
                 smoothed_rtt=self._rtt_smoothed,

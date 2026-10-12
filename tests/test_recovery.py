@@ -2,6 +2,7 @@ import math
 from unittest import TestCase
 
 from aioquic import tls
+from aioquic.quic.congestion.base import K_MINIMUM_WINDOW
 from aioquic.quic.packet import QuicPacketType
 from aioquic.quic.packet_builder import QuicSentPacket
 from aioquic.quic.rangeset import RangeSet
@@ -13,6 +14,21 @@ from aioquic.quic.recovery import (
 )
 
 from .utils import ack_eliciting_packet
+
+
+def send_one_rtt_packets(
+    recovery: QuicPacketRecovery, space: QuicPacketSpace, sent_times: dict[int, float]
+) -> None:
+    """
+    Send 1-RTT packets, given as a mapping of packet numbers to send times.
+    """
+    for packet_number, sent_time in sent_times.items():
+        recovery.on_packet_sent(
+            packet=ack_eliciting_packet(
+                packet_number=packet_number, sent_time=sent_time
+            ),
+            space=space,
+        )
 
 
 def send_probe():
@@ -343,3 +359,63 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(self.recovery.bytes_in_flight, 0)
         self.assertEqual(space.ack_eliciting_in_flight, 0)
         self.assertEqual(len(space.sent_packets), 0)
+
+    def test_on_packets_lost_persistent_congestion(self):
+        take_rtt_sample(self.recovery, self.INITIAL_SPACE)
+
+        # Packets 1 and 2 are lost, and sent further apart than the persistent
+        # congestion duration of 3 * (0.1 + 4 * 0.0375 + 0.025) = 0.825.
+        send_one_rtt_packets(
+            self.recovery, self.ONE_RTT_SPACE, {1: 1.0, 2: 2.0, 3: 2.1}
+        )
+        self.recovery.on_ack_received(
+            ack_rangeset=RangeSet([range(3, 4)]),
+            ack_delay=0.0,
+            now=2.2,
+            space=self.ONE_RTT_SPACE,
+        )
+        self.assertEqual(self.recovery.congestion_window, K_MINIMUM_WINDOW * 1280)
+
+    def test_on_packets_lost_persistent_congestion_acked_in_between(self):
+        take_rtt_sample(self.recovery, self.INITIAL_SPACE)
+
+        # Packets 1 and 3 are lost, but packet 2 was acknowledged.
+        send_one_rtt_packets(
+            self.recovery, self.ONE_RTT_SPACE, {1: 1.0, 2: 1.5, 3: 2.0, 4: 2.1}
+        )
+        self.recovery.on_ack_received(
+            ack_rangeset=RangeSet([range(2, 3), range(4, 5)]),
+            ack_delay=0.0,
+            now=2.2,
+            space=self.ONE_RTT_SPACE,
+        )
+        self.assertEqual(self.recovery.congestion_window, 7680)
+
+    def test_on_packets_lost_persistent_congestion_before_rtt_sample(self):
+        # Packets 0 and 1 are lost, but were sent before the first RTT sample.
+        send_one_rtt_packets(
+            self.recovery, self.ONE_RTT_SPACE, {0: 0.0, 1: 2.0, 2: 2.1}
+        )
+        self.recovery.on_ack_received(
+            ack_rangeset=RangeSet([range(2, 3)]),
+            ack_delay=0.0,
+            now=2.2,
+            space=self.ONE_RTT_SPACE,
+        )
+        self.assertEqual(self.recovery.congestion_window, 7040)
+
+    def test_on_packets_lost_persistent_congestion_short_period(self):
+        take_rtt_sample(self.recovery, self.INITIAL_SPACE)
+
+        # Packets 1 and 2 are lost, but sent within the persistent congestion
+        # duration.
+        send_one_rtt_packets(
+            self.recovery, self.ONE_RTT_SPACE, {1: 1.5, 2: 2.0, 3: 2.1}
+        )
+        self.recovery.on_ack_received(
+            ack_rangeset=RangeSet([range(3, 4)]),
+            ack_delay=0.0,
+            now=2.2,
+            space=self.ONE_RTT_SPACE,
+        )
+        self.assertEqual(self.recovery.congestion_window, 7040)

@@ -26,6 +26,7 @@ P = ParamSpec("P")
 def ack_eliciting_packet(
     *,
     epoch: tls.Epoch = tls.Epoch.ONE_RTT,
+    packet_number: int = 0,
     packet_type: QuicPacketType = QuicPacketType.ONE_RTT,
     sent_time: float,
 ) -> QuicSentPacket:
@@ -34,14 +35,14 @@ def ack_eliciting_packet(
     acknowledgment.
 
     It defaults to 1-RTT, as congestion controllers ignore the packet number
-    space. Its packet number is 0 and its size is 1280 bytes.
+    space. Its packet number defaults to 0 and its size is 1280 bytes.
     """
     return QuicSentPacket(
         epoch=epoch,
         in_flight=True,
         is_ack_eliciting=True,
         is_crypto_packet=False,
-        packet_number=0,
+        packet_number=packet_number,
         packet_type=packet_type,
         sent_bytes=1280,
         sent_time=sent_time,
