@@ -2135,6 +2135,146 @@ class H3ConnectionTest(TestCase):
         # The stream is no longer tracked.
         self.assertNotIn(0, h3_client._stream)
 
+    def test_blocked_stream_push_promise(self):
+        """
+        A PUSH_PROMISE whose header block is blocked must be resumed as a
+        PUSH_PROMISE, see RFC 9204 section 2.1.2.
+        """
+        quic_client = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=True)
+        )
+        h3_client = H3Connection(quic_client)
+
+        # Send request.
+        h3_client.send_headers(
+            stream_id=0,
+            headers=[
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":authority", b"localhost"),
+                (b":path", b"/"),
+            ],
+            end_stream=True,
+        )
+
+        # Receive a response ending with a PUSH_PROMISE which references
+        # dynamic table entries which have not been received yet.
+        self.assertEqual(
+            h3_client.handle_event(
+                StreamDataReceived(
+                    stream_id=0,
+                    data=binascii.unhexlify("01030000d90507000381d1d71011"),
+                    end_stream=True,
+                )
+            ),
+            [
+                HeadersReceived(
+                    headers=[(b":status", b"200")],
+                    stream_id=0,
+                    stream_ended=False,
+                )
+            ],
+        )
+
+        # Receive the dynamic table entries on the QPACK encoder stream.
+        self.assertEqual(
+            h3_client.handle_event(
+                StreamDataReceived(
+                    stream_id=3,
+                    data=binascii.unhexlify("023fe11fc086a0e41d139d09c1866075d6b9108f"),
+                    end_stream=False,
+                )
+            ),
+            [
+                PushPromiseReceived(
+                    headers=[
+                        (b":method", b"GET"),
+                        (b":scheme", b"https"),
+                        (b":authority", b"localhost"),
+                        (b":path", b"/app.css"),
+                    ],
+                    push_id=0,
+                    stream_id=0,
+                ),
+                DataReceived(data=b"", stream_id=0, stream_ended=True),
+            ],
+        )
+        self.assertIsNone(quic_client.closed)
+
+        # The stream is no longer tracked.
+        self.assertNotIn(0, h3_client._stream)
+
+    def test_blocked_stream_push_promise_then_data(self):
+        """
+        Frames following a blocked PUSH_PROMISE must be processed once it
+        is resumed.
+        """
+        quic_client = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=True)
+        )
+        h3_client = H3Connection(quic_client)
+
+        # Send request.
+        h3_client.send_headers(
+            stream_id=0,
+            headers=[
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":authority", b"localhost"),
+                (b":path", b"/"),
+            ],
+            end_stream=True,
+        )
+
+        # Receive a response with a PUSH_PROMISE which references dynamic
+        # table entries which have not been received yet, followed by DATA.
+        self.assertEqual(
+            h3_client.handle_event(
+                StreamDataReceived(
+                    stream_id=0,
+                    data=binascii.unhexlify(
+                        "01030000d90507000381d1d71011000568656c6c6f"
+                    ),
+                    end_stream=True,
+                )
+            ),
+            [
+                HeadersReceived(
+                    headers=[(b":status", b"200")],
+                    stream_id=0,
+                    stream_ended=False,
+                )
+            ],
+        )
+
+        # Receive the dynamic table entries on the QPACK encoder stream.
+        self.assertEqual(
+            h3_client.handle_event(
+                StreamDataReceived(
+                    stream_id=3,
+                    data=binascii.unhexlify("023fe11fc086a0e41d139d09c1866075d6b9108f"),
+                    end_stream=False,
+                )
+            ),
+            [
+                PushPromiseReceived(
+                    headers=[
+                        (b":method", b"GET"),
+                        (b":scheme", b"https"),
+                        (b":authority", b"localhost"),
+                        (b":path", b"/app.css"),
+                    ],
+                    push_id=0,
+                    stream_id=0,
+                ),
+                DataReceived(data=b"hello", stream_id=0, stream_ended=True),
+            ],
+        )
+        self.assertIsNone(quic_client.closed)
+
+        # The stream is no longer tracked.
+        self.assertNotIn(0, h3_client._stream)
+
     def test_blocked_stream_reset(self):
         quic_client = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=True)

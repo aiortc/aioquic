@@ -370,6 +370,8 @@ class H3Stream:
     def __init__(self, stream_id: int) -> None:
         self.blocked = False
         self.blocked_frame_size: Optional[int] = None
+        self.blocked_frame_type: Optional[int] = None
+        self.blocked_push_id: Optional[int] = None
         self.buffer = b""
         self.receiving_ended = False
         self.sending_ended = False
@@ -781,6 +783,9 @@ class H3Connection:
     ) -> list[H3Event]:
         """
         Handle a frame received on a request or push stream.
+
+        This is called with frame_data=None to resume a HEADERS or PUSH_PROMISE
+        frame when a stream becomes unblocked.
         """
         http_events: list[H3Event] = []
 
@@ -855,14 +860,24 @@ class H3Connection:
                 )
             )
         elif frame_type == FrameType.PUSH_PROMISE:
-            frame_buf = Buffer(data=frame_data)
-            try:
-                push_id = frame_buf.pull_uint_var()
-            except BufferReadError:
-                raise FrameError("Could not parse PUSH_PROMISE frame")
-            headers = self._decode_headers(
-                stream.stream_id, frame_data[frame_buf.tell() :]
-            )
+            if frame_data is None:
+                # Resume a PUSH_PROMISE whose header block was blocked.
+                push_id = stream.blocked_push_id
+                headers = self._decode_headers(stream.stream_id, None)
+            else:
+                frame_buf = Buffer(data=frame_data)
+                try:
+                    push_id = frame_buf.pull_uint_var()
+                except BufferReadError:
+                    raise FrameError("Could not parse PUSH_PROMISE frame")
+                try:
+                    headers = self._decode_headers(
+                        stream.stream_id, frame_data[frame_buf.tell() :]
+                    )
+                except pylsqpack.StreamBlocked:
+                    # The push ID is needed when the header block is resumed.
+                    stream.blocked_push_id = push_id
+                    raise
 
             # validate headers
             validate_push_promise_headers(headers)
@@ -873,7 +888,11 @@ class H3Connection:
                     category="http",
                     event="frame_parsed",
                     data=self._quic_logger.encode_http3_push_promise_frame(
-                        length=len(frame_data),
+                        length=(
+                            stream.blocked_frame_size
+                            if frame_data is None
+                            else len(frame_data)
+                        ),
                         headers=headers,
                         push_id=push_id,
                         stream_id=stream.stream_id,
@@ -1185,6 +1204,7 @@ class H3Connection:
             except pylsqpack.StreamBlocked:
                 stream.blocked = True
                 stream.blocked_frame_size = len(frame_data)
+                stream.blocked_frame_type = frame_type
                 break
 
         # remove processed data from buffer
@@ -1365,10 +1385,10 @@ class H3Connection:
         for stream_id in unblocked_streams:
             stream = self._stream[stream_id]
 
-            # resume headers
+            # Resume the blocked HEADERS or PUSH_PROMISE frame.
             http_events.extend(
                 self._handle_request_or_push_frame(
-                    frame_type=FrameType.HEADERS,
+                    frame_type=stream.blocked_frame_type,
                     frame_data=None,
                     stream=stream,
                     stream_ended=stream.receiving_ended and not stream.buffer,
@@ -1376,6 +1396,8 @@ class H3Connection:
             )
             stream.blocked = False
             stream.blocked_frame_size = None
+            stream.blocked_frame_type = None
+            stream.blocked_push_id = None
 
             # resume processing
             if stream.buffer:
@@ -1416,6 +1438,8 @@ class H3Connection:
         if stream is not None:
             stream.blocked = False
             stream.blocked_frame_size = None
+            stream.blocked_frame_type = None
+            stream.blocked_push_id = None
             stream.buffer = b""
             stream.receiving_ended = True
             if stream.is_ended():
