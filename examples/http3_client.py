@@ -23,7 +23,7 @@ from aioquic.h3.events import (
     PushPromiseReceived,
 )
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import QuicEvent
+from aioquic.quic.events import ConnectionTerminated, QuicEvent
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.quic.packet import QuicProtocolVersion
 from aioquic.tls import CipherSuite, SessionTicket
@@ -73,7 +73,7 @@ class WebSocket:
         self, http: HttpConnection, stream_id: int, transmit: Callable[[], None]
     ) -> None:
         self.http = http
-        self.queue: asyncio.Queue[str] = asyncio.Queue()
+        self.queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
         self.stream_id = stream_id
         self.subprotocol: Optional[str] = None
         self.transmit = transmit
@@ -93,7 +93,12 @@ class WebSocket:
         """
         Receive the next message.
         """
-        return await self.queue.get()
+        message = await self.queue.get()
+        if message is None:
+            # The connection was terminated, make later calls fail too.
+            self.queue.put_nowait(None)
+            raise ConnectionError
+        return message
 
     async def send(self, message: str) -> None:
         """
@@ -104,6 +109,12 @@ class WebSocket:
         data = self.websocket.send(wsproto.events.TextMessage(data=message))
         self.http.send_data(stream_id=self.stream_id, data=data, end_stream=False)
         self.transmit()
+
+    def connection_terminated(self) -> None:
+        """
+        Fail pending and future receives, as no more messages will arrive.
+        """
+        self.queue.put_nowait(None)
 
     def http_event_received(self, event: H3Event) -> None:
         if isinstance(event, HeadersReceived):
@@ -218,10 +229,21 @@ class HttpClient(QuicConnectionProtocol):
             self.pushes[event.push_id].append(event)
 
     def quic_event_received(self, event: QuicEvent) -> None:
-        #  pass event to the HTTP layer
+        # Pass the event to the HTTP layer.
         if self._http is not None:
             for http_event in self._http.handle_event(event):
                 self.http_event_received(http_event)
+
+        # Abort pending requests and WebSockets, as no more data will arrive.
+        if isinstance(event, ConnectionTerminated):
+            for waiter in self._request_waiter.values():
+                waiter.set_exception(ConnectionError)
+            self._request_events.clear()
+            self._request_waiter.clear()
+
+            for websocket in self._websockets.values():
+                websocket.connection_terminated()
+            self._websockets.clear()
 
     async def _request(self, request: HttpRequest) -> Deque[H3Event]:
         stream_id = self._quic.get_next_available_stream_id()
