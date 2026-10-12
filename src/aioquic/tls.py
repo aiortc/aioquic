@@ -2184,13 +2184,18 @@ class Context:
         )
 
     def _set_peer_certificate(self, certificate: Certificate) -> None:
-        self._peer_certificate = x509.load_der_x509_certificate(
-            certificate.certificates[0][0]
-        )
-        self._peer_certificate_chain = [
-            x509.load_der_x509_certificate(certificate.certificates[i][0])
-            for i in range(1, len(certificate.certificates))
-        ]
+        # A certificate which cannot be parsed is corrupt, which calls for
+        # a bad_certificate alert (RFC 8446 section 6.2).
+        try:
+            self._peer_certificate = x509.load_der_x509_certificate(
+                certificate.certificates[0][0]
+            )
+            self._peer_certificate_chain = [
+                x509.load_der_x509_certificate(certificate.certificates[i][0])
+                for i in range(1, len(certificate.certificates))
+            ]
+        except ValueError as exc:
+            raise AlertBadCertificate("Certificate could not be parsed") from exc
 
     def _set_state(self, state: State) -> None:
         if self.__logger:
