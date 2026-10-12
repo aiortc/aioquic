@@ -1982,6 +1982,12 @@ class TlsTest(TestCase):
             pull_server_name(buf)
         self.assertEqual(str(cm.exception), "ServerName has an unknown name type 255")
 
+    def test_pull_server_name_with_non_ascii_name(self):
+        buf = Buffer(data=b"\x00\x12\x00\x00\x0fwww.exampl\xe9.com")
+        with self.assertRaises(tls.AlertDecodeError) as cm:
+            pull_server_name(buf)
+        self.assertEqual(str(cm.exception), "ServerName is not ASCII")
+
     def test_push_server_name(self):
         buf = Buffer(128)
         push_server_name(buf, "www.example.com")

@@ -491,7 +491,11 @@ def pull_server_name(buf: Buffer) -> str:
             raise AlertIllegalParameter(
                 f"ServerName has an unknown name type {name_type}"
             )
-        return pull_opaque(buf, 2).decode("ascii")
+        try:
+            return pull_opaque(buf, 2).decode("ascii")
+        except UnicodeDecodeError:
+            # The host name must be ASCII (RFC 6066 section 3).
+            raise AlertDecodeError("ServerName is not ASCII")
 
 
 def push_server_name(buf: Buffer, server_name: str) -> None:
