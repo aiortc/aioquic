@@ -688,7 +688,26 @@ class ContextTest(TestCase):
         client = self.create_client(alpn_protocols=["hq-interop"])
         server = self.create_server(alpn_protocols=["h3"])
 
-        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+        with self.assertRaises(tls.AlertNoApplicationProtocol) as cm:
+            self._handshake(client, server)
+        self.assertEqual(str(cm.exception), "No common ALPN protocols")
+
+    def test_handshake_with_alpn_fail_client_not_offered(self):
+        client = self.create_client(alpn_protocols=["hq-interop"])
+        server = self.create_server(alpn_protocols=["hq-interop"])
+
+        # The server selects a protocol the client did not offer.
+        server.alpn_cb = lambda alpn_protocol: setattr(server, "alpn_negotiated", "h3")
+
+        with self.assertRaises(tls.AlertNoApplicationProtocol) as cm:
+            self._handshake(client, server)
+        self.assertEqual(str(cm.exception), "No common ALPN protocols")
+
+    def test_handshake_with_alpn_fail_client_not_selected(self):
+        client = self.create_client(alpn_protocols=["hq-interop"])
+        server = self.create_server()
+
+        with self.assertRaises(tls.AlertNoApplicationProtocol) as cm:
             self._handshake(client, server)
         self.assertEqual(str(cm.exception), "No common ALPN protocols")
 

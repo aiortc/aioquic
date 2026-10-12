@@ -124,6 +124,10 @@ class AlertInternalError(Alert):
     description = AlertDescription.internal_error
 
 
+class AlertNoApplicationProtocol(Alert):
+    description = AlertDescription.no_application_protocol
+
+
 class AlertProtocolVersion(Alert):
     description = AlertDescription.protocol_version
 
@@ -1687,6 +1691,15 @@ class Context:
     def _client_handle_encrypted_extensions(self, input_buf: Buffer) -> None:
         encrypted_extensions = pull_encrypted_extensions(input_buf)
 
+        # If we offered ALPN, the server must select one of our protocols
+        # (RFC 9001 section 8.1). RFC 8446 only defines no_application_protocol
+        # for servers, but RFC 9001 requires QUIC clients to use it too.
+        if (
+            self._alpn_protocols is not None
+            and encrypted_extensions.alpn_protocol not in self._alpn_protocols
+        ):
+            raise AlertNoApplicationProtocol("No common ALPN protocols")
+
         self.alpn_negotiated = encrypted_extensions.alpn_protocol
         self.early_data_accepted = encrypted_extensions.early_data
         self.received_extensions = encrypted_extensions.other_extensions
@@ -1878,7 +1891,7 @@ class Context:
             self.alpn_negotiated = negotiate(
                 self._alpn_protocols,
                 peer_hello.alpn_protocols,
-                AlertHandshakeFailure("No common ALPN protocols"),
+                AlertNoApplicationProtocol("No common ALPN protocols"),
             )
 
         self.client_random = peer_hello.random
