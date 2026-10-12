@@ -887,7 +887,26 @@ class H3Connection:
                 )
             )
 
+            # PUSH_PROMISE can be the last frame of a response, see RFC 9114
+            # section 4.1.
+            if stream_ended:
+                http_events.append(self._handle_request_or_push_end(stream))
+
         return http_events
+
+    def _handle_request_or_push_end(self, stream: H3Stream) -> DataReceived:
+        """
+        Handle the end of a request or push stream which is not conveyed by
+        a DATA or HEADERS frame.
+        """
+        self._check_content_length(stream)
+
+        return DataReceived(
+            data=b"",
+            push_id=stream.push_id,
+            stream_id=stream.stream_id,
+            stream_ended=True,
+        )
 
     def _check_request_or_push_frame_type(
         self, frame_type: int, stream: H3Stream
@@ -1041,6 +1060,7 @@ class H3Connection:
             stream.frame_type == FrameType.DATA
             and stream.frame_size is not None
             and len(stream.buffer) < stream.frame_size
+            and not stream_ended
         ):
             stream.content_length += len(stream.buffer)
             http_events.append(
@@ -1056,17 +1076,8 @@ class H3Connection:
             return http_events
 
         # handle lone FIN
-        if stream_ended and not stream.buffer:
-            self._check_content_length(stream)
-
-            http_events.append(
-                DataReceived(
-                    data=b"",
-                    push_id=stream.push_id,
-                    stream_id=stream.stream_id,
-                    stream_ended=True,
-                )
-            )
+        if stream_ended and not stream.buffer and stream.frame_size is None:
+            http_events.append(self._handle_request_or_push_end(stream))
             return http_events
 
         buf = Buffer(data=stream.buffer)
@@ -1137,6 +1148,11 @@ class H3Connection:
                 if not stream.frame_size:
                     stream.frame_size = None
                     stream.frame_type = None
+
+                # Unknown frames can be the last frame on the stream, see
+                # RFC 9114 section 4.1.
+                if stream.receiving_ended and buf.eof() and stream.frame_size is None:
+                    http_events.append(self._handle_request_or_push_end(stream))
                 continue
 
             if stream.frame_type != FrameType.DATA and chunk_size < stream.frame_size:
@@ -1159,7 +1175,11 @@ class H3Connection:
                         frame_type=frame_type,
                         frame_data=frame_data,
                         stream=stream,
-                        stream_ended=stream.receiving_ended and buf.eof(),
+                        stream_ended=(
+                            stream.receiving_ended
+                            and buf.eof()
+                            and stream.frame_size is None
+                        ),
                     )
                 )
             except pylsqpack.StreamBlocked:
@@ -1169,6 +1189,15 @@ class H3Connection:
 
         # remove processed data from buffer
         stream.buffer = stream.buffer[consumed:]
+
+        # A frame truncated by the end of the stream is an error, see
+        # RFC 9114 section 7.1.
+        if (
+            stream.receiving_ended
+            and not stream.blocked
+            and (stream.buffer or stream.frame_size is not None)
+        ):
+            raise FrameError("Frame is truncated by the end of the stream")
 
         return http_events
 
