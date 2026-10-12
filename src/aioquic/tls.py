@@ -1588,34 +1588,40 @@ class Context:
                 binders=[bytes(binder_length)],
             )
 
-            # serialize hello without binder
-            tmp_buf = Buffer(capacity=1024)
-            push_client_hello(tmp_buf, hello)
-
-            # calculate binder
-            hash_offset = tmp_buf.tell() - binder_length - 3
-            self._key_schedule_psk.update_hash(tmp_buf.data_slice(0, hash_offset))
-            binder = self._key_schedule_psk.finished_verify_data(binder_key)
-            hello.pre_shared_key.binders[0] = binder
-            self._key_schedule_psk.update_hash(
-                tmp_buf.data_slice(hash_offset, hash_offset + 3) + binder
-            )
-
-            # calculate early data key
-            if hello.early_data:
-                early_key = self._key_schedule_psk.derive_secret(b"c e traffic")
-                self.update_traffic_key_cb(
-                    Direction.ENCRYPT,
-                    Epoch.ZERO_RTT,
-                    self._key_schedule_psk.cipher_suite,
-                    early_key,
-                )
-
         self._key_schedule_proxy = KeyScheduleProxy(self._cipher_suites)
         self._key_schedule_proxy.extract(None)
 
         with push_message(self._key_schedule_proxy, output_buf):
+            hello_start = output_buf.tell()
             push_client_hello(output_buf, hello)
+
+            # The pre_shared_key is only set by the PSK setup above, which also
+            # defines binder_key and binder_length.
+            if hello.pre_shared_key is not None:
+                # The binder is computed over the ClientHello truncated before
+                # the binders list, then written over its zero-filled
+                # placeholder (RFC 8446 section 4.2.11.2).
+                binder_start = output_buf.tell() - binder_length
+                binders_start = binder_start - 3
+                self._key_schedule_psk.update_hash(
+                    output_buf.data_slice(hello_start, binders_start)
+                )
+                binder = self._key_schedule_psk.finished_verify_data(binder_key)
+                output_buf.seek(binder_start)
+                output_buf.push_bytes(binder)
+                self._key_schedule_psk.update_hash(
+                    output_buf.data_slice(binders_start, output_buf.tell())
+                )
+
+                # calculate early data key
+                if hello.early_data:
+                    early_key = self._key_schedule_psk.derive_secret(b"c e traffic")
+                    self.update_traffic_key_cb(
+                        Direction.ENCRYPT,
+                        Epoch.ZERO_RTT,
+                        self._key_schedule_psk.cipher_suite,
+                        early_key,
+                    )
 
         self._set_state(State.CLIENT_EXPECT_SERVER_HELLO)
 
