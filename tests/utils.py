@@ -6,6 +6,9 @@ import logging
 import os
 from typing import Callable, Coroutine, ParamSpec, TypeVar
 
+from aioquic import tls
+from aioquic.quic.packet import QuicPacketType
+from aioquic.quic.packet_builder import QuicSentPacket
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
@@ -18,6 +21,31 @@ K = TypeVar(
     rsa.RSAPrivateKey,
 )
 P = ParamSpec("P")
+
+
+def ack_eliciting_packet(
+    *,
+    epoch: tls.Epoch = tls.Epoch.ONE_RTT,
+    packet_type: QuicPacketType = QuicPacketType.ONE_RTT,
+    sent_time: float,
+) -> QuicSentPacket:
+    """
+    Return a sent packet which counts towards bytes in flight and elicits an
+    acknowledgment.
+
+    It defaults to 1-RTT, as congestion controllers ignore the packet number
+    space. Its packet number is 0 and its size is 1280 bytes.
+    """
+    return QuicSentPacket(
+        epoch=epoch,
+        in_flight=True,
+        is_ack_eliciting=True,
+        is_crypto_packet=False,
+        packet_number=0,
+        packet_type=packet_type,
+        sent_bytes=1280,
+        sent_time=sent_time,
+    )
 
 
 def asynctest(
