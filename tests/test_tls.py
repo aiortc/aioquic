@@ -42,8 +42,9 @@ from aioquic.tls import (
     push_server_name,
     verify_certificate,
 )
+from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from .utils import (
@@ -1987,6 +1988,41 @@ class VerifyCertificateTest(TestCase):
                 )
             self.assertEqual(
                 str(cm.exception), "Certificate does not contain any `subjectAltName`s."
+            )
+
+    def test_verify_subject_with_malformed_extension(self):
+        key = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "example.com")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + datetime.timedelta(days=10))
+            # The extension's value is not valid DER, but the certificate is
+            # only rejected once its extensions are accessed.
+            .add_extension(
+                x509.UnrecognizedExtension(
+                    x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME, b"\xff\xff"
+                ),
+                critical=False,
+            )
+            .sign(key, hashes.SHA256())
+        )
+        cadata = certificate.public_bytes(serialization.Encoding.PEM)
+
+        with patch("aioquic.tls.utcnow") as mock_utcnow:
+            mock_utcnow.return_value = certificate.not_valid_before_utc
+
+            with self.assertRaises(tls.AlertBadCertificate) as cm:
+                verify_certificate(
+                    cadata=cadata, certificate=certificate, server_name="example.com"
+                )
+            self.assertEqual(
+                str(cm.exception), "Certificate extensions could not be parsed"
             )
 
     def test_verify_subject_with_subjaltname(self):
