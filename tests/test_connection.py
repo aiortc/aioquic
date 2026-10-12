@@ -1532,6 +1532,37 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(event.frame_type, QuicFrameType.CRYPTO)
             self.assertEqual(event.reason_phrase, "No supported protocol version")
 
+    def test_receive_datagram_different_source_cid(self):
+        client = create_standalone_client(self)
+        crypto = CryptoPair()
+        crypto.setup_initial(
+            client._peer_cid.cid, is_client=False, version=client._version
+        )
+
+        def send_initial(source_cid: bytes, packet_number: int) -> None:
+            builder = QuicPacketBuilder(
+                host_cid=source_cid,
+                is_client=False,
+                max_datagram_size=SMALLEST_MAX_DATAGRAM_SIZE,
+                packet_number=packet_number,
+                peer_cid=client.host_cid,
+                version=client._version,
+            )
+            builder.start_packet(QuicPacketType.INITIAL, crypto)
+            buf = builder.start_frame(QuicFrameType.PADDING)
+            buf.push_bytes(bytes(builder.remaining_flight_space))
+            for datagram in builder.flush()[0]:
+                client.receive_datagram(datagram, SERVER_ADDR, now=time.time())
+
+        # The first valid INITIAL packet sets the server's Source Connection ID.
+        send_initial(source_cid=bytes(8), packet_number=0)
+        self.assertEqual(client._remote_initial_source_connection_id, bytes(8))
+
+        # A packet with a different Source Connection ID is discarded.
+        send_initial(source_cid=bytes([1] * 8), packet_number=1)
+        self.assertPacketDropped(client, "unexpected_source_connection_id")
+        self.assertNotIn(1, client._spaces[tls.Epoch.INITIAL].received_packets)
+
     def test_receive_datagram_duplicate(self):
         with client_and_server() as (client, server):
             while server.next_event() is not None:
