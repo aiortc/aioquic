@@ -1,4 +1,5 @@
 import binascii
+import dataclasses
 import datetime
 import ssl
 from functools import partial
@@ -963,6 +964,55 @@ class ContextTest(TestCase):
         second_handshake()
         second_handshake_bad_binder()
         second_handshake_bad_pre_shared_key()
+
+    def test_session_ticket_large(self):
+        """
+        Resumption works with a session ticket too large for a 1 KiB ClientHello.
+        """
+        client_tickets = []
+
+        # Obtain a session ticket and make it larger.
+        client = self.create_client()
+        client.new_session_ticket_cb = client_tickets.append
+        server = self.create_server()
+        server.new_session_ticket_cb = lambda ticket: None
+        self._handshake(client, server)
+        ticket = dataclasses.replace(client_tickets[0], ticket=bytes(range(256)) * 8)
+
+        # Send client hello with pre_shared_key.
+        client = self.create_client()
+        client.session_ticket = ticket
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
+        server_input = merge_buffers(client_buf)
+        reset_buffers(client_buf)
+
+        # Handle client hello, which requires the binder to be valid.
+        #
+        # Send server hello, encrypted extensions, finished.
+        server = self.create_server()
+        server.get_session_ticket_cb = lambda label: ticket
+        server_buf = create_buffers()
+        server.handle_message(server_input, server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
+        client_input = merge_buffers(server_buf)
+        reset_buffers(server_buf)
+
+        # Handle server hello, encrypted extensions, finished.
+        #
+        # Send finished.
+        client.handle_message(client_input, client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+        server_input = merge_buffers(client_buf)
+
+        # Handle finished.
+        server.handle_message(server_input, server_buf)
+        self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
+
+        # Check session resumption was used.
+        self.assertTrue(client.session_resumed)
+        self.assertTrue(server.session_resumed)
 
 
 class TlsTest(TestCase):
