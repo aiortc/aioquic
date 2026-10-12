@@ -865,9 +865,14 @@ def pull_encrypted_extensions(buf: Buffer) -> EncryptedExtensions:
             extension_type = buf.pull_uint16()
             extension_length = buf.pull_uint16()
             if extension_type == ExtensionType.ALPN:
-                extensions.alpn_protocol = pull_list(
-                    buf, 2, partial(pull_alpn_protocol, buf)
-                )[0]
+                protocols = pull_list(buf, 2, partial(pull_alpn_protocol, buf))
+
+                # The server must select exactly one protocol (RFC 7301 section 3.1).
+                if len(protocols) != 1:
+                    raise AlertDecodeError(
+                        "ALPN extension must contain exactly one protocol"
+                    )
+                extensions.alpn_protocol = protocols[0]
             elif extension_type == ExtensionType.EARLY_DATA:
                 extensions.early_data = True
             else:

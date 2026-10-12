@@ -1671,6 +1671,20 @@ class TlsTest(TestCase):
         push_encrypted_extensions(buf, extensions)
         self.assertTrue(buf.eof())
 
+    def test_pull_encrypted_extensions_with_invalid_alpn(self):
+        for desc, data in [
+            ("empty", "080000080006001000020000"),
+            ("two protocols", "0800000e000c001000080006026833026871"),
+        ]:
+            with self.subTest(desc):
+                buf = Buffer(data=binascii.unhexlify(data))
+                with self.assertRaises(tls.AlertDecodeError) as cm:
+                    pull_encrypted_extensions(buf)
+                self.assertEqual(
+                    str(cm.exception),
+                    "ALPN extension must contain exactly one protocol",
+                )
+
     def test_pull_certificate(self):
         buf = Buffer(data=load("tls_certificate.bin"))
         certificate = pull_certificate(buf)
