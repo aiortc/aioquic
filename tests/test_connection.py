@@ -1171,6 +1171,62 @@ class QuicConnectionTest(TestCase):
             # The PTO is not armed, only the idle timeout remains.
             self.assertEqual(server.get_timer(), server._close_at)
 
+    def test_connect_with_lost_handshake_done(self):
+        """
+        Check the server retransmits HANDSHAKE_DONE after discarding its
+        Handshake keys, as the client cannot confirm the handshake without it.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            # Client sends INITIAL.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+
+            # Server receives INITIAL, sends INITIAL + HANDSHAKE.
+            now += TICK
+            for data, addr in items:
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+
+            # Client receives INITIAL + HANDSHAKE, sends FINISHED.
+            now += TICK
+            for data, addr in items:
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+
+            # Server receives FINISHED, discards its Handshake keys and
+            # sends HANDSHAKE_DONE which is lost.
+            now += TICK
+            for data, addr in items:
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+            self.assertTrue(server._handshake_confirmed)
+            self.assertTrue(server._spaces[tls.Epoch.HANDSHAKE].discarded)
+            server.datagrams_to_send(now=now)
+            self.assertFalse(client._handshake_confirmed)
+
+            # Server's PTO fires, it sends a probe.
+            now = server.get_timer()
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+
+            # Client receives the probe, sends an ACK.
+            now += TICK
+            for data, addr in items:
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+
+            # Server receives the ACK, retransmits HANDSHAKE_DONE.
+            now += TICK
+            for data, addr in items:
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+
+            # Client receives HANDSHAKE_DONE.
+            now += TICK
+            for data, addr in items:
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            self.assertTrue(client._handshake_confirmed)
+
     def test_connect_with_no_crypto_frame(self):
         def patch(client):
             """
