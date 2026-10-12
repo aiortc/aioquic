@@ -1732,6 +1732,11 @@ class Context:
 
     def _client_handle_certificate(self, input_buf: Buffer) -> None:
         certificate = pull_certificate(input_buf)
+
+        # The server must send at least one certificate, otherwise the client
+        # must abort with a decode_error alert (RFC 8446 section 4.4.2.4).
+        if not certificate.certificates:
+            raise AlertDecodeError("Certificate message is empty")
         self.key_schedule.update_hash(input_buf.data)
 
         self._set_peer_certificate(certificate)
@@ -2099,6 +2104,9 @@ class Context:
         certificate = pull_certificate(input_buf)
         self.key_schedule.update_hash(input_buf.data)
 
+        # If the client sends an empty Certificate message, the server may
+        # continue the handshake without client authentication
+        # (RFC 8446 section 4.4.2.4).
         if certificate.certificates:
             self._set_peer_certificate(certificate)
             self._set_state(State.SERVER_EXPECT_CERTIFICATE_VERIFY)
