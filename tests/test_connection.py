@@ -1664,6 +1664,25 @@ class QuicConnectionTest(TestCase):
         )
         self.assertEqual(drop(client), 1)
 
+    def test_receive_datagram_retry_same_source_cid(self):
+        client = create_standalone_client(self)
+
+        # The client discards a retry whose source CID is its original destination CID.
+        client.receive_datagram(
+            encode_quic_retry(
+                version=client._version,
+                source_cid=client._peer_cid.cid,
+                destination_cid=client.host_cid,
+                original_destination_cid=client._peer_cid.cid,
+                retry_token=bytes(16),
+            ),
+            SERVER_ADDR,
+            now=time.time(),
+        )
+        self.assertEqual(drop(client), 0)
+
+        self.assertPacketDropped(client, "unexpected_packet")
+
     def test_receive_datagram_retry_wrong_destination_cid(self):
         client = create_standalone_client(self)
 
