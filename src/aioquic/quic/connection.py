@@ -882,6 +882,26 @@ class QuicConnection:
                 )
                 return
 
+            # RFC 9000 section 7.2 requires clients to discard packets whose Source
+            # Connection ID differs from the one in the first valid server packet.
+            if (
+                self._is_client
+                and header.packet_type != QuicPacketType.ONE_RTT
+                and self._remote_initial_source_connection_id is not None
+                and header.source_cid != self._remote_initial_source_connection_id
+            ):
+                if self._quic_logger is not None:
+                    self._quic_logger.log_event(
+                        category="transport",
+                        event="packet_dropped",
+                        data={
+                            "trigger": "unexpected_source_connection_id",
+                            "raw": {"length": header.packet_length},
+                        },
+                    )
+                buf.seek(start_off + header.packet_length)
+                continue
+
             crypto_frame_required = False
 
             # Server initialization.
