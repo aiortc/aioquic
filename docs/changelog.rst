@@ -1,6 +1,61 @@
 Changelog
 =========
 
+1.6.0
+-----
+
+* Abort the TLS handshake with an alert, instead of raising an exception which
+  left the connection hung, when the peer sends a malformed certificate, a
+  certificate whose key cannot be loaded, a CertificateVerify algorithm which
+  does not match its key, a ClientHello or ServerHello without a key share, a
+  server name which is not ASCII, or an empty Certificate message.
+* Only use RSASSA-PSS for RSA signatures in CertificateVerify and reject
+  PKCS#1 v1.5 signatures from the peer, as :rfc:`8446` requires.
+* Close the connection with ``no_application_protocol`` when ALPN negotiation
+  fails, including when the server selects no protocol, several protocols or
+  one the client did not offer.
+* Fix session resumption failing with a ``BufferWriteError`` when the session
+  ticket or the key share is large, such as with X25519MLKEM768.
+* Send session tickets only after the client's Finished. A client which never
+  completed the handshake could make the server retransmit them indefinitely.
+* Harden connection establishment as :rfc:`9000` and :rfc:`9001` require:
+
+  * Close the connection with ``INVALID_TOKEN`` when a Retry token is invalid,
+    instead of leaving the client waiting for its idle timeout.
+  * Discard packets whose Source Connection ID differs from the server's
+    first Initial, and Retry packets reusing the original Destination
+    Connection ID.
+  * Treat a non-empty ``legacy_session_id`` in the ClientHello as a
+    ``PROTOCOL_VIOLATION``.
+  * Reject ``initial_max_streams`` transport parameters above 2^60.
+  * Defer key updates requested before the handshake is confirmed.
+
+* Improve loss recovery and congestion control as :rfc:`9002` requires: do not
+  arm the PTO for application data before the handshake is confirmed, keep the
+  client's PTO backoff until the server has validated its address, and
+  collapse the congestion window on persistent congestion.
+* Discard locally-initiated unidirectional streams once they finish, instead
+  of keeping them until the connection closes. Sending data on a stream which
+  has been discarded now raises :class:`ValueError` instead of silently
+  creating a new stream.
+* Answer STOP_SENDING with a RESET_STREAM carrying the peer's error code.
+* Check for allocation failure in ``Buffer`` and reject a negative capacity
+  with :class:`ValueError`.
+* Fix HTTP/3 stream end handling: report the end of a stream when it arrives
+  with a trailing unknown frame or PUSH_PROMISE, instead of never reporting
+  it, and close the connection with ``H3_FRAME_ERROR`` when a frame is
+  truncated by the end of the stream, instead of passing off a truncated
+  body as complete.
+* Fix HTTP/3 server push handling:
+
+  * Resume a PUSH_PROMISE blocked on QPACK as a PUSH_PROMISE, instead of
+    closing the connection with ``H3_MESSAGE_ERROR``.
+  * Treat ``MAX_PUSH_ID`` as the largest allowed push ID, and close the
+    connection with ``H3_ID_ERROR`` when a push ID exceeds it or when it is
+    reduced.
+  * Close the connection with ``H3_STREAM_CREATION_ERROR`` when a server
+    receives a push stream.
+
 1.5.0
 -----
 
