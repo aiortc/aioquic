@@ -64,7 +64,9 @@ class RenoCongestionControl(QuicCongestionControl):
             )
             self.ssthresh = self.congestion_window
 
-        # TODO : collapse congestion window if persistent congestion
+    def on_persistent_congestion(self) -> None:
+        self.congestion_window = K_MINIMUM_WINDOW * self._max_datagram_size
+        self._congestion_recovery_start_time = 0.0
 
     def on_rtt_measurement(self, *, now: float, rtt: float) -> None:
         # check whether we should exit slow start

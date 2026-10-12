@@ -35,6 +35,9 @@ class QuicCongestionControl(abc.ABC):
     ) -> None: ...
 
     @abc.abstractmethod
+    def on_persistent_congestion(self) -> None: ...
+
+    @abc.abstractmethod
     def on_rtt_measurement(self, *, now: float, rtt: float) -> None: ...
 
     def get_log_data(self) -> dict[str, Any]:

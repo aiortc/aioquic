@@ -327,6 +327,15 @@ class CubicCongestionControlTest(TestCase):
 
         self.assertEqual(cubic.K, K)
 
+    def test_persistent_congestion(self):
+        cubic = CubicCongestionControl(1440)
+        cubic.on_packets_lost(now=1.0, packets=[ack_eliciting_packet(sent_time=0.5)])
+
+        # The window collapses to the minimum and recovery ends.
+        cubic.on_persistent_congestion()
+        self.assertEqual(cubic.congestion_window, K_MINIMUM_WINDOW * 1440)
+        self.assertEqual(cubic._congestion_recovery_start_time, 0.0)
+
     def test_lost_with_W_max(self):
         packet = ack_eliciting_packet(sent_time=200.0)
 

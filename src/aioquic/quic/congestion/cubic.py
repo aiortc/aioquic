@@ -193,6 +193,10 @@ class CubicCongestionControl(QuicCongestionControl):
             # restart a new congestion avoidance phase
             self._starting_congestion_avoidance = True
 
+    def on_persistent_congestion(self) -> None:
+        self.congestion_window = K_MINIMUM_WINDOW * self._max_datagram_size
+        self._congestion_recovery_start_time = 0.0
+
     def on_rtt_measurement(self, *, now: float, rtt: float) -> None:
         self.rtt = rtt
         # check whether we should exit slow start
