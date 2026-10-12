@@ -124,6 +124,10 @@ class AlertInternalError(Alert):
     description = AlertDescription.internal_error
 
 
+class AlertMissingExtension(Alert):
+    description = AlertDescription.missing_extension
+
+
 class AlertNoApplicationProtocol(Alert):
     description = AlertDescription.no_application_protocol
 
@@ -1680,6 +1684,11 @@ class Context:
                 "ServerHello has a version we did not advertise"
             )
 
+        # We only offer (EC)DHE key exchange, so the server must send a key share
+        # (RFC 8446 section 9.2).
+        if peer_hello.key_share is None:
+            raise AlertMissingExtension("ServerHello has no key share")
+
         # select key schedule
         if peer_hello.pre_shared_key is not None:
             if (
@@ -1934,6 +1943,11 @@ class Context:
             peer_hello.supported_versions,
             AlertProtocolVersion("No supported protocol version"),
         )
+
+        # We only support (EC)DHE key exchange, so the client must send a key share
+        # (RFC 8446 section 9.2).
+        if peer_hello.key_share is None:
+            raise AlertMissingExtension("ClientHello has no key share")
 
         # negotiate ALPN
         if self._alpn_protocols is not None:
