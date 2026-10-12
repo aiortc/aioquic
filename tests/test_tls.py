@@ -197,6 +197,48 @@ class ContextTest(TestCase):
             client.handle_message(client_input, client_buf)
         self.assertEqual(str(cm.exception), str(expected_exception))
 
+    def handshake_with_server_input_corruption(
+        self,
+        client_certificate,
+        client_private_key,
+        corrupt_server_input,
+        expected_exception,
+    ):
+        client = self.create_client()
+        client.certificate = client_certificate
+        client.certificate_private_key = client_private_key
+        server = self.create_server()
+        server._request_client_certificate = True
+
+        # Send client hello.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        server_input = merge_buffers(client_buf)
+        reset_buffers(client_buf)
+
+        # Handle client hello.
+        #
+        # Send server hello, encrypted extensions, certificate request, certificate,
+        # certificate verify, finished.
+        server_buf = create_buffers()
+        server.handle_message(server_input, server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
+        client_input = merge_buffers(server_buf)
+        reset_buffers(server_buf)
+
+        # Handle server hello, encrypted extensions, certificate request, certificate,
+        # certificate verify, finished.
+        #
+        # Send certificate, certificate verify, finished.
+        client.handle_message(client_input, client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+        server_input = corrupt_server_input(merge_buffers(client_buf))
+
+        # Handle certificate, certificate verify, finished.
+        with self.assertRaises(expected_exception.__class__) as cm:
+            server.handle_message(server_input, server_buf)
+        self.assertEqual(str(cm.exception), str(expected_exception))
+
     def test_client_unexpected_message(self):
         client = self.create_client()
 
@@ -318,6 +360,19 @@ class ContextTest(TestCase):
             tls.AlertDecodeError("Certificate message is empty"),
         )
 
+    def test_client_malformed_certificate(self):
+        configuration = QuicConfiguration(is_client=False)
+        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        certificate_data = configuration.certificate.public_bytes(
+            serialization.Encoding.DER
+        )
+
+        self.handshake_with_client_input_corruption(
+            # Corrupt the server's certificate, keeping its length unchanged.
+            lambda x: x.replace(certificate_data, b"\x00" + certificate_data[1:]),
+            tls.AlertBadCertificate("Certificate could not be parsed"),
+        )
+
     def test_server_invalid_key_share(self):
         client = self.create_client()
         client._supported_groups = [tls.Group.SECP256R1]
@@ -353,6 +408,20 @@ class ContextTest(TestCase):
         with self.assertRaises(tls.AlertIllegalParameter) as cm:
             server.handle_message(server_input, create_buffers())
         self.assertEqual(str(cm.exception), "ClientHello has an invalid key share")
+
+    def test_server_malformed_certificate(self):
+        certificate, private_key = generate_rsa_certificate(
+            common_name="client.example.com"
+        )
+        certificate_data = certificate.public_bytes(serialization.Encoding.DER)
+
+        self.handshake_with_server_input_corruption(
+            certificate,
+            private_key,
+            # Corrupt the client's certificate, keeping its length unchanged.
+            lambda x: x.replace(certificate_data, b"\x00" + certificate_data[1:]),
+            tls.AlertBadCertificate("Certificate could not be parsed"),
+        )
 
     def test_server_unexpected_message(self):
         server = self.create_server()
