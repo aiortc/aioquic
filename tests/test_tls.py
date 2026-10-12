@@ -344,6 +344,15 @@ class ContextTest(TestCase):
             ),
         )
 
+    def test_client_bad_certificate_verify_algorithm_rsa_pkcs1(self):
+        self.handshake_with_client_input_corruption(
+            # Replace RSA_PSS_RSAE_SHA256 by RSA_PKCS1_SHA256, which we advertise.
+            lambda x: x[:-440] + b"\x04\x01" + x[-438:],
+            tls.AlertIllegalParameter(
+                "CertificateVerify has an RSASSA-PKCS1-v1_5 signature algorithm"
+            ),
+        )
+
     def test_client_bad_certificate_verify_data(self):
         self.handshake_with_client_input_corruption(
             # Mess with certificate verify.
@@ -913,21 +922,30 @@ class ContextTest(TestCase):
         client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PKCS1_SHA1]
         server = self.create_server()
 
-        self._handshake(client, server)
+        # RSASSA-PKCS1-v1_5 cannot be used in CertificateVerify.
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            self._handshake(client, server)
+        self.assertEqual(str(cm.exception), "No supported signature algorithm")
 
     def test_handshake_with_rsa_pkcs1_sha256_signature(self):
         client = self.create_client()
         client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PKCS1_SHA256]
         server = self.create_server()
 
-        self._handshake(client, server)
+        # RSASSA-PKCS1-v1_5 cannot be used in CertificateVerify.
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            self._handshake(client, server)
+        self.assertEqual(str(cm.exception), "No supported signature algorithm")
 
     def test_handshake_with_rsa_pkcs1_sha384_signature(self):
         client = self.create_client()
         client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PKCS1_SHA384]
         server = self.create_server()
 
-        self._handshake(client, server)
+        # RSASSA-PKCS1-v1_5 cannot be used in CertificateVerify.
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            self._handshake(client, server)
+        self.assertEqual(str(cm.exception), "No supported signature algorithm")
 
     def test_handshake_with_rsa_pss_rsae_sha256_signature(self):
         client = self.create_client()
