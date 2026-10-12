@@ -310,6 +310,7 @@ class QuicConnection:
         ]
         self.host_cid = self._host_cids[0].cid
         self._host_cid_seq = 1
+        self._key_update_pending = False
         self._local_ack_delay_exponent = 3
         self._local_active_connection_id_limit = 8
         self._local_challenges: dict[bytes, QuicNetworkPath] = {}
@@ -1109,11 +1110,19 @@ class QuicConnection:
         """
         Request an update of the encryption keys.
 
+        If the handshake is not confirmed yet, the key update is deferred until
+        it is.
+
         .. aioquic_transmit::
         """
-        if not self._handshake_complete:
-            raise RuntimeError("Cannot change key before handshake completes")
-        self._cryptos[tls.Epoch.ONE_RTT].update_key()
+        # An endpoint must not initiate a key update before the handshake is
+        # confirmed.
+        #
+        # https://datatracker.ietf.org/doc/html/rfc9001#section-6.1
+        if self._handshake_confirmed:
+            self._cryptos[tls.Epoch.ONE_RTT].update_key()
+        else:
+            self._key_update_pending = True
 
     def reset_stream(self, stream_id: int, error_code: int) -> None:
         """
@@ -1302,6 +1311,22 @@ class QuicConnection:
         if self._quic_logger is not None:
             self._configuration.quic_logger.end_trace(self._quic_logger)
             self._quic_logger = None
+
+    def _confirm_handshake(self) -> None:
+        """
+        Called when the handshake is confirmed.
+
+        https://datatracker.ietf.org/doc/html/rfc9001#section-4.1.2
+        """
+        self._discard_epoch(tls.Epoch.HANDSHAKE)
+        self._handshake_confirmed = True
+        self._loss.handshake_confirmed = True
+        self._loss.peer_completed_address_validation = True
+
+        # Start the key update requested before the handshake was confirmed.
+        if self._key_update_pending:
+            self._cryptos[tls.Epoch.ONE_RTT].update_key()
+            self._key_update_pending = False
 
     def _connect(self, now: float) -> None:
         """
@@ -1697,10 +1722,8 @@ class QuicConnection:
 
                 # for servers, the handshake is now confirmed
                 if not self._is_client:
-                    self._discard_epoch(tls.Epoch.HANDSHAKE)
-                    self._handshake_confirmed = True
+                    self._confirm_handshake()
                     self._handshake_done_pending = True
-                    self._loss.handshake_confirmed = True
 
                 self._replenish_connection_ids()
                 self._events.append(
@@ -1797,10 +1820,7 @@ class QuicConnection:
 
         # for clients, the handshake is now confirmed
         if not self._handshake_confirmed:
-            self._discard_epoch(tls.Epoch.HANDSHAKE)
-            self._handshake_confirmed = True
-            self._loss.handshake_confirmed = True
-            self._loss.peer_completed_address_validation = True
+            self._confirm_handshake()
 
     def _handle_max_data_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
