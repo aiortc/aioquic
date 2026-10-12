@@ -1193,6 +1193,19 @@ def negotiate(
     return None
 
 
+def signature_algorithm_key_type(signature_algorithm: int) -> type:
+    if signature_algorithm == SignatureAlgorithm.ED25519:
+        return ed25519.Ed25519PublicKey
+    elif signature_algorithm == SignatureAlgorithm.ED448:
+        return ed448.Ed448PublicKey
+
+    padding_cls, _ = SIGNATURE_ALGORITHMS[signature_algorithm]
+    if padding_cls is None:
+        return ec.EllipticCurvePublicKey
+    else:
+        return rsa.RSAPublicKey
+
+
 def signature_algorithm_params(signature_algorithm: int) -> tuple:
     if signature_algorithm in (SignatureAlgorithm.ED25519, SignatureAlgorithm.ED448):
         return tuple()
@@ -1507,17 +1520,21 @@ class Context:
                 "CertificateVerify has a signature algorithm we did not advertise"
             )
 
-        try:
-            # The type of public_key() is CertificatePublicKeyTypes, but along with
-            # ed25519 and ed448, which are fine, this type includes
-            # x25519 and x448 which can be public keys but can't sign.  We know
-            # we won't get x25519 and x448 as they are not on our list of
-            # signature algorithms, so we can cast public key to
-            # CertificateIssuerPublicKeyTypes safely and make mypy happy.
-            public_key = cast(
-                CertificateIssuerPublicKeyTypes, self._peer_certificate.public_key()
+        # The signature algorithm must be compatible with the key in the peer's
+        # certificate (RFC 8446 section 4.4.3).
+        public_key = self._peer_certificate.public_key()
+        if not isinstance(public_key, signature_algorithm_key_type(verify.algorithm)):
+            raise AlertDecryptError(
+                "CertificateVerify has a signature algorithm which does not match "
+                "the certificate's key"
             )
-            public_key.verify(
+
+        try:
+            # The type of public_key() is CertificatePublicKeyTypes, which includes
+            # x25519 and x448 keys which cannot sign. We checked above that the key
+            # matches a signature algorithm, so we can cast it to
+            # CertificateIssuerPublicKeyTypes safely and make mypy happy.
+            cast(CertificateIssuerPublicKeyTypes, public_key).verify(
                 verify.signature,
                 self.key_schedule.certificate_verify_data(
                     SERVER_CONTEXT_STRING if self._is_client else CLIENT_CONTEXT_STRING

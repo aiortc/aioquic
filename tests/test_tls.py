@@ -324,6 +324,16 @@ class ContextTest(TestCase):
             ),
         )
 
+    def test_client_bad_certificate_verify_algorithm_for_key(self):
+        self.handshake_with_client_input_corruption(
+            # Use an ECDSA signature algorithm with the server's RSA key.
+            lambda x: x[:-440] + b"\x04\x03" + x[-438:],
+            tls.AlertDecryptError(
+                "CertificateVerify has a signature algorithm which does not match "
+                "the certificate's key"
+            ),
+        )
+
     def test_client_bad_certificate_verify_data(self):
         self.handshake_with_client_input_corruption(
             # Mess with certificate verify.
@@ -372,6 +382,24 @@ class ContextTest(TestCase):
             # Corrupt the server's certificate, keeping its length unchanged.
             lambda x: x.replace(certificate_data, b"\x00" + certificate_data[1:]),
             tls.AlertBadCertificate("Certificate could not be parsed"),
+        )
+
+    def test_server_bad_certificate_verify_algorithm_for_key(self):
+        certificate, private_key = generate_ed25519_certificate(
+            common_name="client.example.com"
+        )
+
+        self.handshake_with_server_input_corruption(
+            certificate,
+            private_key,
+            # Use an RSA signature algorithm with the client's Ed25519 key.
+            lambda x: x.replace(
+                b"\x0f\x00\x00\x44\x08\x07", b"\x0f\x00\x00\x44\x08\x04"
+            ),
+            tls.AlertDecryptError(
+                "CertificateVerify has a signature algorithm which does not match "
+                "the certificate's key"
+            ),
         )
 
     def test_server_invalid_key_share(self):
