@@ -1149,13 +1149,19 @@ class QuicConnection:
         Abruptly terminate the sending part of a stream.
 
         This method has no effect if a reset has already been triggered either by a
-        call to :meth:`reset_stream` or by the reception of a STOP_SENDING frame.
+        call to :meth:`reset_stream` or by the reception of a STOP_SENDING frame, or
+        if all the stream's data has already been acknowledged.
 
         .. aioquic_transmit::
 
         :param stream_id: The stream's ID.
         :param error_code: An error code indicating why the stream is being reset.
         """
+        if self._stream_can_send(stream_id) and stream_id in self._streams_finished:
+            # The stream finished and its state was discarded, so there is nothing
+            # to reset.
+            return
+
         stream = self._get_or_create_stream_for_send(stream_id)
         stream.sender.reset(error_code)
 
@@ -1466,6 +1472,8 @@ class QuicConnection:
         """
         if not self._stream_can_send(stream_id):
             raise ValueError("Cannot send data on peer-initiated unidirectional stream")
+        if stream_id in self._streams_finished:
+            raise ValueError("Cannot send data on a finished stream")
 
         stream = self._streams.get(stream_id, None)
         if stream is None:
