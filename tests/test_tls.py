@@ -295,6 +295,29 @@ class ContextTest(TestCase):
             tls.AlertDecryptError(),
         )
 
+    def test_client_empty_certificate(self):
+        def encode_certificate(certificates):
+            buf = Buffer(capacity=4096)
+            push_certificate(
+                buf, Certificate(request_context=b"", certificates=certificates)
+            )
+            return buf.data
+
+        configuration = QuicConfiguration(is_client=False)
+        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        certificate_data = configuration.certificate.public_bytes(
+            serialization.Encoding.DER
+        )
+
+        self.handshake_with_client_input_corruption(
+            # Replace the server's certificate list with an empty one.
+            lambda x: x.replace(
+                encode_certificate([(certificate_data, b"")]),
+                encode_certificate([]),
+            ),
+            tls.AlertDecodeError("Certificate message is empty"),
+        )
+
     def test_server_invalid_key_share(self):
         client = self.create_client()
         client._supported_groups = [tls.Group.SECP256R1]
