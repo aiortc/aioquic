@@ -308,6 +308,16 @@ class ContextTest(TestCase):
             ),
         )
 
+    def test_client_bad_hello_no_key_share(self):
+        self.handshake_with_client_input_corruption(
+            # Rename the key share extension, which follows supported versions.
+            lambda x: x.replace(
+                b"\x00\x2b\x00\x02\x03\x04\x00\x33",
+                b"\x00\x2b\x00\x02\x03\x04\xfa\xfa",
+            ),
+            tls.AlertMissingExtension("ServerHello has no key share"),
+        )
+
     def test_client_bad_hello_version(self):
         self.handshake_with_client_input_corruption(
             # Mess with supported version.
@@ -438,6 +448,34 @@ class ContextTest(TestCase):
                 "the certificate's key"
             ),
         )
+
+    def test_server_no_key_share(self):
+        client = self.create_client()
+        server = self.create_server()
+
+        # Send client hello, renaming the key share extension, which comes first.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        server_input = merge_buffers(client_buf)
+        hello = pull_client_hello(Buffer(data=server_input))
+        offset = (
+            4  # handshake header
+            + 2  # legacy version
+            + 32  # random
+            + 1
+            + len(hello.legacy_session_id)
+            + 2
+            + 2 * len(hello.cipher_suites)
+            + 1
+            + len(hello.legacy_compression_methods)
+            + 2  # extensions length
+        )
+        self.assertEqual(server_input[offset : offset + 2], b"\x00\x33")
+        server_input = server_input[:offset] + b"\xfa\xfa" + server_input[offset + 2 :]
+
+        with self.assertRaises(tls.AlertMissingExtension) as cm:
+            server.handle_message(server_input, create_buffers())
+        self.assertEqual(str(cm.exception), "ClientHello has no key share")
 
     def test_server_invalid_key_share(self):
         client = self.create_client()
