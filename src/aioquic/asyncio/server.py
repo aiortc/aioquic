@@ -5,18 +5,56 @@ from typing import Callable, Optional, Text, Union, cast
 
 from ..buffer import Buffer
 from ..quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
-from ..quic.connection import NetworkAddress, QuicConnection
+from ..quic.connection import (
+    TRANSPORT_CLOSE_FRAME_CAPACITY,
+    NetworkAddress,
+    QuicConnection,
+)
+from ..quic.crypto import CryptoPair
 from ..quic.packet import (
+    QuicErrorCode,
+    QuicFrameType,
     QuicPacketType,
     encode_quic_retry,
     encode_quic_version_negotiation,
     pull_quic_header,
 )
+from ..quic.packet_builder import QuicPacketBuilder
 from ..quic.retry import QuicRetryTokenHandler
 from ..tls import SessionTicketFetcher, SessionTicketHandler
 from .protocol import QuicConnectionProtocol, QuicStreamHandler
 
 __all__ = ["serve"]
+
+
+def _encode_invalid_token_close(
+    version: int, source_cid: bytes, destination_cid: bytes
+) -> bytes:
+    """
+    Build a server Initial packet closing the connection with INVALID_TOKEN.
+
+    The Initial keys are derived from `source_cid`, which is the Destination
+    Connection ID chosen by the client.
+    """
+    crypto = CryptoPair()
+    crypto.setup_initial(cid=source_cid, is_client=False, version=version)
+
+    builder = QuicPacketBuilder(
+        host_cid=source_cid,
+        is_client=False,
+        max_datagram_size=SMALLEST_MAX_DATAGRAM_SIZE,
+        peer_cid=destination_cid,
+        version=version,
+    )
+    builder.start_packet(QuicPacketType.INITIAL, crypto)
+    buf = builder.start_frame(
+        QuicFrameType.TRANSPORT_CLOSE, capacity=TRANSPORT_CLOSE_FRAME_CAPACITY
+    )
+    buf.push_uint_var(QuicErrorCode.INVALID_TOKEN)
+    buf.push_uint_var(QuicFrameType.PADDING)
+    buf.push_uint_var(0)
+    datagrams, _ = builder.flush()
+    return datagrams[0]
 
 
 class QuicServer(asyncio.DatagramProtocol):
@@ -124,6 +162,16 @@ class QuicServer(asyncio.DatagramProtocol):
                             retry_source_connection_id,
                         ) = self._retry.validate_token(addr, header.token)
                     except ValueError:
+                        # Close the connection with INVALID_TOKEN, see RFC 9000
+                        # section 8.1.3.
+                        self._transport.sendto(
+                            _encode_invalid_token_close(
+                                version=header.version,
+                                source_cid=header.destination_cid,
+                                destination_cid=header.source_cid,
+                            ),
+                            addr,
+                        )
                         return
             else:
                 original_destination_connection_id = header.destination_cid

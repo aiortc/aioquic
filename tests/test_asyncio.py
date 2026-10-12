@@ -11,8 +11,9 @@ from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.asyncio.server import serve
 from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.events import ConnectionTerminated, QuicEvent
 from aioquic.quic.logger import QuicLogger
-from aioquic.quic.packet import encode_quic_version_negotiation
+from aioquic.quic.packet import QuicErrorCode, encode_quic_version_negotiation
 from cryptography.hazmat.primitives import serialization
 
 from .utils import (
@@ -389,14 +390,29 @@ class HighLevelTest(TestCase):
     @patch("aioquic.quic.retry.QuicRetryTokenHandler.validate_token")
     @asynctest
     async def test_connect_and_serve_with_retry_bad_token(self, mock_validate) -> None:
+        """
+        If the retry token is invalid, the server must close the connection
+        with INVALID_TOKEN.
+        """
         mock_validate.side_effect = ValueError("Decryption failed.")
+        events = []
+
+        class ClientProtocol(QuicConnectionProtocol):
+            def quic_event_received(self, event: QuicEvent) -> None:
+                if isinstance(event, ConnectionTerminated):
+                    events.append(event)
+                super().quic_event_received(event)
 
         async with self.run_server(retry=True) as server_port:
             with self.assertRaises(ConnectionError):
                 await self.run_client(
                     configuration=QuicConfiguration(is_client=True, idle_timeout=4.0),
+                    create_protocol=ClientProtocol,
                     port=server_port,
                 )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].error_code, QuicErrorCode.INVALID_TOKEN)
 
     @asynctest
     async def test_connect_and_serve_with_version_negotiation(self) -> None:
