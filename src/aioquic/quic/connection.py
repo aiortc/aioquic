@@ -2287,9 +2287,11 @@ class QuicConnection:
         # check stream direction
         self._assert_stream_can_send(frame_type, stream_id)
 
-        # reset the stream
+        # Reset the stream, copying the error code as recommended.
+        #
+        # https://datatracker.ietf.org/doc/html/rfc9000#section-3.5
         stream = self._get_or_create_stream(frame_type, stream_id)
-        stream.sender.reset(error_code=QuicErrorCode.NO_ERROR)
+        stream.sender.reset(error_code=error_code)
 
         self._events.append(
             events.StopSendingReceived(error_code=error_code, stream_id=stream_id)
