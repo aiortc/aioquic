@@ -1265,6 +1265,10 @@ class H3Connection:
                     break
                 consumed = buf.tell()
 
+                # Only servers can push, see RFC 9114 section 6.2.2.
+                if stream.stream_type == StreamType.PUSH and not self._is_client:
+                    raise StreamCreationError("Clients must not open push streams")
+
                 # check unicity
                 if stream.stream_type == StreamType.CONTROL:
                     if self._peer_control_stream_id is not None:
@@ -1341,8 +1345,7 @@ class H3Connection:
                         break
                     consumed = buf.tell()
 
-                    if self._is_client:
-                        self._check_push_id(stream.push_id)
+                    self._check_push_id(stream.push_id)
 
                     self._log_stream_type(
                         push_id=stream.push_id,
