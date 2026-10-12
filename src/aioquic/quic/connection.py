@@ -963,7 +963,7 @@ class QuicConnection:
                     and epoch in (tls.Epoch.HANDSHAKE, tls.Epoch.ONE_RTT)
                     and not self._crypto_retransmitted
                 ):
-                    self._loss.reschedule_data(now=now)
+                    self._loss.reschedule_data(now=now, speed_up_handshake=True)
                     self._crypto_retransmitted = True
                 continue
             except CryptoError as exc:
@@ -1786,7 +1786,7 @@ class QuicConnection:
                 and context.epoch == tls.Epoch.INITIAL
                 and not self._crypto_retransmitted
             ):
-                self._loss.reschedule_data(now=context.time)
+                self._loss.reschedule_data(now=context.time, speed_up_handshake=True)
                 self._crypto_retransmitted = True
 
     def _handle_data_blocked_frame(

@@ -349,23 +349,65 @@ class QuicPacketRecovery:
             if self._quic_logger is not None:
                 self._log_metrics_updated()
 
-    def reschedule_data(self, *, now: float) -> None:
+    def reschedule_data(self, *, now: float, speed_up_handshake: bool = False) -> None:
         """
-        Schedule some data for retransmission.
+        Schedule some data for retransmission and request a probe.
+
+        Outstanding CRYPTO data is retransmitted if there is any. Otherwise, so
+        that a probe carries data rather than a bare PING (RFC 9002 section
+        6.2.4), the oldest ack-eliciting packet is retransmitted, unless
+        `speed_up_handshake` is set, as speeding up handshake completion only
+        involves CRYPTO data (RFC 9002 section 6.2.3).
+
+        The packets are declared lost, although RFC 9002 section 6.2 says a PTO
+        must not mark packets as lost, because delivery handlers expect a packet
+        to be either acknowledged or lost, never both. Retransmitting early does
+        not imply a loss though, so this is not a congestion event.
         """
-        # if there is any outstanding CRYPTO, retransmit it
+        # Retransmit any outstanding CRYPTO data.
         crypto_scheduled = False
         for space in self.spaces:
             packets = tuple(
                 filter(lambda i: i.is_crypto_packet, space.sent_packets.values())
             )
             if packets:
-                self._on_packets_lost(now=now, packets=packets, space=space)
+                if self._logger is not None:
+                    self._logger.debug(
+                        "Scheduled CRYPTO data of %s packets %s for retransmission",
+                        packets[0].packet_type.name,
+                        ", ".join(str(packet.packet_number) for packet in packets),
+                    )
+                self._on_packets_lost(
+                    congestion_event=False, now=now, packets=packets, space=space
+                )
                 crypto_scheduled = True
-        if crypto_scheduled and self._logger is not None:
-            self._logger.debug("Scheduled CRYPTO data for retransmission")
 
-        # ensure an ACK-elliciting packet is sent
+        # Otherwise retransmit the oldest ack-eliciting packet. Application data
+        # does not arm the PTO before the handshake is confirmed, so it is not
+        # retransmitted early either.
+        if not crypto_scheduled and not speed_up_handshake:
+            oldest: Optional[tuple[QuicSentPacket, QuicPacketSpace]] = None
+            for space in self.spaces:
+                if space.is_application_data and not self.handshake_confirmed:
+                    continue
+                for packet in space.sent_packets.values():
+                    if packet.is_ack_eliciting:
+                        if oldest is None or packet.sent_time < oldest[0].sent_time:
+                            oldest = (packet, space)
+                        break
+            if oldest is not None:
+                packet, space = oldest
+                if self._logger is not None:
+                    self._logger.debug(
+                        "Scheduled data of %s packet %d for retransmission",
+                        packet.packet_type.name,
+                        packet.packet_number,
+                    )
+                self._on_packets_lost(
+                    congestion_event=False, now=now, packets=[packet], space=space
+                )
+
+        # Ensure an ACK-eliciting packet is sent.
         self._send_probe()
 
     def _detect_loss(self, *, now: float, space: QuicPacketSpace) -> None:
@@ -466,11 +508,20 @@ class QuicPacketRecovery:
     def _on_packets_lost(
         self,
         *,
+        congestion_event: bool = True,
         now: float,
         packets: Iterable[QuicSentPacket],
         persistent_congestion: bool = False,
         space: QuicPacketSpace,
     ) -> None:
+        """
+        Stop tracking the packets and schedule their data for retransmission.
+
+        If `congestion_event` is True, the loss is reported to the congestion
+        controller, which may reduce its window, and `persistent_congestion` makes
+        it collapse the window. If it is False, the packets are only removed from
+        bytes in flight, as when a PTO retransmits data which may not be lost.
+        """
         lost_packets_cc = []
         for packet in packets:
             del space.sent_packets[packet.packet_number]
@@ -497,7 +548,9 @@ class QuicPacketRecovery:
                 handler(QuicDeliveryState.LOST, *args)
 
         # inform congestion controller
-        if lost_packets_cc:
+        if lost_packets_cc and not congestion_event:
+            self._cc.on_packets_expired(packets=lost_packets_cc)
+        elif lost_packets_cc:
             self._cc.on_packets_lost(now=now, packets=lost_packets_cc)
             if persistent_congestion:
                 self._cc.on_persistent_congestion()
