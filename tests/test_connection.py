@@ -32,6 +32,7 @@ from aioquic.quic.packet import (
     QuicVersionInformation,
     encode_quic_retry,
     encode_quic_version_negotiation,
+    pull_quic_header,
     push_quic_transport_parameters,
 )
 from aioquic.quic.packet_builder import QuicDeliveryState, QuicPacketBuilder
@@ -1170,6 +1171,60 @@ class QuicConnectionTest(TestCase):
 
             # The PTO is not armed, only the idle timeout remains.
             self.assertEqual(server.get_timer(), server._close_at)
+
+    def test_connect_with_lost_encrypted_extensions(self):
+        """
+        Check the client acknowledges the server's HANDSHAKE packets even if the
+        one carrying EncryptedExtensions is lost, so that the server can detect
+        the loss without waiting for its PTO.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            # Client sends INITIAL.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+
+            # Server receives INITIAL, sends INITIAL + HANDSHAKE.
+            now += TICK
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), SERVER_INITIAL_DATAGRAM_SIZES)
+            self.assertEqual(server.get_timer(), 0.25)
+            self.assertSentPackets(server, [1, 2, 0])
+
+            # Client receives the INITIAL but not the HANDSHAKE packet which
+            # follows it, then receives the second HANDSHAKE packet.
+            now += TICK
+            data = items[0][0]
+            header = pull_quic_header(Buffer(data=data), host_cid_length=8)
+            self.assertEqual(header.packet_type, QuicPacketType.INITIAL)
+            client.receive_datagram(data[: header.packet_length], SERVER_ADDR, now=now)
+            client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+            self.assertEqual(
+                client.tls.state, tls.State.CLIENT_EXPECT_ENCRYPTED_EXTENSIONS
+            )
+
+            # Client acknowledges the HANDSHAKE packet.
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertSentPackets(client, [0, 1, 0])
+
+            # Server receives the ACK and detects the loss before its PTO.
+            now += TICK
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertEqual(server.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(server.get_timer(), 0.1625)
+
+            # Server retransmits the lost HANDSHAKE packet.
+            now = server.get_timer()
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1024])
+
+            # Client completes the handshake.
+            now += TICK
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertTrue(client._handshake_complete)
 
     def test_connect_with_lost_handshake_done(self):
         """

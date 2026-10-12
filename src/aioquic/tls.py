@@ -1749,8 +1749,15 @@ class Context:
         self.key_schedule.update_hash(input_buf.data)
         self.key_schedule.extract(shared_key)
 
+        # Both handshake secrets are available once the ServerHello is processed
+        # (RFC 8446 section 7.1). Provide the write key to QUIC straight away, as
+        # it may need to acknowledge Handshake packets before EncryptedExtensions
+        # arrives (RFC 9001 section 4.1.4).
         self._setup_traffic_protection(
             Direction.DECRYPT, Epoch.HANDSHAKE, b"s hs traffic"
+        )
+        self._setup_traffic_protection(
+            Direction.ENCRYPT, Epoch.HANDSHAKE, b"c hs traffic"
         )
 
         self._set_state(State.CLIENT_EXPECT_ENCRYPTED_EXTENSIONS)
@@ -1775,9 +1782,6 @@ class Context:
         if self.alpn_cb:
             self.alpn_cb(self.alpn_negotiated)
 
-        self._setup_traffic_protection(
-            Direction.ENCRYPT, Epoch.HANDSHAKE, b"c hs traffic"
-        )
         self.key_schedule.update_hash(input_buf.data)
 
         # if the server accepted our PSK we are done, other we want its certificate
