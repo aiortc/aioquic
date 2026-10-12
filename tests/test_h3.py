@@ -839,6 +839,27 @@ class H3ConnectionTest(TestCase):
                     ),
                 )
 
+    def test_handle_push_stream_from_client(self):
+        """
+        A server must reject a push stream, see RFC 9114 section 6.2.2.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=2,
+                data=encode_uint_var(StreamType.PUSH),
+                end_stream=False,
+            )
+        )
+        self.assertEqual(
+            quic_server.closed,
+            (ErrorCode.H3_STREAM_CREATION_ERROR, "Clients must not open push streams"),
+        )
+
     def test_handle_push_stream_push_id_exceeds_max(self):
         """
         A client must reject a push stream whose push ID exceeds the
