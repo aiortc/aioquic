@@ -158,6 +158,10 @@ class FrameUnexpected(ProtocolError):
     error_code = ErrorCode.H3_FRAME_UNEXPECTED
 
 
+class IdError(ProtocolError):
+    error_code = ErrorCode.H3_ID_ERROR
+
+
 class MessageError(ProtocolError):
     error_code = ErrorCode.H3_MESSAGE_ERROR
 
@@ -540,7 +544,7 @@ class H3Connection:
             )
 
         # check a push ID is available
-        if self._max_push_id is None or self._next_push_id >= self._max_push_id:
+        if self._max_push_id is None or self._next_push_id > self._max_push_id:
             raise NoAvailablePushIDError
 
         # send push promise
@@ -765,7 +769,12 @@ class H3Connection:
             self._quic.send_stream_data(self._local_encoder_stream_id, encoder)
             self._settings_received = True
         elif frame_type == FrameType.MAX_PUSH_ID:
-            self._max_push_id = parse_max_push_id(frame_data)
+            max_push_id = parse_max_push_id(frame_data)
+
+            # The maximum push ID cannot be reduced, see RFC 9114 section 7.2.7.
+            if self._max_push_id is not None and max_push_id < self._max_push_id:
+                raise IdError("MAX_PUSH_ID reduced the maximum push ID")
+            self._max_push_id = max_push_id
 
     def _check_content_length(self, stream: H3Stream):
         if (
@@ -870,6 +879,7 @@ class H3Connection:
                     push_id = frame_buf.pull_uint_var()
                 except BufferReadError:
                     raise FrameError("Could not parse PUSH_PROMISE frame")
+                self._check_push_id(push_id)
                 try:
                     headers = self._decode_headers(
                         stream.stream_id, frame_data[frame_buf.tell() :]
@@ -926,6 +936,14 @@ class H3Connection:
             stream_id=stream.stream_id,
             stream_ended=True,
         )
+
+    def _check_push_id(self, push_id: int) -> None:
+        """
+        Check a push ID received by a client is allowed by the MAX_PUSH_ID
+        we sent, see RFC 9114 section 4.6 and section 7.2.7.
+        """
+        if self._max_push_id is None or push_id > self._max_push_id:
+            raise IdError("Push ID exceeds the maximum push ID")
 
     def _check_request_or_push_frame_type(
         self, frame_type: int, stream: H3Stream
@@ -1322,6 +1340,9 @@ class H3Connection:
                     except BufferReadError:
                         break
                     consumed = buf.tell()
+
+                    if self._is_client:
+                        self._check_push_id(stream.push_id)
 
                     self._log_stream_type(
                         push_id=stream.push_id,

@@ -562,6 +562,39 @@ class H3ConnectionTest(TestCase):
                     quic_server.closed, (ErrorCode.H3_FRAME_ERROR, reason_phrase)
                 )
 
+    def test_handle_control_frame_max_push_id_reduced(self):
+        """
+        A server must reject a MAX_PUSH_ID frame which reduces the maximum
+        push ID, see RFC 9114 section 7.2.7.
+        """
+        for max_push_id, expected_closed, expected_max_push_id in [
+            (7, (ErrorCode.H3_ID_ERROR, "MAX_PUSH_ID reduced the maximum push ID"), 8),
+            (8, None, 8),
+            (9, None, 9),
+        ]:
+            with self.subTest(max_push_id=max_push_id):
+                quic_server = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=False)
+                )
+                h3_server = H3Connection(quic_server)
+
+                h3_server.handle_event(
+                    StreamDataReceived(
+                        stream_id=2,
+                        data=encode_uint_var(StreamType.CONTROL)
+                        + encode_frame(
+                            FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)
+                        )
+                        + encode_frame(FrameType.MAX_PUSH_ID, encode_uint_var(8))
+                        + encode_frame(
+                            FrameType.MAX_PUSH_ID, encode_uint_var(max_push_id)
+                        ),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(quic_server.closed, expected_closed)
+                self.assertEqual(h3_server._max_push_id, expected_max_push_id)
+
     def test_handle_control_settings_twice(self):
         """
         We should not receive HEADERS on the control stream.
@@ -805,6 +838,31 @@ class H3ConnectionTest(TestCase):
                         "Invalid frame type on push stream",
                     ),
                 )
+
+    def test_handle_push_stream_push_id_exceeds_max(self):
+        """
+        A client must reject a push stream whose push ID exceeds the
+        MAX_PUSH_ID it sent, see RFC 9114 section 4.6.
+        """
+        for push_id, expected_closed in [
+            (8, None),
+            (9, (ErrorCode.H3_ID_ERROR, "Push ID exceeds the maximum push ID")),
+        ]:
+            with self.subTest(push_id=push_id):
+                quic_client = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=True)
+                )
+                h3_client = H3Connection(quic_client)
+
+                h3_client.handle_event(
+                    StreamDataReceived(
+                        stream_id=15,
+                        data=encode_uint_var(StreamType.PUSH)
+                        + encode_uint_var(push_id),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(quic_client.closed, expected_closed)
 
     def test_handle_qpack_decoder_duplicate(self):
         """
@@ -1102,6 +1160,51 @@ class H3ConnectionTest(TestCase):
             quic_server.closed,
             (ErrorCode.H3_FRAME_UNEXPECTED, "Clients must not send PUSH_PROMISE"),
         )
+
+    def test_handle_request_frame_push_promise_id_exceeds_max(self):
+        """
+        A client must reject a PUSH_PROMISE whose push ID exceeds the
+        MAX_PUSH_ID it sent, see RFC 9114 section 7.2.5.
+        """
+        push_headers = [
+            (b":method", b"GET"),
+            (b":scheme", b"https"),
+            (b":authority", b"localhost"),
+            (b":path", b"/app.css"),
+        ]
+        for push_id, expected_events, expected_closed in [
+            (
+                8,
+                [PushPromiseReceived(headers=push_headers, push_id=8, stream_id=0)],
+                None,
+            ),
+            (
+                9,
+                [],
+                (ErrorCode.H3_ID_ERROR, "Push ID exceeds the maximum push ID"),
+            ),
+        ]:
+            with self.subTest(push_id=push_id):
+                quic_client = FakeQuicConnection(
+                    configuration=QuicConfiguration(is_client=True)
+                )
+                h3_client = H3Connection(quic_client)
+
+                events = h3_client.handle_event(
+                    StreamDataReceived(
+                        stream_id=0,
+                        data=encode_frame(
+                            FrameType.PUSH_PROMISE,
+                            encode_uint_var(push_id)
+                            + binascii.unhexlify(
+                                "0000d1d75086a0e41d139d0951866075d6b9108f"
+                            ),
+                        ),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(events, expected_events)
+                self.assertEqual(quic_client.closed, expected_closed)
 
     def test_handle_request_frame_push_promise_truncated(self):
         """
@@ -1947,7 +2050,7 @@ class H3ConnectionTest(TestCase):
                 )
 
             # send push promises
-            for i in range(0, 8):
+            for i in range(0, 9):
                 h3_server.send_push_promise(
                     stream_id=stream_id,
                     headers=[
@@ -1966,7 +2069,7 @@ class H3ConnectionTest(TestCase):
                         (b":method", b"GET"),
                         (b":scheme", b"https"),
                         (b":authority", b"localhost"),
-                        (b":path", b"/8.css"),
+                        (b":path", b"/9.css"),
                     ],
                 )
 
