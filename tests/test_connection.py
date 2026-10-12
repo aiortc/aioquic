@@ -372,6 +372,21 @@ class QuicConnectionTest(TestCase):
                 client=client, server=server, alpn_protocol="hq-interop"
             )
 
+    def test_connect_with_alpn_fail(self):
+        with client_and_server(
+            client_options={"alpn_protocols": ["hq-interop"]},
+            server_options={"alpn_protocols": ["h3"]},
+        ) as (client, server):
+            self.assertEqual(
+                server._close_event,
+                events.ConnectionTerminated(
+                    error_code=QuicErrorCode.CRYPTO_ERROR
+                    + tls.AlertDescription.no_application_protocol,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="No common ALPN protocols",
+                ),
+            )
+
     def test_connect_with_secrets_log(self):
         client_log_file = io.StringIO()
         server_log_file = io.StringIO()
