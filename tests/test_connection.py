@@ -3533,13 +3533,13 @@ class QuicConnectionTest(TestCase):
             self.assertEqual(roundtrip(client, server), (1, 1))
 
             # client sends STOP_SENDING frame
-            client.stop_stream(0, QuicErrorCode.NO_ERROR)
+            client.stop_stream(0, 0x11)
             self.assertEqual(roundtrip(client, server), (1, 1))
 
-            # client receives STREAM_RESET frame
+            # client receives STREAM_RESET frame, with the same error code
             event = client.next_event()
             self.assertEqual(type(event), events.StreamReset)
-            self.assertEqual(event.error_code, QuicErrorCode.NO_ERROR)
+            self.assertEqual(event.error_code, 0x11)
             self.assertEqual(event.stream_id, 0)
 
     def test_send_stop_sending_uni_stream(self):
