@@ -1,7 +1,5 @@
-import math
 from unittest import TestCase
 
-from aioquic import tls
 from aioquic.quic.congestion.base import K_INITIAL_WINDOW, K_MINIMUM_WINDOW
 from aioquic.quic.congestion.cubic import (
     K_CUBIC_C,
@@ -9,154 +7,24 @@ from aioquic.quic.congestion.cubic import (
     CubicCongestionControl,
     better_cube_root,
 )
-from aioquic.quic.packet import QuicPacketType
 from aioquic.quic.packet_builder import QuicSentPacket
-from aioquic.quic.rangeset import RangeSet
-from aioquic.quic.recovery import QuicPacketRecovery, QuicPacketSpace
 
-
-def send_probe():
-    pass
+from .utils import ack_eliciting_packet
 
 
 def W_cubic(t, K, W_max):
     return K_CUBIC_C * (t - K) ** 3 + (W_max)
 
 
-class QuicPacketRecoveryCubicTest(TestCase):
-    def setUp(self):
-        self.INITIAL_SPACE = QuicPacketSpace()
-        self.HANDSHAKE_SPACE = QuicPacketSpace()
-        self.ONE_RTT_SPACE = QuicPacketSpace(is_application_data=True)
-
-        self.recovery = QuicPacketRecovery(
-            congestion_control_algorithm="cubic",
-            initial_rtt=0.1,
-            max_datagram_size=1280,
-            peer_completed_address_validation=True,
-            send_probe=send_probe,
-        )
-        self.recovery.spaces = [
-            self.INITIAL_SPACE,
-            self.HANDSHAKE_SPACE,
-            self.ONE_RTT_SPACE,
-        ]
-
+class CubicCongestionControlTest(TestCase):
     def test_better_cube_root(self):
         self.assertAlmostEqual(better_cube_root(8), 2)
         self.assertAlmostEqual(better_cube_root(-8), -2)
         self.assertAlmostEqual(better_cube_root(0), 0)
         self.assertAlmostEqual(better_cube_root(27), 3)
 
-    def test_discard_space(self):
-        self.recovery.discard_space(self.INITIAL_SPACE)
-
-    def test_on_ack_received_ack_eliciting(self):
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=0.0,
-        )
-        space = self.ONE_RTT_SPACE
-
-        #  packet sent
-        self.recovery.on_packet_sent(packet=packet, space=space)
-        self.assertEqual(self.recovery.bytes_in_flight, 1280)
-        self.assertEqual(space.ack_eliciting_in_flight, 1)
-        self.assertEqual(len(space.sent_packets), 1)
-
-        # packet ack'd
-        self.recovery.on_ack_received(
-            ack_rangeset=RangeSet([range(0, 1)]),
-            ack_delay=0.0,
-            now=10.0,
-            space=space,
-        )
-        self.assertEqual(self.recovery.bytes_in_flight, 0)
-        self.assertEqual(space.ack_eliciting_in_flight, 0)
-        self.assertEqual(len(space.sent_packets), 0)
-
-        # check RTT
-        self.assertTrue(self.recovery._rtt_initialized)
-        self.assertEqual(self.recovery._rtt_latest, 10.0)
-        self.assertEqual(self.recovery._rtt_min, 10.0)
-        self.assertEqual(self.recovery._rtt_smoothed, 10.0)
-
-    def test_on_ack_received_non_ack_eliciting(self):
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=False,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=123.45,
-        )
-        space = self.ONE_RTT_SPACE
-
-        #  packet sent
-        self.recovery.on_packet_sent(packet=packet, space=space)
-        self.assertEqual(self.recovery.bytes_in_flight, 1280)
-        self.assertEqual(space.ack_eliciting_in_flight, 0)
-        self.assertEqual(len(space.sent_packets), 1)
-
-        # packet ack'd
-        self.recovery.on_ack_received(
-            ack_rangeset=RangeSet([range(0, 1)]),
-            ack_delay=0.0,
-            now=10.0,
-            space=space,
-        )
-        self.assertEqual(self.recovery.bytes_in_flight, 0)
-        self.assertEqual(space.ack_eliciting_in_flight, 0)
-        self.assertEqual(len(space.sent_packets), 0)
-
-        # check RTT
-        self.assertFalse(self.recovery._rtt_initialized)
-        self.assertEqual(self.recovery._rtt_latest, 0.0)
-        self.assertEqual(self.recovery._rtt_min, math.inf)
-        self.assertEqual(self.recovery._rtt_smoothed, 0.0)
-
-    def test_on_packet_lost_crypto(self):
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.INITIAL,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=True,
-            packet_number=0,
-            packet_type=QuicPacketType.INITIAL,
-            sent_bytes=1280,
-            sent_time=0.0,
-        )
-        space = self.INITIAL_SPACE
-
-        self.recovery.on_packet_sent(packet=packet, space=space)
-        self.assertEqual(self.recovery.bytes_in_flight, 1280)
-        self.assertEqual(space.ack_eliciting_in_flight, 1)
-        self.assertEqual(len(space.sent_packets), 1)
-
-        self.recovery._detect_loss(space=space, now=1.0)
-        self.assertEqual(self.recovery.bytes_in_flight, 0)
-        self.assertEqual(space.ack_eliciting_in_flight, 0)
-        self.assertEqual(len(space.sent_packets), 0)
-
     def test_packet_expired(self):
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=0.0,
-        )
+        packet = ack_eliciting_packet(sent_time=0.0)
 
         cubic = CubicCongestionControl(1440)
         cubic.on_packet_sent(packet=packet)
@@ -240,16 +108,7 @@ class QuicPacketRecoveryCubicTest(TestCase):
             )
 
     def test_reset_idle(self):
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=10.0,
-        )
+        packet = ack_eliciting_packet(sent_time=10.0)
 
         max_datagram_size = 1440
 
@@ -275,6 +134,13 @@ class QuicPacketRecoveryCubicTest(TestCase):
 
         self.assertEqual(cubic._W_max, K_INITIAL_WINDOW * max_datagram_size)
 
+    def test_slow_start(self):
+        cubic = CubicCongestionControl(1440)
+
+        # The window grows by the size of each acknowledged packet.
+        cubic.on_packet_acked(now=1.0, packet=ack_eliciting_packet(sent_time=0.5))
+        self.assertEqual(cubic.congestion_window, K_INITIAL_WINDOW * 1440 + 1280)
+
     def test_reno_friendly_region(self):
         cubic = CubicCongestionControl(1440)
         cubic._W_max = 5000  # set the target number of bytes to 5000
@@ -293,16 +159,7 @@ class QuicPacketRecoveryCubicTest(TestCase):
         cwnd_epoch_segments = cubic._cwnd_epoch / cubic._max_datagram_size
         cubic.K = better_cube_root((W_max_segments - cwnd_epoch_segments) / K_CUBIC_C)
 
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=0.0,
-        )
+        packet = ack_eliciting_packet(sent_time=0.0)
 
         previous_cwnd = cubic.congestion_window
 
@@ -331,16 +188,7 @@ class QuicPacketRecoveryCubicTest(TestCase):
         cwnd_epoch_segments = cubic._cwnd_epoch / cubic._max_datagram_size
         cubic.K = better_cube_root((W_max_segments - cwnd_epoch_segments) / K_CUBIC_C)
 
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=0.0,
-        )
+        packet = ack_eliciting_packet(sent_time=0.0)
 
         previous_cwnd = cubic.congestion_window
 
@@ -373,16 +221,7 @@ class QuicPacketRecoveryCubicTest(TestCase):
         cwnd_epoch_segments = cubic._cwnd_epoch / cubic._max_datagram_size
         cubic.K = better_cube_root((W_max_segments - cwnd_epoch_segments) / K_CUBIC_C)
 
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=0.0,
-        )
+        packet = ack_eliciting_packet(sent_time=0.0)
 
         previous_cwnd = cubic.congestion_window
 
@@ -412,16 +251,7 @@ class QuicPacketRecoveryCubicTest(TestCase):
         self.assertEqual(cubic.ssthresh, cubic.congestion_window)
 
     def test_increasing_rtt_exiting_slow_start(self):
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=200.0,
-        )
+        packet = ack_eliciting_packet(sent_time=200.0)
 
         cubic = CubicCongestionControl(1440)
 
@@ -457,27 +287,9 @@ class QuicPacketRecoveryCubicTest(TestCase):
         self.assertEqual(cubic.K, K)
 
     def test_packet_lost(self):
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=200.0,
-        )
+        packet = ack_eliciting_packet(sent_time=200.0)
 
-        packet2 = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=240.0,
-        )
+        packet2 = ack_eliciting_packet(sent_time=240.0)
 
         cubic = CubicCongestionControl(1440)
 
@@ -516,16 +328,7 @@ class QuicPacketRecoveryCubicTest(TestCase):
         self.assertEqual(cubic.K, K)
 
     def test_lost_with_W_max(self):
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=200.0,
-        )
+        packet = ack_eliciting_packet(sent_time=200.0)
 
         cubic = CubicCongestionControl(1440)
 
@@ -558,16 +361,7 @@ class QuicPacketRecoveryCubicTest(TestCase):
         cwnd_epoch_segments = cubic._cwnd_epoch / cubic._max_datagram_size
         cubic.K = better_cube_root((W_max_segments - cwnd_epoch_segments) / K_CUBIC_C)
 
-        packet = QuicSentPacket(
-            epoch=tls.Epoch.ONE_RTT,
-            in_flight=True,
-            is_ack_eliciting=True,
-            is_crypto_packet=False,
-            packet_number=0,
-            packet_type=QuicPacketType.ONE_RTT,
-            sent_bytes=1280,
-            sent_time=0.0,
-        )
+        packet = ack_eliciting_packet(sent_time=0.0)
 
         previous_cwnd = cubic.congestion_window
 
