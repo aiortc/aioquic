@@ -1141,14 +1141,19 @@ SIGNATURE_ALGORITHMS: dict = {
     SignatureAlgorithm.ECDSA_SECP256R1_SHA256: (None, hashes.SHA256),
     SignatureAlgorithm.ECDSA_SECP384R1_SHA384: (None, hashes.SHA384),
     SignatureAlgorithm.ECDSA_SECP521R1_SHA512: (None, hashes.SHA512),
-    SignatureAlgorithm.RSA_PKCS1_SHA1: (padding.PKCS1v15, hashes.SHA1),
-    SignatureAlgorithm.RSA_PKCS1_SHA256: (padding.PKCS1v15, hashes.SHA256),
-    SignatureAlgorithm.RSA_PKCS1_SHA384: (padding.PKCS1v15, hashes.SHA384),
-    SignatureAlgorithm.RSA_PKCS1_SHA512: (padding.PKCS1v15, hashes.SHA512),
     SignatureAlgorithm.RSA_PSS_RSAE_SHA256: (padding.PSS, hashes.SHA256),
     SignatureAlgorithm.RSA_PSS_RSAE_SHA384: (padding.PSS, hashes.SHA384),
     SignatureAlgorithm.RSA_PSS_RSAE_SHA512: (padding.PSS, hashes.SHA512),
 }
+
+RSA_PKCS1_SIGNATURE_ALGORITHMS = frozenset(
+    [
+        SignatureAlgorithm.RSA_PKCS1_SHA1,
+        SignatureAlgorithm.RSA_PKCS1_SHA256,
+        SignatureAlgorithm.RSA_PKCS1_SHA384,
+        SignatureAlgorithm.RSA_PKCS1_SHA512,
+    ]
+)
 
 GROUP_TO_CURVE: dict = {
     Group.SECP256R1: ec.SECP256R1,
@@ -1226,13 +1231,11 @@ def signature_algorithm_params(signature_algorithm: int) -> tuple:
     algorithm = algorithm_cls()
     if padding_cls is None:
         return (ec.ECDSA(algorithm),)
-    elif padding_cls == padding.PSS:
+    else:
         padding_obj = padding_cls(
             mgf=padding.MGF1(algorithm), salt_length=algorithm.digest_size
         )
-    else:
-        padding_obj = padding_cls()
-    return padding_obj, algorithm
+        return padding_obj, algorithm
 
 
 @contextmanager
@@ -1530,6 +1533,13 @@ class Context:
         if verify.algorithm not in self._signature_algorithms:
             raise AlertDecryptError(
                 "CertificateVerify has a signature algorithm we did not advertise"
+            )
+
+        # We advertise RSASSA-PKCS1-v1_5 for signatures in certificates, but RSA
+        # signatures in CertificateVerify must use RSASSA-PSS (RFC 8446 section 4.4.3).
+        if verify.algorithm in RSA_PKCS1_SIGNATURE_ALGORITHMS:
+            raise AlertIllegalParameter(
+                "CertificateVerify has an RSASSA-PKCS1-v1_5 signature algorithm"
             )
 
         # The signature algorithm must be compatible with the key in the peer's
@@ -2256,12 +2266,11 @@ class Context:
     def _signature_algorithms_for_private_key(self) -> list[SignatureAlgorithm]:
         signature_algorithms: list[SignatureAlgorithm] = []
         if isinstance(self.certificate_private_key, rsa.RSAPrivateKey):
+            # RSA signatures in CertificateVerify must use RSASSA-PSS
+            # (RFC 8446 section 4.4.3).
             signature_algorithms = [
                 SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
-                SignatureAlgorithm.RSA_PKCS1_SHA256,
                 SignatureAlgorithm.RSA_PSS_RSAE_SHA384,
-                SignatureAlgorithm.RSA_PKCS1_SHA384,
-                SignatureAlgorithm.RSA_PKCS1_SHA1,
             ]
         elif isinstance(
             self.certificate_private_key, ec.EllipticCurvePrivateKey
