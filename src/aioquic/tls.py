@@ -22,7 +22,7 @@ from typing import (
 import certifi
 import service_identity
 from cryptography import x509
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, hmac, serialization
 from cryptography.hazmat.primitives.asymmetric import (
@@ -134,6 +134,10 @@ class AlertProtocolVersion(Alert):
 
 class AlertUnexpectedMessage(Alert):
     description = AlertDescription.unexpected_message
+
+
+class AlertUnsupportedCertificate(Alert):
+    description = AlertDescription.unsupported_certificate
 
 
 class Direction(Enum):
@@ -1522,7 +1526,14 @@ class Context:
 
         # The signature algorithm must be compatible with the key in the peer's
         # certificate (RFC 8446 section 4.4.3).
-        public_key = self._peer_certificate.public_key()
+        try:
+            public_key = self._peer_certificate.public_key()
+        except UnsupportedAlgorithm as exc:
+            raise AlertUnsupportedCertificate(
+                "Certificate has an unsupported key type"
+            ) from exc
+        except ValueError as exc:
+            raise AlertBadCertificate("Certificate has an invalid key") from exc
         if not isinstance(public_key, signature_algorithm_key_type(verify.algorithm)):
             raise AlertDecryptError(
                 "CertificateVerify has a signature algorithm which does not match "

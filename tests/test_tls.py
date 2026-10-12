@@ -371,6 +371,24 @@ class ContextTest(TestCase):
             tls.AlertDecodeError("Certificate message is empty"),
         )
 
+    def test_client_invalid_certificate_key(self):
+        configuration = QuicConfiguration(is_client=False)
+        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        certificate_data = configuration.certificate.public_bytes(
+            serialization.Encoding.DER
+        )
+
+        self.handshake_with_client_input_corruption(
+            # Replace the server's RSA public exponent with an invalid one.
+            lambda x: x.replace(
+                certificate_data,
+                certificate_data.replace(
+                    binascii.unhexlify("0203010001"), binascii.unhexlify("0203000001")
+                ),
+            ),
+            tls.AlertBadCertificate("Certificate has an invalid key"),
+        )
+
     def test_client_malformed_certificate(self):
         configuration = QuicConfiguration(is_client=False)
         configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
@@ -382,6 +400,25 @@ class ContextTest(TestCase):
             # Corrupt the server's certificate, keeping its length unchanged.
             lambda x: x.replace(certificate_data, b"\x00" + certificate_data[1:]),
             tls.AlertBadCertificate("Certificate could not be parsed"),
+        )
+
+    def test_client_unsupported_certificate_key(self):
+        configuration = QuicConfiguration(is_client=False)
+        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        certificate_data = configuration.certificate.public_bytes(
+            serialization.Encoding.DER
+        )
+
+        self.handshake_with_client_input_corruption(
+            # Replace the rsaEncryption key algorithm with an unknown one.
+            lambda x: x.replace(
+                certificate_data,
+                certificate_data.replace(
+                    binascii.unhexlify("06092a864886f70d010101"),
+                    binascii.unhexlify("06092a864886f70d01017f"),
+                ),
+            ),
+            tls.AlertUnsupportedCertificate("Certificate has an unsupported key type"),
         )
 
     def test_server_bad_certificate_verify_algorithm_for_key(self):
