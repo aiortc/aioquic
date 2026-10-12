@@ -1204,6 +1204,14 @@ class QuicConnection:
         At this point, TLS extensions have been received so we can parse the
         transport parameters.
         """
+        # QUIC does not use TLS 1.3 middlebox compatibility mode (RFC 9001 section 8.4).
+        if not self._is_client and self.tls.legacy_session_id:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                frame_type=self._crypto_frame_type,
+                reason_phrase="ClientHello has a non-empty legacy_session_id",
+            )
+
         # Parse the remote transport parameters.
         for ext_type, ext_data in self.tls.received_extensions:
             if ext_type == tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS:
