@@ -559,6 +559,29 @@ class QuicConnectionTest(TestCase):
             self.assertSentPackets(client, [0, 0, 1])
             self.assertEvents(client, [])
 
+    def test_connect_with_legacy_session_id(self):
+        def patch(client):
+            """
+            Patch client's TLS initialization to send a legacy_session_id.
+            """
+            real_initialize = client._initialize
+
+            def patched_initialize(peer_cid: bytes):
+                real_initialize(peer_cid)
+                client.tls.legacy_session_id = bytes(32)
+
+            client._initialize = patched_initialize
+
+        with client_and_server(client_patch=patch) as (client, server):
+            self.assertEqual(
+                server._close_event,
+                events.ConnectionTerminated(
+                    error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="ClientHello has a non-empty legacy_session_id",
+                ),
+            )
+
     def test_connect_with_loss_1(self):
         """
         Check connection is established even in the client's INITIAL is lost.
