@@ -277,7 +277,7 @@ class QuicConnectionTestCase(TestCase):
 
 class QuicConnectionLossTest(QuicConnectionTestCase):
     """
-    Check how the handshake proceeds when packets are lost or delayed.
+    Check how connections recover when packets are lost or delayed.
     """
 
     def advance_by_tick(self, now: float) -> float:
@@ -437,6 +437,92 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertSentPackets(client, [0, 0, 1])
             self.assertEvents(client, [])
 
+    def test_connect_with_lost_client_stream_data(self):
+        """
+        Check the client's PTO probe retransmits stream data which is lost once
+        the handshake is confirmed, rather than a bare PING whose ACK would only
+        then reveal the loss (RFC 9002 section 6.2.4). This is not a congestion
+        event.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+
+            # Client sends INITIAL.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+
+            # Server receives INITIAL, sends INITIAL + HANDSHAKE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), SERVER_INITIAL_DATAGRAM_SIZES)
+            self.assertEvents(server, [events.ProtocolNegotiated])
+
+            # Client receives INITIAL + HANDSHAKE, sends FINISHED.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), CLIENT_HANDSHAKE_DATAGRAM_SIZES)
+
+            # Server receives FINISHED, sends HANDSHAKE_DONE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [229])
+            self.assertEvents(server, HANDSHAKE_COMPLETED_EVENTS)
+
+            # Client receives HANDSHAKE_DONE, sends ACK.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertTrue(client._handshake_confirmed)
+            ack_items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(ack_items), [32])
+            self.assertSentPackets(client, [0, 0, 1])
+
+            # Client sends stream data, which is lost.
+            client.send_stream_data(0, b"GET /index.html\r\n", end_stream=True)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [48])
+            self.assertAlmostEqual(client.get_timer(), 0.475)
+            self.assertSentPackets(client, [0, 0, 2])
+
+            # Server receives ACK, nothing remains in flight.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(ack_items[0][0], CLIENT_ADDR, now=now)
+            self.assertEqual(server.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(server.get_timer(), 60.25)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 0])
+
+            # Client's PTO fires, it retransmits the stream data without reducing
+            # its congestion window.
+            congestion_window = client._loss.congestion_window
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [49])
+            self.assertAlmostEqual(client.get_timer(), 1.025)
+            self.assertSentPackets(client, [0, 0, 2])
+            self.assertEqual(client._loss.congestion_window, congestion_window)
+
+            # Server receives stream data, sends ACK.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertEvents(server, [events.StreamDataReceived])
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [34])
+            self.assertAlmostEqual(server.get_timer(), 60.525)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+
+            # Client receives ACK, nothing remains in flight.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(client.get_timer(), 60.575)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 0])
+
     def test_connect_with_lost_server_encrypted_extensions(self):
         """
         Check the client acknowledges the server's HANDSHAKE packets even if the
@@ -542,7 +628,12 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             # anti-amplification budget only allows one datagram, which mostly
             # carries data the client already has.
             now = self.advance_to_timer(now, server)
-            server.handle_timer(now=now)
+            with self.assertLogs("quic", level="DEBUG") as cm:
+                server.handle_timer(now=now)
+            self.assertIn(
+                "Scheduled CRYPTO data of HANDSHAKE packets 1, 2 for retransmission",
+                "\n".join(cm.output),
+            )
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200])
             self.assertAlmostEqual(server.get_timer(), 0.65)
@@ -609,11 +700,12 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
         """
         Check the handshake is confirmed if the server's HANDSHAKE_DONE is lost.
 
-        The server has discarded its Handshake keys, so its PTO probe is a 1-RTT
-        PING. The client's ACK lets the server detect the loss and retransmit
-        HANDSHAKE_DONE, without which the client cannot confirm the handshake.
-        Meanwhile, the client's PTO fires for its FINISHED, which the server never
-        acknowledges as it discards its Handshake keys on receiving it.
+        The server's PTO probe retransmits HANDSHAKE_DONE, without which the
+        client cannot confirm the handshake, rather than a bare PING whose ACK
+        would only then reveal the loss (RFC 9002 section 6.2.4). This is not a
+        congestion event. Meanwhile, the client's PTO fires for its FINISHED,
+        which the server never acknowledges as it discards its Handshake keys on
+        receiving it.
         """
         with client_and_server(handshake=False) as (client, server):
             self.watch_timers(client, server)
@@ -669,36 +761,25 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertSentPackets(client, [0, 1, 1])
             self.assertEvents(client, [])
 
-            # Server's PTO fires, it sends a 1-RTT PING.
+            # Server's PTO fires, it retransmits HANDSHAKE_DONE without reducing
+            # its congestion window.
+            congestion_window = server._loss.congestion_window
             now = self.advance_to_timer(now, server)
-            server.handle_timer(now=now)
-            items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [29])
-            self.assertAlmostEqual(server.get_timer(), 0.975)
-            self.assertSentPackets(server, [0, 0, 2])
-            self.assertEvents(server, [])
-
-            # Client receives PING, sends ACK.
-            now = self.advance_by_tick(now)
-            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
-            items = client.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [32])
-            self.assertAlmostEqual(client.get_timer(), 1.0)
-            self.assertSentPackets(client, [0, 1, 2])
-            self.assertEvents(client, [])
-
-            # Server receives ACK, detects the loss and retransmits HANDSHAKE_DONE.
-            now = self.advance_by_tick(now)
-            self.assertFalse(server._handshake_done_pending)
-            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            with self.assertLogs("quic", level="DEBUG") as cm:
+                server.handle_timer(now=now)
+            self.assertIn(
+                "Scheduled data of ONE_RTT packet 3 for retransmission",
+                "\n".join(cm.output),
+            )
             self.assertTrue(server._handshake_done_pending)
             items = server.datagrams_to_send(now=now)
             self.assertFalse(server._handshake_done_pending)
-            self.assertEqual(datagram_sizes(items), [224])
-            self.assertAlmostEqual(server.get_timer(), 0.7625)
+            self.assertEqual(datagram_sizes(items), [225])
+            self.assertAlmostEqual(server.get_timer(), 0.975)
             self.assertSentPackets(server, [0, 0, 1])
             # FIXME: the server re-emits the ConnectionIdIssued events.
             self.assertEvents(server, HANDSHAKE_COMPLETED_EVENTS[1:])
+            self.assertEqual(server._loss.congestion_window, congestion_window)
 
             # Client receives HANDSHAKE_DONE, confirms the handshake and sends ACK.
             now = self.advance_by_tick(now)
@@ -707,7 +788,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             items = client.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [32])
             self.assertAlmostEqual(client.get_timer(), 0.725)
-            self.assertSentPackets(client, [0, 0, 3])
+            self.assertSentPackets(client, [0, 0, 2])
             self.assertEvents(client, [])
 
             # Server receives ACK, nothing remains in flight.
@@ -715,7 +796,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [])
-            self.assertAlmostEqual(server.get_timer(), 60.625)  # idle timeout
+            self.assertAlmostEqual(server.get_timer(), 60.525)  # idle timeout
             self.assertSentPackets(server, [0, 0, 0])
             self.assertEvents(server, [])
 

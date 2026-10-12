@@ -4,7 +4,7 @@ from unittest import TestCase
 from aioquic import tls
 from aioquic.quic.congestion.base import K_MINIMUM_WINDOW
 from aioquic.quic.packet import QuicPacketType
-from aioquic.quic.packet_builder import QuicSentPacket
+from aioquic.quic.packet_builder import QuicDeliveryState, QuicSentPacket
 from aioquic.quic.rangeset import RangeSet
 from aioquic.quic.recovery import (
     QuicPacketNumberWindow,
@@ -36,6 +36,25 @@ def send_probe():
     Stand in for the connection, which would send an ack-eliciting packet
     when the PTO fires.
     """
+
+
+def send_watched_packets(
+    recovery: QuicPacketRecovery, space: QuicPacketSpace, sent_times: dict[int, float]
+) -> list[tuple[QuicDeliveryState, int]]:
+    """
+    Send ack-eliciting packets, given as a mapping of packet numbers to send
+    times, and return the list in which their deliveries are recorded.
+    """
+    deliveries = []
+
+    def on_delivery(delivery: QuicDeliveryState, packet_number: int) -> None:
+        deliveries.append((delivery, packet_number))
+
+    for packet_number, sent_time in sent_times.items():
+        packet = ack_eliciting_packet(packet_number=packet_number, sent_time=sent_time)
+        packet.delivery_handlers.append((on_delivery, (packet_number,)))
+        recovery.on_packet_sent(packet=packet, space=space)
+    return deliveries
 
 
 def take_rtt_sample(recovery: QuicPacketRecovery, space: QuicPacketSpace) -> None:
@@ -337,6 +356,60 @@ class QuicPacketRecoveryTest(TestCase):
         )
         self.assertEqual(self.recovery._pto_count, 0)
 
+    def test_on_loss_detection_timeout_retransmits_oldest_packet(self):
+        self.recovery.handshake_confirmed = True
+        deliveries = send_watched_packets(
+            self.recovery, self.ONE_RTT_SPACE, {0: 1.0, 1: 1.1}
+        )
+        congestion_window = self.recovery.congestion_window
+
+        # The oldest packet's data is retransmitted, without a congestion event.
+        self.recovery.on_loss_detection_timeout(now=2.0)
+        self.assertEqual(deliveries, [(QuicDeliveryState.LOST, 0)])
+        self.assertEqual(list(self.ONE_RTT_SPACE.sent_packets), [1])
+        self.assertEqual(self.recovery.bytes_in_flight, 1280)
+        self.assertEqual(self.recovery.congestion_window, congestion_window)
+
+    def test_on_loss_detection_timeout_retransmits_oldest_packet_unconfirmed(self):
+        one_rtt_deliveries = send_watched_packets(
+            self.recovery, self.ONE_RTT_SPACE, {0: 1.0}
+        )
+        handshake_deliveries = send_watched_packets(
+            self.recovery, self.HANDSHAKE_SPACE, {0: 1.1}
+        )
+
+        # Application data sent before the handshake is confirmed is skipped,
+        # even though it is older.
+        self.recovery.on_loss_detection_timeout(now=2.0)
+        self.assertEqual(one_rtt_deliveries, [])
+        self.assertEqual(handshake_deliveries, [(QuicDeliveryState.LOST, 0)])
+
+    def test_on_loss_detection_timeout_with_crypto(self):
+        self.recovery.handshake_confirmed = True
+        deliveries = send_watched_packets(self.recovery, self.ONE_RTT_SPACE, {0: 1.0})
+        self.recovery.on_packet_sent(
+            packet=QuicSentPacket(
+                epoch=tls.Epoch.HANDSHAKE,
+                in_flight=True,
+                is_ack_eliciting=True,
+                is_crypto_packet=True,
+                packet_number=0,
+                packet_type=QuicPacketType.HANDSHAKE,
+                sent_bytes=1280,
+                sent_time=1.1,
+            ),
+            space=self.HANDSHAKE_SPACE,
+        )
+
+        congestion_window = self.recovery.congestion_window
+
+        # Only the CRYPTO data is retransmitted, without a congestion event.
+        self.recovery.on_loss_detection_timeout(now=2.0)
+        self.assertEqual(deliveries, [])
+        self.assertEqual(self.HANDSHAKE_SPACE.sent_packets, {})
+        self.assertEqual(self.recovery.bytes_in_flight, 1280)
+        self.assertEqual(self.recovery.congestion_window, congestion_window)
+
     def test_on_packet_lost_crypto(self):
         packet = QuicSentPacket(
             epoch=tls.Epoch.INITIAL,
@@ -419,3 +492,12 @@ class QuicPacketRecoveryTest(TestCase):
             space=self.ONE_RTT_SPACE,
         )
         self.assertEqual(self.recovery.congestion_window, 7040)
+
+    def test_reschedule_data_speed_up_handshake(self):
+        self.recovery.handshake_confirmed = True
+        deliveries = send_watched_packets(self.recovery, self.ONE_RTT_SPACE, {0: 1.0})
+
+        # Speeding up handshake completion only retransmits CRYPTO data.
+        self.recovery.reschedule_data(now=2.0, speed_up_handshake=True)
+        self.assertEqual(deliveries, [])
+        self.assertEqual(list(self.ONE_RTT_SPACE.sent_packets), [0])
