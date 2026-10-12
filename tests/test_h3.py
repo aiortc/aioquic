@@ -1016,6 +1016,72 @@ class H3ConnectionTest(TestCase):
                 ),
             )
 
+    def test_handle_request_frame_push_promise_at_end(self):
+        """
+        PUSH_PROMISE can be the last frame on a request stream, see
+        RFC 9114 section 4.1.
+        """
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # send request
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+                end_stream=True,
+            )
+            h3_transfer(quic_client, h3_server)
+
+            # send response followed by a push promise
+            h3_server.send_headers(
+                stream_id=stream_id,
+                headers=[(b":status", b"200")],
+                end_stream=False,
+            )
+            h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=False)
+            push_headers = [
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":authority", b"localhost"),
+                (b":path", b"/app.css"),
+            ]
+            h3_server.send_push_promise(stream_id=stream_id, headers=push_headers)
+            response_data = b"".join(
+                e.data for e in quic_server.stream_queue if e.stream_id == stream_id
+            )
+
+            # receive response
+            events = h3_client.handle_event(
+                StreamDataReceived(
+                    stream_id=stream_id, data=response_data, end_stream=True
+                )
+            )
+            self.assertIsNone(quic_client.closed)
+            self.assertEqual(
+                events,
+                [
+                    HeadersReceived(
+                        headers=[(b":status", b"200")],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    DataReceived(
+                        data=b"hello", stream_id=stream_id, stream_ended=False
+                    ),
+                    PushPromiseReceived(
+                        headers=push_headers, push_id=0, stream_id=stream_id
+                    ),
+                    DataReceived(data=b"", stream_id=stream_id, stream_ended=True),
+                ],
+            )
+
     def test_handle_request_frame_push_promise_from_client(self):
         """
         A server should not receive PUSH_PROMISE on a request stream.
@@ -1155,6 +1221,73 @@ class H3ConnectionTest(TestCase):
                 )
                 self.assertEqual(quic.closed, (ErrorCode.H3_FRAME_UNEXPECTED, reason))
 
+    def test_handle_request_frame_truncated(self):
+        """
+        A frame truncated by the end of the stream must be rejected, see
+        RFC 9114 section 7.1.
+        """
+        headers = [
+            (b":method", b"POST"),
+            (b":scheme", b"https"),
+            (b":authority", b"localhost"),
+            (b":path", b"/"),
+            (b"content-length", b"5"),
+        ]
+        cases = {
+            "frame header": encode_frame(FrameType.DATA, b"hello")[:1],
+            "DATA": encode_frame(FrameType.DATA, b"hello")[:-2],
+            "HEADERS": encode_frame(FrameType.HEADERS, b"\x00\x00\x40\x41")[:-1],
+            "unknown": encode_frame(0x21, b"grease")[:-1],
+        }
+        for name, truncated_data in cases.items():
+            for split in [False, True]:
+                with (
+                    self.subTest(frame=name, split=split),
+                    h3_fake_client_and_server() as (quic_client, quic_server),
+                ):
+                    h3_client = H3Connection(quic_client)
+                    h3_server = H3Connection(quic_server)
+
+                    stream_id = quic_client.get_next_available_stream_id()
+                    h3_client.send_headers(stream_id=stream_id, headers=headers)
+                    headers_data = b"".join(
+                        e.data
+                        for e in quic_client.stream_queue
+                        if e.stream_id == stream_id
+                    )
+
+                    # Receive the stream end with the truncated frame, or after it.
+                    if split:
+                        h3_server.handle_event(
+                            StreamDataReceived(
+                                stream_id=stream_id,
+                                data=headers_data + truncated_data,
+                                end_stream=False,
+                            )
+                        )
+                        self.assertIsNone(quic_server.closed)
+                        events = h3_server.handle_event(
+                            StreamDataReceived(
+                                stream_id=stream_id, data=b"", end_stream=True
+                            )
+                        )
+                    else:
+                        events = h3_server.handle_event(
+                            StreamDataReceived(
+                                stream_id=stream_id,
+                                data=headers_data + truncated_data,
+                                end_stream=True,
+                            )
+                        )
+                    self.assertEqual(events, [])
+                    self.assertEqual(
+                        quic_server.closed,
+                        (
+                            ErrorCode.H3_FRAME_ERROR,
+                            "Frame is truncated by the end of the stream",
+                        ),
+                    )
+
     def test_handle_request_frame_unknown(self):
         """
         Unknown frames must be ignored, see RFC 9114 section 7.2.8 and
@@ -1202,6 +1335,127 @@ class H3ConnectionTest(TestCase):
                     ),
                     DataReceived(data=b"world", stream_id=stream_id, stream_ended=True),
                 ],
+            )
+
+    def test_handle_request_frame_unknown_at_end(self):
+        """
+        Unknown frames can be the last frame on a request stream, see
+        RFC 9114 section 4.1.
+        """
+        headers = [
+            (b":method", b"POST"),
+            (b":scheme", b"https"),
+            (b":authority", b"localhost"),
+            (b":path", b"/"),
+            (b"content-length", b"5"),
+        ]
+        trailers = [(b"x-some-trailer", b"foo")]
+
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # send request with trailers
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(stream_id=stream_id, headers=headers)
+            h3_client.send_data(stream_id=stream_id, data=b"hello", end_stream=False)
+            body_data = b"".join(
+                e.data for e in quic_client.stream_queue if e.stream_id == stream_id
+            )
+            quic_client.stream_queue.clear()
+            h3_client.send_headers(stream_id=stream_id, headers=trailers)
+            trailers_data = b"".join(
+                e.data for e in quic_client.stream_queue if e.stream_id == stream_id
+            )
+
+            # receive an unknown frame after the body
+            events = h3_server.handle_event(
+                StreamDataReceived(
+                    stream_id=stream_id,
+                    data=body_data + encode_frame(0x21, b"grease"),
+                    end_stream=True,
+                )
+            )
+            self.assertIsNone(quic_server.closed)
+            self.assertEqual(
+                events,
+                [
+                    HeadersReceived(
+                        headers=headers, stream_id=stream_id, stream_ended=False
+                    ),
+                    DataReceived(
+                        data=b"hello", stream_id=stream_id, stream_ended=False
+                    ),
+                    DataReceived(data=b"", stream_id=stream_id, stream_ended=True),
+                ],
+            )
+
+            # receive an unknown frame after the trailers
+            stream_id = quic_client.get_next_available_stream_id()
+            events = h3_server.handle_event(
+                StreamDataReceived(
+                    stream_id=stream_id,
+                    data=body_data + trailers_data + encode_frame(0x21, b"grease"),
+                    end_stream=True,
+                )
+            )
+            self.assertIsNone(quic_server.closed)
+            self.assertEqual(
+                events,
+                [
+                    HeadersReceived(
+                        headers=headers, stream_id=stream_id, stream_ended=False
+                    ),
+                    DataReceived(
+                        data=b"hello", stream_id=stream_id, stream_ended=False
+                    ),
+                    HeadersReceived(
+                        headers=trailers, stream_id=stream_id, stream_ended=False
+                    ),
+                    DataReceived(data=b"", stream_id=stream_id, stream_ended=True),
+                ],
+            )
+
+    def test_handle_request_frame_unknown_at_end_content_length_mismatch(self):
+        """
+        The content-length must be checked when a request stream ends with
+        an unknown frame.
+        """
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # send request
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"POST"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                    (b"content-length", b"20"),
+                ],
+            )
+            h3_client.send_data(stream_id=stream_id, data=b"hello", end_stream=False)
+            body_data = b"".join(
+                e.data for e in quic_client.stream_queue if e.stream_id == stream_id
+            )
+
+            # receive an unknown frame after the body
+            h3_server.handle_event(
+                StreamDataReceived(
+                    stream_id=stream_id,
+                    data=body_data + encode_frame(0x21, b"grease"),
+                    end_stream=True,
+                )
+            )
+            self.assertEqual(
+                quic_server.closed,
+                (
+                    ErrorCode.H3_MESSAGE_ERROR,
+                    "content-length does not match data size",
+                ),
             )
 
     def test_handle_request_frame_unknown_fragmented(self):
