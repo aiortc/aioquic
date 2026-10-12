@@ -27,7 +27,7 @@ class QuicPacketRecoveryCubicTest(TestCase):
     def setUp(self):
         self.INITIAL_SPACE = QuicPacketSpace()
         self.HANDSHAKE_SPACE = QuicPacketSpace()
-        self.ONE_RTT_SPACE = QuicPacketSpace()
+        self.ONE_RTT_SPACE = QuicPacketSpace(is_application_data=True)
 
         self.recovery = QuicPacketRecovery(
             congestion_control_algorithm="cubic",

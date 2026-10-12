@@ -49,11 +49,12 @@ class QuicPacketNumberWindow:
 
 
 class QuicPacketSpace:
-    def __init__(self) -> None:
+    def __init__(self, *, is_application_data: bool = False) -> None:
         self.ack_at: Optional[float] = None
         self.ack_queue = RangeSet()
         self.discarded = False
         self.expected_packet_number = 0
+        self.is_application_data = is_application_data
         self.largest_received_packet = -1
         self.largest_received_time: Optional[float] = None
         self.received_packets = QuicPacketNumberWindow()
@@ -128,6 +129,7 @@ class QuicPacketRecovery:
         logger: Optional[logging.LoggerAdapter] = None,
         quic_logger: Optional[QuicLoggerTrace] = None,
     ) -> None:
+        self.handshake_confirmed = False
         self.max_ack_delay = 0.025
         self.peer_completed_address_validation = peer_completed_address_validation
         self.spaces: list[QuicPacketSpace] = []
@@ -179,30 +181,56 @@ class QuicPacketRecovery:
         if self._quic_logger is not None:
             self._log_metrics_updated()
 
-    def get_loss_detection_time(self) -> float:
+    def get_loss_detection_time(self) -> Optional[float]:
+        """
+        Return the time at which the loss detection timer should fire, or None
+        if no timer is needed.
+
+        The connection calls this every time it computes its next timer, so the
+        result always reflects the current state rather than being re-armed on
+        specific events as in RFC 9002 appendix A.8. When the timer fires, the
+        connection calls :meth:`on_loss_detection_timeout`.
+        """
         # loss timer
         loss_space = self._get_loss_space()
         if loss_space is not None:
             return loss_space.loss_time
 
         # packet timer
-        if (
-            not self.peer_completed_address_validation
-            or sum(space.ack_eliciting_in_flight for space in self.spaces) > 0
-        ):
-            timeout = self.get_probe_timeout() * (2**self._pto_count)
+        # Application data does not arm the PTO until the handshake is confirmed
+        # (RFC 9002 section 6.2.1).
+        ack_eliciting_in_flight = sum(
+            space.ack_eliciting_in_flight
+            for space in self.spaces
+            if self.handshake_confirmed or not space.is_application_data
+        )
+        if not self.peer_completed_address_validation or ack_eliciting_in_flight:
+            # Once the handshake is confirmed, only application data remains,
+            # which is the only space whose PTO includes max_ack_delay.
+            timeout = self.get_probe_timeout(
+                include_max_ack_delay=self.handshake_confirmed
+            ) * (2**self._pto_count)
             return self._time_of_last_sent_ack_eliciting_packet + timeout
 
         return None
 
-    def get_probe_timeout(self) -> float:
+    def get_probe_timeout(self, *, include_max_ack_delay: bool = True) -> float:
+        """
+        Return the PTO period, without backoff.
+
+        The loss detection timer only includes max_ack_delay for application
+        data (RFC 9002 section 6.2.1). The connection uses the default, which
+        includes it, to size the idle timeout and the closing period.
+
+        Before the first RTT sample, this is twice the initial RTT, regardless
+        of `include_max_ack_delay`.
+        """
         if not self._rtt_initialized:
             return 2 * self._rtt_initial
-        return (
-            self._rtt_smoothed
-            + max(4 * self._rtt_variance, K_GRANULARITY)
-            + self.max_ack_delay
-        )
+        pto = self._rtt_smoothed + max(4 * self._rtt_variance, K_GRANULARITY)
+        if include_max_ack_delay:
+            pto += self.max_ack_delay
+        return pto
 
     def on_ack_received(
         self,
@@ -303,7 +331,11 @@ class QuicPacketRecovery:
         if packet.is_ack_eliciting:
             space.ack_eliciting_in_flight += 1
         if packet.in_flight:
-            if packet.is_ack_eliciting:
+            # Application data sent before the handshake is confirmed does not
+            # arm the PTO, so it must not delay it either.
+            if packet.is_ack_eliciting and (
+                self.handshake_confirmed or not space.is_application_data
+            ):
                 self._time_of_last_sent_ack_eliciting_packet = packet.sent_time
 
             # add packet to bytes in flight

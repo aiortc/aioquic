@@ -1564,7 +1564,7 @@ class QuicConnection:
         self._spaces = {
             tls.Epoch.INITIAL: QuicPacketSpace(),
             tls.Epoch.HANDSHAKE: QuicPacketSpace(),
-            tls.Epoch.ONE_RTT: QuicPacketSpace(),
+            tls.Epoch.ONE_RTT: QuicPacketSpace(is_application_data=True),
         }
         self._loss.spaces = list(self._spaces.values())
 
@@ -1700,6 +1700,7 @@ class QuicConnection:
                     self._discard_epoch(tls.Epoch.HANDSHAKE)
                     self._handshake_confirmed = True
                     self._handshake_done_pending = True
+                    self._loss.handshake_confirmed = True
 
                 self._replenish_connection_ids()
                 self._events.append(
@@ -1798,6 +1799,7 @@ class QuicConnection:
         if not self._handshake_confirmed:
             self._discard_epoch(tls.Epoch.HANDSHAKE)
             self._handshake_confirmed = True
+            self._loss.handshake_confirmed = True
             self._loss.peer_completed_address_validation = True
 
     def _handle_max_data_frame(
