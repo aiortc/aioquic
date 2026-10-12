@@ -1686,13 +1686,61 @@ class QuicConnectionTest(TestCase):
         self.assertEqual(drop(client), 0)
 
     def test_request_key_update_before_handshake(self):
-        client = create_standalone_client(self)
-
-        with self.assertRaises(RuntimeError) as cm:
+        with client_and_server(handshake=False) as (client, server):
+            # The key update is deferred until the handshake is confirmed.
             client.request_key_update()
-        self.assertEqual(
-            str(cm.exception), "Cannot change key before handshake completes"
-        )
+
+            client.connect(SERVER_ADDR, now=time.time())
+            for i in range(3):
+                roundtrip(client, server)
+            self.assertTrue(client._handshake_confirmed)
+
+            # The server follows the key update.
+            client.send_ping(1)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertEqual(client._cryptos[tls.Epoch.ONE_RTT].send.key_phase, 1)
+            self.assertEqual(server._cryptos[tls.Epoch.ONE_RTT].send.key_phase, 1)
+
+    def test_request_key_update_before_handshake_confirmed(self):
+        with client_and_server(handshake=False) as (client, server):
+            client.connect(SERVER_ADDR, now=time.time())
+
+            # The client completes the handshake, but has not received
+            # HANDSHAKE_DONE yet.
+            roundtrip(client, server)
+            self.assertTrue(client._handshake_complete)
+            self.assertFalse(client._handshake_confirmed)
+
+            # The key update is deferred until the handshake is confirmed.
+            client.request_key_update()
+            self.assertEqual(transfer(client, server), 1)
+            self.assertEqual(client._cryptos[tls.Epoch.ONE_RTT].send.key_phase, 0)
+
+            # The client receives HANDSHAKE_DONE.
+            transfer(server, client)
+            self.assertTrue(client._handshake_confirmed)
+
+            # The server follows the key update.
+            client.send_ping(1)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertEqual(client._cryptos[tls.Epoch.ONE_RTT].send.key_phase, 1)
+            self.assertEqual(server._cryptos[tls.Epoch.ONE_RTT].send.key_phase, 1)
+
+    def test_request_key_update_server_before_handshake(self):
+        with client_and_server(handshake=False) as (client, server):
+            # The key update is deferred until the handshake is confirmed.
+            server.request_key_update()
+
+            client.connect(SERVER_ADDR, now=time.time())
+            for i in range(3):
+                roundtrip(client, server)
+            self.assertTrue(server._handshake_confirmed)
+
+            # The client follows the key update.
+            server.send_ping(1)
+            self.assertEqual(roundtrip(server, client), (1, 1))
+            self.assertEqual(client._cryptos[tls.Epoch.ONE_RTT].send.key_phase, 1)
+            self.assertEqual(server._cryptos[tls.Epoch.ONE_RTT].send.key_phase, 1)
 
     def test_handle_ack_frame_ecn(self):
         client = create_standalone_client(self)
