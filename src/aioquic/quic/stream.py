@@ -31,7 +31,7 @@ class QuicStreamReceiver:
 
     def __init__(self, stream_id: Optional[int], readable: bool) -> None:
         self.highest_offset = 0  # the highest offset ever seen
-        self.is_finished = False
+        self.is_finished = not readable
         self.stop_pending = False
 
         self._buffer = bytearray()
@@ -327,10 +327,10 @@ class QuicStreamSender:
         """
         Abruptly terminate the sending part of the QUIC stream.
 
-        Once this method has been called, any further calls to it
-        will have no effect.
+        Once this method has been called, or once the stream has finished
+        sending, any further calls to it will have no effect.
         """
-        if self._reset_error_code is None:
+        if self._reset_error_code is None and not self.is_finished:
             self._reset_error_code = error_code
             self.reset_pending = True
 

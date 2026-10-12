@@ -749,6 +749,21 @@ class QuicStreamTest(TestCase):
         self.assertFalse(stream.sender.reset_pending)
         self.assertTrue(stream.sender.is_finished)
 
+    def test_sender_reset_after_fin_acked(self):
+        stream = QuicStream()
+
+        # Data and EOF are sent and acknowledged.
+        stream.sender.write(b"data", end_stream=True)
+        frame = stream.sender.get_frame(8)
+        stream.sender.on_data_delivery(
+            QuicDeliveryState.ACKED, frame.offset, frame.offset + 4, frame.fin
+        )
+        self.assertTrue(stream.sender.is_finished)
+
+        # A reset is requested, which has no effect.
+        stream.sender.reset(QuicErrorCode.NO_ERROR)
+        self.assertFalse(stream.sender.reset_pending)
+
     def test_sender_reset_lost(self):
         stream = QuicStream()
 

@@ -3567,6 +3567,49 @@ class QuicConnectionTest(TestCase):
                 str(cm.exception), "Cannot stop receiving on an unknown stream"
             )
 
+    def test_send_stream_data_finished_stream(self):
+        with client_and_server() as (client, server):
+            # Client and server exchange data on bidirectional stream 0.
+            client.send_stream_data(0, b"hello", end_stream=True)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            server.send_stream_data(0, b"world", end_stream=True)
+            self.assertEqual(roundtrip(server, client), (1, 1))
+
+            # The client discards the stream.
+            self.assertEqual(roundtrip(client, server), (0, 0))
+            self.assertNotIn(0, client._streams)
+
+            # The client creates bidirectional stream 4.
+            client.send_stream_data(4, b"hello")
+            self.assertEqual(client.get_next_available_stream_id(), 8)
+
+            # The client tries to send data on the finished stream.
+            with self.assertRaises(ValueError) as cm:
+                client.send_stream_data(0, b"hello")
+            self.assertEqual(str(cm.exception), "Cannot send data on a finished stream")
+
+            # The client resets the finished stream, which has no effect.
+            client.reset_stream(0, QuicErrorCode.NO_ERROR)
+
+            # The stream was not recreated.
+            self.assertNotIn(0, client._streams)
+            self.assertEqual(client.get_next_available_stream_id(), 8)
+
+    def test_send_stream_data_finished_uni_stream(self):
+        with client_and_server() as (client, server):
+            # The client sends data on unidirectional stream 2.
+            client.send_stream_data(2, b"hello", end_stream=True)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+
+            # The client discards the stream once all data is acknowledged.
+            self.assertEqual(roundtrip(client, server), (0, 0))
+            self.assertNotIn(2, client._streams)
+
+            # The client resets the finished stream, which has no effect.
+            client.reset_stream(2, QuicErrorCode.NO_ERROR)
+            self.assertNotIn(2, client._streams)
+            self.assertEqual(roundtrip(client, server), (0, 0))
+
     def test_send_stream_data_over_max_streams_bidi(self):
         with client_and_server() as (client, server):
             # create streams
