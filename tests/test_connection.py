@@ -48,9 +48,11 @@ from .utils import (
 )
 
 CLIENT_ADDR = ("1.2.3.4", 1234)
+NEW_CLIENT_ADDR = ("1.2.3.4", 2345)
 CLIENT_HANDSHAKE_DATAGRAM_SIZES = [1200]
 
 SERVER_ADDR = ("2.3.4.5", 4433)
+SPOOFED_ADDR = ("6.7.8.9", 1234)
 SERVER_INITIAL_DATAGRAM_SIZES = [1200, 1162]
 
 HANDSHAKE_COMPLETED_EVENTS = [
@@ -88,7 +90,7 @@ def client_receive_context(client, epoch=tls.Epoch.ONE_RTT):
     )
 
 
-def consume_events(connection):
+def consume_events(connection: QuicConnection) -> None:
     while True:
         event = connection.next_event()
         if event is None:
@@ -306,6 +308,27 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             if timer is not None:
                 role = "client" if connection._is_client else "server"
                 self.assertGreaterEqual(timer, when, f"The {role}'s timer is overdue.")
+
+    def handshake(
+        self, client: QuicConnection, server: QuicConnection, now: float
+    ) -> float:
+        """
+        Perform the handshake without loss and return the time it completes.
+        """
+        client.connect(SERVER_ADDR, now=now)
+        sender, receiver = client, server
+        idle_turns = 0
+        while idle_turns < 2:
+            items = sender.datagrams_to_send(now=now)
+            idle_turns = 0 if items else idle_turns + 1
+            now = self.advance_by_tick(now)
+            from_addr = CLIENT_ADDR if sender is client else SERVER_ADDR
+            for data, addr in items:
+                receiver.receive_datagram(data, from_addr, now=now)
+            sender, receiver = receiver, sender
+        consume_events(client)
+        consume_events(server)
+        return now
 
     def test_connect_with_delayed_client_finished_and_session_ticket(self):
         """
@@ -1177,6 +1200,258 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertAlmostEqual(client.get_timer(), 60.2)  # idle timeout
             self.assertSentPackets(client, [0, 0, 1])
             self.assertEvents(client, [])
+
+    def test_migrate_to_spoofed_address(self):
+        """
+        Check the server sends no more than three times the data received from
+        an address it cannot validate, then reverts to the client's address.
+
+        An attacker rewrites the source address of a client packet and drops the
+        client's subsequent packets. The server's PATH_CHALLENGE exhausts the
+        anti-amplification limit of the spoofed address, so its PTO cannot send
+        another one. Validation is abandoned after three times the PTO (RFC 9000
+        section 8.2.4), and the server reverts to the last validated address
+        (RFC 9000 section 9.3.2).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+            self.watch_timers(server)
+
+            # Client sends some data.
+            client.send_stream_data(0, b"01234567")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [39])
+
+            # Server receives the data from the spoofed address, sends a
+            # PATH_CHALLENGE padded up to the anti-amplification limit.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], SPOOFED_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * 39])
+            self.assertEqual(items[0][1], SPOOFED_ADDR)
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertAlmostEqual(server._path_validation_deadline(), 1.1125)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [events.StreamDataReceived])
+            self.assertEqual(len(self.path_challenges(server)), 1)
+
+            # Server's PTO fires, it cannot send anything to the spoofed address.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [])
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
+            self.assertSentPackets(server, [0, 0, 0])
+            self.assertEvents(server, [])
+            self.assertEqual(len(self.path_challenges(server)), 1)
+
+            # Server abandons path validation and reverts to the client's
+            # address, where it sends its probe.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            self.assertEqual(
+                [path.addr for path in server._network_paths], [CLIENT_ADDR]
+            )
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [29])
+            self.assertEqual(items[0][1], CLIENT_ADDR)
+            self.assertAlmostEqual(server.get_timer(), 1.5875)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [])
+
+    def test_migrate_with_lost_path_challenge(self):
+        """
+        Check the server sends a new PATH_CHALLENGE when one is lost.
+
+        The server's PTO declares the packet carrying the PATH_CHALLENGE lost,
+        and its probe carries a new PATH_CHALLENGE with new data (RFC 9000
+        section 8.2.1), padded up to the anti-amplification limit.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Client changes address and sends some data.
+            client.send_stream_data(0, b"01234567")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [39])
+
+            # Server receives the data, sends a PATH_CHALLENGE which is lost.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * 39])
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertAlmostEqual(server._path_validation_deadline(), 1.1125)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [events.StreamDataReceived])
+
+            # Client sends more data.
+            client.send_stream_data(0, b"89abcdef")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [40])
+
+            # Server receives the data, sends ACK.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertSentPackets(server, [0, 0, 2])
+            self.assertEvents(server, [events.StreamDataReceived])
+
+            # Client receives ACK.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [])
+            self.assertSentPackets(client, [0, 0, 0])
+
+            # Server's PTO fires, it sends a new PATH_CHALLENGE padded up to the
+            # anti-amplification limit.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * (39 + 40) - 3 * 39 - 32])
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
+            self.assertSentPackets(server, [0, 0, 2])
+            self.assertEvents(server, [])
+            challenges = self.path_challenges(server)
+            self.assertEqual(len(challenges), 2)
+            self.assertNotEqual(challenges[0], challenges[1])
+
+            # Client receives PATH_CHALLENGE, sends PATH_RESPONSE.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.925)
+            self.assertSentPackets(client, [0, 0, 1])
+
+            # Server receives PATH_RESPONSE, the path is validated.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            self.assertTrue(server._network_paths[0].is_validated)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(server.get_timer(), 60.7375)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [])
+
+    def test_migrate_without_loss(self):
+        """
+        Check the server validates the client's new address in the absence of
+        loss.
+
+        This is the reference sequence for the tests with lost packets.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Client changes address and sends some data.
+            client.send_stream_data(0, b"01234567")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [39])
+
+            # Server receives the data, sends a PATH_CHALLENGE padded up to the
+            # anti-amplification limit.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            self.assertEqual(server._network_paths[0].addr, NEW_CLIENT_ADDR)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * 39])
+            self.assertEqual(items[0][1], NEW_CLIENT_ADDR)
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertAlmostEqual(server._path_validation_deadline(), 1.1125)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [events.StreamDataReceived])
+
+            # Client receives PATH_CHALLENGE, sends PATH_RESPONSE.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.6875)
+            self.assertSentPackets(client, [0, 0, 1])
+
+            # Server receives PATH_RESPONSE, the path is validated.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            self.assertTrue(server._network_paths[0].is_validated)
+            self.assertIsNone(server._path_validation_deadline())
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(server.get_timer(), 60.5)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [])
+
+            # Client receives ACK, nothing remains in flight.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [])
+            self.assertAlmostEqual(client.get_timer(), 60.55)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 0])
+
+    def test_migrate_without_validated_path(self):
+        """
+        Check the server closes the connection silently when path validation
+        fails and it has no validated address to revert to (RFC 9000 section
+        9.3.2).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+            self.watch_timers(server)
+
+            # Client changes address and sends some data.
+            client.send_stream_data(0, b"01234567")
+            items = client.datagrams_to_send(now=now)
+
+            # Server receives the data, sends a PATH_CHALLENGE which is lost.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * 39])
+            self.assertAlmostEqual(server._path_validation_deadline(), 1.1125)
+            self.assertEvents(server, [events.StreamDataReceived])
+
+            # Server forgets its previous address was validated.
+            server._network_paths[1].is_validated = False
+
+            # Server's PTO fires, it cannot send anything to the new address.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [])
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
+
+            # Server abandons path validation and closes the connection without
+            # sending anything.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [])
+            self.assertIsNone(server.get_timer())
+            event = server.next_event()
+            self.assertEqual(type(event), events.ConnectionTerminated)
+            self.assertEqual(event.error_code, QuicErrorCode.NO_VIABLE_PATH)
+            self.assertEqual(event.reason_phrase, "No validated network path")
+
+    def path_challenges(self, connection: QuicConnection) -> list[str]:
+        """
+        Return the data of the PATH_CHALLENGE frames sent by `connection`.
+        """
+        log = connection.configuration.quic_logger.to_dict()
+        return [
+            frame["data"]
+            for event in log["traces"][0]["events"]
+            if event["name"] == "transport:packet_sent"
+            for frame in event["data"]["frames"]
+            if frame["frame_type"] == "path_challenge"
+        ]
 
     def watch_timers(self, *connections: QuicConnection) -> None:
         """
