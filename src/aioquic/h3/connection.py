@@ -264,6 +264,7 @@ def validate_headers(
     headers: Headers,
     allowed_pseudo_headers: FrozenSet[bytes],
     required_pseudo_headers: FrozenSet[bytes],
+    not_allowed_headers: FrozenSet[bytes],
     stream: Optional["H3Stream"] = None,
 ) -> None:
     after_pseudo_headers = False
@@ -307,8 +308,8 @@ def validate_headers(
                     raise MessageError("content-length is not a non-negative integer")
                 if stream:
                     stream.expected_content_length = content_length
-            elif key == b"transfer-encoding":
-                raise MessageError("Transfer-Encoding is forbidden in HTTP/3")
+            elif key in not_allowed_headers:
+                raise MessageError("Forbidden header %r" % key)
 
             elif key == b"te" and value != b"trailers":
                 raise MessageError("The only valid value for te is trailers")
@@ -334,6 +335,16 @@ def validate_push_promise_headers(headers: Headers) -> None:
         required_pseudo_headers=frozenset(
             (b":method", b":scheme", b":authority", b":path")
         ),
+        not_allowed_headers=frozenset(
+            (
+                b"connection",
+                b"keep-alive",
+                b"proxy-connection",
+                b"transfer-encoding",
+                b"upgrade",
+                b"te",
+            )
+        ),
     )
 
 
@@ -348,6 +359,15 @@ def validate_request_headers(
             (b":method", b":scheme", b":authority", b":path", b":protocol")
         ),
         required_pseudo_headers=frozenset((b":method", b":authority")),
+        not_allowed_headers=frozenset(
+            (
+                b"connection",
+                b"keep-alive",
+                b"proxy-connection",
+                b"transfer-encoding",
+                b"upgrade",
+            )
+        ),
         stream=stream,
     )
 
@@ -359,6 +379,16 @@ def validate_response_headers(
         headers,
         allowed_pseudo_headers=frozenset((b":status",)),
         required_pseudo_headers=frozenset((b":status",)),
+        not_allowed_headers=frozenset(
+            (
+                b"connection",
+                b"keep-alive",
+                b"proxy-connection",
+                b"transfer-encoding",
+                b"upgrade",
+                b"te",
+            )
+        ),
         stream=stream,
     )
 
@@ -368,6 +398,16 @@ def validate_trailers(headers: Headers) -> None:
         headers,
         allowed_pseudo_headers=frozenset(),
         required_pseudo_headers=frozenset(),
+        not_allowed_headers=frozenset(
+            (
+                b"connection",
+                b"keep-alive",
+                b"proxy-connection",
+                b"transfer-encoding",
+                b"upgrade",
+                b"te",
+            )
+        ),
     )
 
 

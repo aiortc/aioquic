@@ -3192,6 +3192,18 @@ class H3ParserTest(TestCase):
                 (b"x-foo", b"bar"),
             ]
         )
+        # Connection-specific fields and TE are forbidden in pushed requests.
+        for name in (
+            b"connection",
+            b"keep-alive",
+            b"proxy-connection",
+            b"transfer-encoding",
+            b"upgrade",
+            b"te",
+        ):
+            with self.subTest(header=name), self.assertRaises(MessageError) as cm:
+                validate_push_promise_headers([(name, b"value")])
+            self.assertEqual(cm.exception.reason_phrase, "Forbidden header %r" % name)
 
         # invalid pseudo-header
         with self.assertRaises(MessageError) as cm:
@@ -3292,9 +3304,16 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase, "Header b'x-f:oo' contains a non-initial colon"
         )
 
-        # good te; this test passes by not asserting
-        with self.assertRaises(MessageError) as cm:
-            validate_request_headers([(b"te", b"trailers")])
+        # The TE header is allowed in requests only when its value is trailers.
+        validate_request_headers(
+            [
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":path", b"/"),
+                (b":authority", b"localhost"),
+                (b"te", b"trailers"),
+            ]
+        )
 
         # bad te
         with self.assertRaises(MessageError) as cm:
@@ -3304,9 +3323,17 @@ class H3ParserTest(TestCase):
             "The only valid value for te is trailers",
         )
 
-        # transfer-encoding header not allowed under RFC 9114 in HTTP/3
-        with self.assertRaises(MessageError) as cm:
-            validate_request_headers([(b"transfer-encoding", b"trailers")])
+        # Connection-specific fields, including Transfer-Encoding, are forbidden.
+        for name in (
+            b"connection",
+            b"keep-alive",
+            b"proxy-connection",
+            b"transfer-encoding",
+            b"upgrade",
+        ):
+            with self.subTest(header=name), self.assertRaises(MessageError) as cm:
+                validate_request_headers([(name, b"value")])
+            self.assertEqual(cm.exception.reason_phrase, "Forbidden header %r" % name)
 
         # value with a forbidden NUL, LF, or CR:
         for prefix in [b"\x00", b"\x0a", b"\x0d"]:
@@ -3438,6 +3465,19 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase, "Pseudo-header b':status' is included twice"
         )
 
+        # Connection-specific fields and TE are forbidden in responses.
+        for name in (
+            b"connection",
+            b"keep-alive",
+            b"proxy-connection",
+            b"transfer-encoding",
+            b"upgrade",
+            b"te",
+        ):
+            with self.subTest(header=name), self.assertRaises(MessageError) as cm:
+                validate_response_headers([(b":status", b"200"), (name, b"value")])
+            self.assertEqual(cm.exception.reason_phrase, "Forbidden header %r" % name)
+
     def test_validate_trailers(self):
         # OK
         validate_trailers([(b"x-foo", b"bar")])
@@ -3461,3 +3501,16 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase,
             "Pseudo-header b':authority' is not allowed after regular headers",
         )
+
+        # Connection-specific fields and TE are forbidden in trailers.
+        for name in (
+            b"connection",
+            b"keep-alive",
+            b"proxy-connection",
+            b"transfer-encoding",
+            b"upgrade",
+            b"te",
+        ):
+            with self.subTest(header=name), self.assertRaises(MessageError) as cm:
+                validate_trailers([(name, b"value")])
+            self.assertEqual(cm.exception.reason_phrase, "Forbidden header %r" % name)
