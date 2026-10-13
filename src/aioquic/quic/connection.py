@@ -648,6 +648,18 @@ class QuicConnection:
         else:
             return self._local_next_stream_id_bidi
 
+    def get_peer_address(self) -> Optional[NetworkAddress]:
+        """
+        Return the peer address to which datagrams are currently sent, or `None`
+        if none is known yet.
+
+        This address can change during the connection's lifetime when either
+        endpoint migrates, see RFC 9000 section 9.
+        """
+        if self._network_paths:
+            return self._network_paths[0].addr
+        return None
+
     def get_timer(self) -> Optional[float]:
         """
         Return the time at which the timer should fire or None if no timer is needed.
