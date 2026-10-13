@@ -737,6 +737,56 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 2)
 
+    def test_short_header_path_challenge(self):
+        """
+        Datagrams containing a PATH_CHALLENGE are padded, but not the next one.
+        """
+        builder = create_builder()
+        crypto = create_crypto()
+
+        builder.start_packet(QuicPacketType.ONE_RTT, crypto)
+        buf = builder.start_frame(QuicFrameType.PATH_CHALLENGE, capacity=9)
+        buf.push_bytes(bytes(8))
+
+        builder.start_packet(QuicPacketType.ONE_RTT, crypto)
+        builder.start_frame(QuicFrameType.PING)
+
+        # check datagrams
+        datagrams, packets = builder.flush()
+        self.assertEqual(datagram_sizes(datagrams), [1200, 29])
+
+    def test_short_header_path_challenge_max_total_bytes(self):
+        """
+        Padding of datagrams containing a PATH_CHALLENGE is limited by
+        max_total_bytes.
+        """
+        builder = create_builder()
+        builder.max_total_bytes = 800
+        crypto = create_crypto()
+
+        builder.start_packet(QuicPacketType.ONE_RTT, crypto)
+        buf = builder.start_frame(QuicFrameType.PATH_CHALLENGE, capacity=9)
+        buf.push_bytes(bytes(8))
+
+        # check datagrams
+        datagrams, packets = builder.flush()
+        self.assertEqual(datagram_sizes(datagrams), [800])
+
+    def test_short_header_path_response(self):
+        """
+        Datagrams containing a PATH_RESPONSE are padded.
+        """
+        builder = create_builder()
+        crypto = create_crypto()
+
+        builder.start_packet(QuicPacketType.ONE_RTT, crypto)
+        buf = builder.start_frame(QuicFrameType.PATH_RESPONSE, capacity=9)
+        buf.push_bytes(bytes(8))
+
+        # check datagrams
+        datagrams, packets = builder.flush()
+        self.assertEqual(datagram_sizes(datagrams), [1200])
+
     def test_short_header_ping_only(self):
         """
         The payload is too short to provide enough data for header protection,
