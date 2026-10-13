@@ -20,6 +20,7 @@ from aioquic.quic.connection import (
     QuicConnection,
     QuicConnectionError,
     QuicConnectionId,
+    QuicConnectionState,
     QuicNetworkPath,
     QuicReceiveContext,
     dump_cid,
@@ -1336,7 +1337,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertAlmostEqual(server.get_timer(), 0.6375)
             self.assertSentPackets(server, [0, 0, 2])
             self.assertEvents(server, [])
-            self.assertEqual(server._network_paths[0].addr, CLIENT_ADDR)
+            self.assertEqual(server.get_peer_address(), CLIENT_ADDR)
             self.assertEqual(server._peer_cid.sequence_number, 0)
             self.assertEqual(server._network_paths[1].peer_cid.sequence_number, 1)
             self.assertEqual(len(self.path_challenges(server)), 1)
@@ -1365,7 +1366,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertAlmostEqual(server.get_timer(), 60.5)  # idle timeout
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [])
-            self.assertEqual(server._network_paths[0].addr, CLIENT_ADDR)
+            self.assertEqual(server.get_peer_address(), CLIENT_ADDR)
             self.assertTrue(server._network_paths[1].is_validated)
 
             # Client receives ACK, migrates to the probed path and sends data.
@@ -1382,7 +1383,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             now = self.advance_by_tick(now)
             for data, addr in items:
                 server.receive_datagram(data, NEW_CLIENT_ADDR, now=now)
-            self.assertEqual(server._network_paths[0].addr, NEW_CLIENT_ADDR)
+            self.assertEqual(server.get_peer_address(), NEW_CLIENT_ADDR)
             self.assertEqual(server._peer_cid.sequence_number, 1)
             self.assertEqual(server._retire_connection_ids, [0])
             server.send_stream_data(1, bytes(3000))
@@ -1446,7 +1447,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             # the anti-amplification limit.
             now = self.advance_by_tick(now)
             server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
-            self.assertEqual(server._network_paths[0].addr, NEW_CLIENT_ADDR)
+            self.assertEqual(server.get_peer_address(), NEW_CLIENT_ADDR)
             self.assertFalse(server._network_paths[0].is_validated)
             self.assertEqual(server._peer_cid.sequence_number, 1)
             items = server.datagrams_to_send(now=now)
@@ -1627,7 +1628,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             # anti-amplification limit.
             now = self.advance_by_tick(now)
             server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
-            self.assertEqual(server._network_paths[0].addr, NEW_CLIENT_ADDR)
+            self.assertEqual(server.get_peer_address(), NEW_CLIENT_ADDR)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [3 * 39])
             self.assertEqual(items[0][1], NEW_CLIENT_ADDR)
@@ -1749,7 +1750,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             )
             self.assertAlmostEqual(server.get_timer(), 0.6375)
             self.assertSentPackets(server, [0, 0, 2])
-            self.assertEqual(server._network_paths[0].addr, CLIENT_ADDR)
+            self.assertEqual(server.get_peer_address(), CLIENT_ADDR)
             self.assertEqual(server._peer_cid.sequence_number, 0)
 
             # Server's PTO fires, it probes the active path only.
@@ -2462,6 +2463,27 @@ class QuicConnectionTest(QuicConnectionTestCase):
             stream_id = server.get_next_available_stream_id(is_unidirectional=True)
             self.assertEqual(stream_id, 7)
             server.send_stream_data(stream_id, b"hello")
+
+    def test_get_peer_address(self):
+        # The address is unknown before the first datagram.
+        client = QuicConnection(configuration=QuicConfiguration(is_client=True))
+        self.assertIsNone(client.get_peer_address())
+        server = create_standalone_server(self)
+        self.assertIsNone(server.get_peer_address())
+
+        with client_and_server() as (client, server):
+            self.assertEqual(client.get_peer_address(), SERVER_ADDR)
+            self.assertEqual(server.get_peer_address(), CLIENT_ADDR)
+
+            # The address is kept after the connection is terminated.
+            client.close()
+            self.assertEqual(transfer(client, server), 1)
+            client.handle_timer(client.get_timer())
+            server.handle_timer(server.get_timer())
+            self.assertEqual(client._state, QuicConnectionState.TERMINATED)
+            self.assertEqual(server._state, QuicConnectionState.TERMINATED)
+            self.assertEqual(client.get_peer_address(), SERVER_ADDR)
+            self.assertEqual(server.get_peer_address(), CLIENT_ADDR)
 
     def test_datagram_frame(self):
         with client_and_server(
@@ -4520,7 +4542,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             for data, addr in datagrams:
                 server.receive_datagram(data, CLIENT_ADDR, now=time.time())
             receive_from(server, client, SERVER_ADDR)
-            self.assertEqual(client._network_paths[0].addr, SERVER_PREFERRED_ADDR)
+            self.assertEqual(client.get_peer_address(), SERVER_PREFERRED_ADDR)
             self.assertTrue(client._network_paths[0].is_validated)
             self.assertEqual(client._peer_cid.sequence_number, 1)
             self.assertEqual(client._retire_connection_ids, [0])
@@ -4571,7 +4593,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(
                 packet_sent["data"]["header"]["dcid"], dump_cid(probe_cid.cid)
             )
-            self.assertEqual(client._network_paths[0].addr, SERVER_ADDR)
+            self.assertEqual(client.get_peer_address(), SERVER_ADDR)
 
             # The response validates the server's path.
             for data, addr in datagrams:
@@ -4650,7 +4672,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(
                 set(receive_from(client, server, CLIENT_ADDR)), {SERVER_ADDR}
             )
-            self.assertEqual(client._network_paths[0].addr, SERVER_ADDR)
+            self.assertEqual(client.get_peer_address(), SERVER_ADDR)
             self.assertEqual(client._peer_cid.sequence_number, 0)
 
     def test_preferred_address_receive_before_validation(self):
@@ -4664,14 +4686,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
             server.send_stream_data(3, b"hello")
             receive_from(server, client, SERVER_PREFERRED_ADDR)
             self.assertEqual(type(client.next_event()), events.StreamDataReceived)
-            self.assertEqual(client._network_paths[0].addr, SERVER_ADDR)
+            self.assertEqual(client.get_peer_address(), SERVER_ADDR)
             self.assertEqual(client._peer_cid.sequence_number, 0)
 
     def test_preferred_address_receive_from_original_address(self):
         with client_and_server() as (client, server):
             client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
             roundtrip(client, server)
-            self.assertEqual(client._network_paths[0].addr, SERVER_PREFERRED_ADDR)
+            self.assertEqual(client.get_peer_address(), SERVER_PREFERRED_ADDR)
             consume_events(client)
 
             # Data from the original address is accepted, and the client stays on
@@ -4679,7 +4701,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             server.send_stream_data(3, b"hello")
             receive_from(server, client, SERVER_ADDR)
             self.assertEqual(type(client.next_event()), events.StreamDataReceived)
-            self.assertEqual(client._network_paths[0].addr, SERVER_PREFERRED_ADDR)
+            self.assertEqual(client.get_peer_address(), SERVER_PREFERRED_ADDR)
 
     def test_preferred_address_retired_before_validation(self):
         with client_and_server() as (client, server):
@@ -4701,7 +4723,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 server.receive_datagram(data, CLIENT_ADDR, now=time.time())
             receive_from(server, client, SERVER_ADDR)
             self.assertTrue(client._network_paths[1].is_validated)
-            self.assertEqual(client._network_paths[0].addr, SERVER_ADDR)
+            self.assertEqual(client.get_peer_address(), SERVER_ADDR)
             self.assertEqual(client._peer_cid.sequence_number, 2)
 
     def test_preferred_address_selection(self):
