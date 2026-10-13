@@ -2040,6 +2040,39 @@ class QuicConnectionTest(QuicConnectionTestCase):
             ),
         )
 
+    def test_receive_datagram_unknown_server_address(self):
+        with client_and_server() as (client, server):
+            while client.next_event() is not None:
+                pass
+
+            # The server sends some data.
+            server.send_stream_data(3, b"01234567")
+            datagrams = [
+                data for data, addr in server.datagrams_to_send(now=time.time())
+            ]
+
+            # The datagrams are received from an unknown server address.
+            for data in datagrams:
+                client.receive_datagram(data, ("6.7.8.9", 4433), now=time.time())
+
+            # The datagrams are discarded.
+            self.assertIsNone(client.next_event())
+            self.assertEqual(
+                [path.addr for path in client._network_paths], [SERVER_ADDR]
+            )
+            log = client.configuration.quic_logger.to_dict()
+            triggers = [
+                event["data"]["trigger"]
+                for event in log["traces"][0]["events"]
+                if event["name"] == "transport:packet_dropped"
+            ]
+            self.assertEqual(triggers.count("unknown_server_address"), len(datagrams))
+
+            # The same datagrams are received from the known server address.
+            for data in datagrams:
+                client.receive_datagram(data, SERVER_ADDR, now=time.time())
+            self.assertEqual(type(client.next_event()), events.StreamDataReceived)
+
     def test_receive_datagram_wrong_version(self):
         client = create_standalone_client(self)
 
