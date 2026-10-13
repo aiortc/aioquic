@@ -775,6 +775,20 @@ class QuicConnection:
                 },
             )
 
+        # RFC 9000 section 9 requires clients to discard packets from an unknown
+        # server address.
+        if self._is_client and all(path.addr != addr for path in self._network_paths):
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="transport",
+                    event="packet_dropped",
+                    data={
+                        "trigger": "unknown_server_address",
+                        "raw": {"length": payload_length},
+                    },
+                )
+            return
+
         # For anti-amplification purposes, servers need to keep track of the
         # amount of data received on unvalidated network paths. We must count the
         # entire datagram size regardless of whether packets are processed or
