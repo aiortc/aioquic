@@ -205,6 +205,7 @@ class QuicNetworkPath:
         self.is_validated: bool = is_validated
         self.local_challenge_sent: bool = False
         self.remote_challenges: Deque[bytes] = deque()
+        self.validation_deadline: Optional[float] = None
 
     def can_send(self, size: int) -> bool:
         return self.is_validated or (self.bytes_sent + size) <= 3 * self.bytes_received
@@ -695,6 +696,11 @@ class QuicConnection:
             if self._pacing_at is not None and self._pacing_at < timer_at:
                 timer_at = self._pacing_at
 
+            # Path validation timer.
+            deadline = self._path_validation_deadline()
+            if deadline is not None and deadline < timer_at:
+                timer_at = deadline
+
         return timer_at
 
     def handle_timer(self, now: float) -> None:
@@ -720,6 +726,11 @@ class QuicConnection:
         if self._loss_at is not None and now >= self._loss_at:
             self._logger.debug("Loss detection triggered")
             self._loss.on_loss_detection_timeout(now=now)
+
+        # Path validation timeout.
+        deadline = self._path_validation_deadline()
+        if deadline is not None and now >= deadline:
+            self._abandon_path_validation()
 
     def next_event(self) -> Optional[events.QuicEvent]:
         """
@@ -1235,6 +1246,34 @@ class QuicConnection:
         stream.receiver.stop(error_code)
 
     # Private
+
+    def _abandon_path_validation(self) -> None:
+        """
+        Abandon the validation of the active network path and revert to the last
+        validated one.
+
+        https://datatracker.ietf.org/doc/html/rfc9000#section-9.3.2
+        """
+        network_path = self._network_paths[0]
+        self._logger.debug("Network path %s validation abandoned", network_path.addr)
+
+        validated_path = next(
+            (path for path in self._network_paths if path.is_validated), None
+        )
+        if validated_path is None:
+            # Without a validated network path, the connection is closed silently.
+            self._close_event = events.ConnectionTerminated(
+                error_code=QuicErrorCode.NO_VIABLE_PATH,
+                frame_type=QuicFrameType.PADDING,
+                reason_phrase="No validated network path",
+            )
+            self._close_end()
+            return
+
+        self._logger.debug("Network path %s restored", validated_path.addr)
+        self._network_paths.remove(network_path)
+        self._network_paths.remove(validated_path)
+        self._network_paths.insert(0, validated_path)
 
     def _alpn_handler(self, alpn_protocol: str) -> None:
         """
@@ -2496,6 +2535,21 @@ class QuicConnection:
         if delivery != QuicDeliveryState.ACKED:
             connection_id.was_sent = False
 
+    def _on_path_challenge_delivery(
+        self, delivery: QuicDeliveryState, network_path: QuicNetworkPath
+    ) -> None:
+        """
+        Callback when a PATH_CHALLENGE frame is acknowledged or lost.
+        """
+        # A lost challenge is sent again with new data while the active path is
+        # being validated, see RFC 9000 section 8.2.1.
+        if (
+            delivery != QuicDeliveryState.ACKED
+            and network_path is self._network_paths[0]
+            and not network_path.is_validated
+        ):
+            network_path.local_challenge_sent = False
+
     def _on_ping_delivery(
         self, delivery: QuicDeliveryState, uids: Sequence[int]
     ) -> None:
@@ -2517,6 +2571,18 @@ class QuicConnection:
         """
         if delivery != QuicDeliveryState.ACKED:
             self._retire_connection_ids.append(sequence_number)
+
+    def _path_validation_deadline(self) -> Optional[float]:
+        """
+        Return the time at which the validation of the active network path is
+        abandoned, or `None` if it is not being validated.
+        """
+        if self._state in END_STATES or not self._network_paths:
+            return None
+        network_path = self._network_paths[0]
+        if network_path.is_validated:
+            return None
+        return network_path.validation_deadline
 
     def _payload_received(
         self,
@@ -3164,12 +3230,21 @@ class QuicConnection:
                 if not (network_path.is_validated or network_path.local_challenge_sent):
                     challenge = os.urandom(8)
                     self._write_path_challenge_frame(
-                        builder=builder, challenge=challenge
+                        builder=builder, challenge=challenge, network_path=network_path
                     )
                     self._add_local_challenge(
                         challenge=challenge, network_path=network_path
                     )
                     network_path.local_challenge_sent = True
+
+                    # RFC 9000 section 8.2.4 recommends abandoning path validation
+                    # after three times the larger of the current PTO and the PTO
+                    # of a new path, which uses the initial RTT.
+                    if network_path.validation_deadline is None:
+                        network_path.validation_deadline = now + 3 * max(
+                            self._loss.get_probe_timeout(),
+                            2 * self._configuration.initial_rtt,
+                        )
 
                 # ACK
                 if space.ack_at is not None and space.ack_at <= now:
@@ -3549,10 +3624,16 @@ class QuicConnection:
             )
 
     def _write_path_challenge_frame(
-        self, builder: QuicPacketBuilder, challenge: bytes
+        self,
+        builder: QuicPacketBuilder,
+        challenge: bytes,
+        network_path: QuicNetworkPath,
     ) -> None:
         buf = builder.start_frame(
-            QuicFrameType.PATH_CHALLENGE, capacity=PATH_CHALLENGE_FRAME_CAPACITY
+            QuicFrameType.PATH_CHALLENGE,
+            capacity=PATH_CHALLENGE_FRAME_CAPACITY,
+            handler=self._on_path_challenge_delivery,
+            handler_args=(network_path,),
         )
         buf.push_bytes(challenge)
 
