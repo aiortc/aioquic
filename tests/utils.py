@@ -79,16 +79,18 @@ def generate_certificate(
         [x509.NameAttribute(x509.NameOID.COMMON_NAME, common_name)]
     )
 
+    # The certificate's start date is truncated to the second, and OpenSSL checks
+    # it against a coarse clock which can lag behind by a few milliseconds, so a
+    # certificate starting now may not be valid yet. Start it a second earlier.
+    now = datetime.datetime.now(datetime.timezone.utc)
     builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
-        .not_valid_after(
-            datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=10)
-        )
+        .not_valid_before(now - datetime.timedelta(seconds=1))
+        .not_valid_after(now + datetime.timedelta(days=10))
     )
     if alternative_names:
         builder = builder.add_extension(
