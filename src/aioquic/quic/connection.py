@@ -1335,6 +1335,10 @@ class QuicConnection:
             self._peer_cid.sequence_number,
         )
 
+        # RFC 9000 section 17.4 requires resetting the spin value when changing
+        # the connection ID used on a network path.
+        self._spin_bit = False
+
     def _close_begin(self, is_initiator: bool, now: float) -> None:
         """
         Begin the close procedure.
