@@ -177,6 +177,11 @@ class QuicPacketBuilder:
             self._packet.in_flight = True
         if frame_type == QuicFrameType.CRYPTO:
             self._packet.is_crypto_packet = True
+        if frame_type in (QuicFrameType.PATH_CHALLENGE, QuicFrameType.PATH_RESPONSE):
+            # Datagrams containing PATH_CHALLENGE or PATH_RESPONSE frames must be
+            # expanded to at least 1200 bytes, unless the anti-amplification limit
+            # prevents it, see RFC 9000 sections 8.2.1 and 8.2.2.
+            self._datagram_needs_padding = True
         if handler is not None:
             self._packet.delivery_handlers.append((handler, handler_args))
         return self._buffer
@@ -368,8 +373,8 @@ class QuicPacketBuilder:
     def _flush_current_datagram(self) -> None:
         datagram_bytes = self._buffer.tell()
         if datagram_bytes:
-            # Padding for datagrams containing initial packets; see RFC 9000
-            # section 14.1.
+            # Padding for datagrams containing initial packets or path validation
+            # frames; see RFC 9000 sections 8.2 and 14.1.
             if self._datagram_needs_padding:
                 extra_bytes = self._flight_capacity - self._buffer.tell()
                 if extra_bytes > 0:

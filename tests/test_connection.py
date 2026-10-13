@@ -2795,6 +2795,27 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(server._network_paths[1].addr, ("1.2.3.4", 1234))
             self.assertTrue(server._network_paths[1].is_validated)
 
+    def test_handle_path_challenge_frame_padding(self):
+        with client_and_server() as (client, server):
+            # client changes address and sends some data
+            client.send_stream_data(0, b"01234567")
+            bytes_received = 0
+            for data, addr in client.datagrams_to_send(now=time.time()):
+                bytes_received += len(data)
+                server.receive_datagram(data, ("1.2.3.4", 2345), now=time.time())
+
+            # The server's PATH_CHALLENGE is padded up to the anti-amplification
+            # limit of the new path.
+            datagrams = server.datagrams_to_send(now=time.time())
+            self.assertEqual(datagram_sizes(datagrams), [3 * bytes_received])
+
+            # The client's PATH_RESPONSE is padded to 1200 bytes.
+            for data, addr in datagrams:
+                client.receive_datagram(data, SERVER_ADDR, now=time.time())
+            self.assertEqual(
+                datagram_sizes(client.datagrams_to_send(now=time.time())), [1200]
+            )
+
     def test_handle_path_challenge_response_on_different_path(self):
         with client_and_server() as (client, server):
             # client changes address and sends some data
