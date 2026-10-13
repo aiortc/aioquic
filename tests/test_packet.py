@@ -446,6 +446,22 @@ class ParamsTest(TestCase):
         push_quic_preferred_address(buf, preferred_address)
         self.assertEqual(buf.data, data)
 
+    def test_preferred_address_invalid_connection_id_length(self):
+        for connection_id_length in [0, 21]:
+            with self.subTest(connection_id_length=connection_id_length):
+                buf = Buffer(capacity=64)
+                buf.push_bytes(bytes(24))
+                buf.push_uint8(connection_id_length)
+                buf.push_bytes(bytes(connection_id_length + 16))
+                buf.seek(0)
+                with self.assertRaises(ValueError) as cm:
+                    pull_quic_preferred_address(buf)
+                self.assertEqual(
+                    str(cm.exception),
+                    "Invalid preferred address CID length "
+                    f"({connection_id_length} bytes)",
+                )
+
     def test_preferred_address_ipv6_only(self):
         data = binascii.unhexlify(
             "0000000000002400890200000000f03c91fffe69a45411531262c4518d63013"

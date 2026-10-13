@@ -18,8 +18,10 @@ from aioquic.quic.connection import (
     NetworkAddress,
     QuicConnection,
     QuicConnectionError,
+    QuicConnectionId,
     QuicNetworkPath,
     QuicReceiveContext,
+    dump_cid,
 )
 from aioquic.quic.crypto import CryptoPair
 from aioquic.quic.logger import QuicLogger
@@ -27,6 +29,7 @@ from aioquic.quic.packet import (
     QuicErrorCode,
     QuicFrameType,
     QuicPacketType,
+    QuicPreferredAddress,
     QuicProtocolVersion,
     QuicTransportParameters,
     QuicVersionInformation,
@@ -34,6 +37,7 @@ from aioquic.quic.packet import (
     encode_quic_version_negotiation,
     get_spin_bit,
     pull_quic_header,
+    pull_quic_transport_parameters,
     push_quic_transport_parameters,
 )
 from aioquic.quic.packet_builder import QuicDeliveryState, QuicPacketBuilder
@@ -52,6 +56,13 @@ NEW_CLIENT_ADDR = ("1.2.3.4", 2345)
 CLIENT_HANDSHAKE_DATAGRAM_SIZES = [1200]
 
 SERVER_ADDR = ("2.3.4.5", 4433)
+SERVER_PREFERRED_ADDR = ("3.4.5.6", 4433)
+SERVER_PREFERRED_ADDRESS = QuicPreferredAddress(
+    ipv4_address=SERVER_PREFERRED_ADDR,
+    ipv6_address=None,
+    connection_id=bytes(8),
+    stateless_reset_token=bytes(16),
+)
 SPOOFED_ADDR = ("6.7.8.9", 1234)
 SERVER_INITIAL_DATAGRAM_SIZES = [1200, 1162]
 
@@ -77,6 +88,36 @@ class SessionTicketStore:
 
     def pop(self, label):
         return self.tickets.pop(label, None)
+
+
+def advertise_preferred_address(server):
+    """
+    Make `server` advertise SERVER_PREFERRED_ADDR as its preferred address.
+    """
+    connection_id = QuicConnectionId(
+        cid=os.urandom(8),
+        sequence_number=1,
+        stateless_reset_token=os.urandom(16),
+        was_sent=True,
+    )
+    server._host_cids.append(connection_id)
+    server._host_cid_seq = 2
+
+    serialize_transport_parameters = server._serialize_transport_parameters
+
+    def patched_serialize_transport_parameters():
+        parameters = pull_quic_transport_parameters(
+            Buffer(data=serialize_transport_parameters())
+        )
+        parameters.preferred_address = QuicPreferredAddress(
+            ipv4_address=SERVER_PREFERRED_ADDR,
+            ipv6_address=None,
+            connection_id=connection_id.cid,
+            stateless_reset_token=connection_id.stateless_reset_token,
+        )
+        return encode_transport_parameters(parameters)
+
+    server._serialize_transport_parameters = patched_serialize_transport_parameters
 
 
 def client_receive_context(client, epoch=tls.Epoch.ONE_RTT):
@@ -221,6 +262,19 @@ def drop(sender):
     Drop datagrams from `sender`.
     """
     return len(sender.datagrams_to_send(now=time.time()))
+
+
+def receive_from(sender, receiver, from_addr):
+    """
+    Send datagrams from `sender` to `receiver`, as if they came from `from_addr`.
+
+    Returns the destination addresses of the datagrams.
+    """
+    addrs = []
+    for data, addr in sender.datagrams_to_send(now=time.time()):
+        addrs.append(addr)
+        receiver.receive_datagram(data, from_addr, now=time.time())
+    return addrs
 
 
 def roundtrip(sender, receiver):
@@ -3990,6 +4044,66 @@ class QuicConnectionTest(QuicConnectionTestCase):
             "version_information's chosen_version does not match the version in use",
         )
 
+    def test_parse_transport_parameters_with_preferred_address(self):
+        client = create_standalone_client(self)
+        client._remote_initial_source_connection_id = bytes(8)
+        preferred_address = QuicPreferredAddress(
+            ipv4_address=SERVER_PREFERRED_ADDR,
+            ipv6_address=None,
+            connection_id=b"\x01" * 8,
+            stateless_reset_token=b"\x02" * 16,
+        )
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                initial_source_connection_id=bytes(8),
+                original_destination_connection_id=client.original_destination_connection_id,
+                preferred_address=preferred_address,
+            )
+        )
+        client._parse_transport_parameters(data)
+        self.assertEqual(client._remote_preferred_address, preferred_address)
+        self.assertEqual(sequence_numbers(client._peer_cid_available), [1])
+        self.assertEqual(client._peer_cid_available[0].cid, b"\x01" * 8)
+        self.assertEqual(
+            client._peer_cid_available[0].stateless_reset_token, b"\x02" * 16
+        )
+        self.assertIn(1, client._peer_cid_sequence_numbers)
+
+    def test_parse_transport_parameters_with_preferred_address_and_empty_cid(self):
+        client = create_standalone_client(self)
+        client._remote_initial_source_connection_id = b""
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                initial_source_connection_id=b"",
+                original_destination_connection_id=client.original_destination_connection_id,
+                preferred_address=SERVER_PREFERRED_ADDRESS,
+            )
+        )
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "preferred_address is not allowed with a zero-length connection ID",
+        )
+
+    def test_parse_transport_parameters_with_preferred_address_from_session_ticket(
+        self,
+    ):
+        client = create_standalone_client(self)
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(preferred_address=SERVER_PREFERRED_ADDRESS)
+        )
+        client._parse_transport_parameters(data, from_session_ticket=True)
+        self.assertIsNone(client._remote_preferred_address)
+        self.assertEqual(client._peer_cid_available, [])
+
     def test_parse_transport_parameters_with_server_only_parameter(self):
         server = create_standalone_server(self)
         for active_connection_id_limit in [0, 1]:
@@ -4073,6 +4187,335 @@ class QuicConnectionTest(QuicConnectionTestCase):
             )
             self.assertEqual(cm.exception.frame_type, 0x1C)
             self.assertEqual(cm.exception.reason_phrase, "Failed to parse frame")
+
+    def test_preferred_address(self):
+        with client_and_server(
+            handshake=False, server_patch=advertise_preferred_address
+        ) as (client, server):
+            client.connect(SERVER_ADDR, now=time.time())
+            while not client._handshake_confirmed:
+                roundtrip(client, server)
+            self.assertEqual(client._peer_cid.sequence_number, 0)
+
+            # The client probes the preferred address with a padded PATH_CHALLENGE,
+            # using the connection ID from the preferred address.
+            datagrams = client.datagrams_to_send(now=time.time())
+            self.assertEqual(
+                [addr for data, addr in datagrams],
+                [SERVER_ADDR] * (len(datagrams) - 1) + [SERVER_PREFERRED_ADDR],
+            )
+            self.assertEqual(len(datagrams[-1][0]), 1200)
+            self.assertEqual(
+                [path.addr for path in client._network_paths],
+                [SERVER_ADDR, SERVER_PREFERRED_ADDR],
+            )
+            self.assertFalse(client._network_paths[1].is_validated)
+            self.assertEqual(
+                client._network_paths[1].peer_cid.cid, server._host_cids[1].cid
+            )
+
+            # The server responds, and the client migrates to the preferred address.
+            for data, addr in datagrams:
+                server.receive_datagram(data, CLIENT_ADDR, now=time.time())
+            receive_from(server, client, SERVER_ADDR)
+            self.assertEqual(client._network_paths[0].addr, SERVER_PREFERRED_ADDR)
+            self.assertTrue(client._network_paths[0].is_validated)
+            self.assertEqual(client._peer_cid.sequence_number, 1)
+            self.assertEqual(client._retire_connection_ids, [0])
+
+            # Further datagrams are sent to the preferred address.
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(
+                set(receive_from(client, server, CLIENT_ADDR)),
+                {SERVER_PREFERRED_ADDR},
+            )
+
+    def test_preferred_address_challenged_by_server(self):
+        with client_and_server() as (client, server):
+            client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
+
+            # The client's probe is lost.
+            datagrams = client.datagrams_to_send(now=time.time())
+            self.assertEqual(datagrams[-1][1], SERVER_PREFERRED_ADDR)
+            probe_cid = client._network_paths[1].peer_cid
+
+            # The server challenges the client from its preferred address.
+            server._network_paths[0].is_validated = False
+            server._network_paths[0].local_challenge_sent = False
+            server.send_ping(1)
+            receive_from(server, client, SERVER_PREFERRED_ADDR)
+
+            # The client responds on that path with a padded datagram, using the
+            # connection ID reserved for it, but does not migrate.
+            datagrams = client.datagrams_to_send(now=time.time())
+            self.assertEqual(
+                [
+                    (len(data), addr)
+                    for data, addr in datagrams
+                    if addr == SERVER_PREFERRED_ADDR
+                ],
+                [(1200, SERVER_PREFERRED_ADDR)],
+            )
+            log = client.configuration.quic_logger.to_dict()
+            packet_sent = [
+                event
+                for event in log["traces"][0]["events"]
+                if event["name"] == "transport:packet_sent"
+            ][-1]
+            self.assertEqual(
+                [frame["frame_type"] for frame in packet_sent["data"]["frames"]],
+                ["path_response", "padding"],
+            )
+            self.assertEqual(
+                packet_sent["data"]["header"]["dcid"], dump_cid(probe_cid.cid)
+            )
+            self.assertEqual(client._network_paths[0].addr, SERVER_ADDR)
+
+            # The response validates the server's path.
+            for data, addr in datagrams:
+                server.receive_datagram(data, CLIENT_ADDR, now=time.time())
+            self.assertTrue(server._network_paths[0].is_validated)
+
+    def test_preferred_address_challenged_with_amplification(self):
+        with client_and_server() as (client, server):
+            client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
+            drop(client)
+            network_path = client._network_paths[1]
+
+            # A small datagram carrying a PATH_CHALLENGE arrives from the
+            # preferred address.
+            network_path.remote_challenges.append(bytes(8))
+            network_path.bytes_received = 100
+
+            # The client does not respond beyond the anti-amplification limit.
+            self.assertEqual(client.datagrams_to_send(now=time.time()), [])
+            self.assertEqual(len(network_path.remote_challenges), 1)
+
+            # Once more data is received, the response is padded within the limit.
+            network_path.bytes_received += 450
+            datagrams = client.datagrams_to_send(now=time.time())
+            self.assertEqual(
+                [(len(data), addr) for data, addr in datagrams],
+                [(450, SERVER_PREFERRED_ADDR)],
+            )
+            self.assertEqual(len(network_path.remote_challenges), 0)
+
+    def test_preferred_address_connection_id_limit(self):
+        with client_and_server() as (client, server):
+            client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
+            drop(client)
+            self.assertEqual(
+                1 + len(client._peer_cid_available) + 1,
+                client._local_active_connection_id_limit,
+            )
+
+            # The connection ID reserved for the probe counts toward the limit.
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_new_connection_id_frame(
+                    client_receive_context(client),
+                    QuicFrameType.NEW_CONNECTION_ID,
+                    new_connection_id(sequence_number=8),
+                )
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.CONNECTION_ID_LIMIT_ERROR
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.NEW_CONNECTION_ID)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Too many active connection IDs"
+            )
+
+    def test_preferred_address_not_probed_when_closing(self):
+        with client_and_server() as (client, server):
+            client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
+
+            client.close()
+            self.assertEqual(
+                set(addr for data, addr in client.datagrams_to_send(now=time.time())),
+                {SERVER_ADDR},
+            )
+            self.assertEqual(len(client._network_paths), 1)
+
+    def test_preferred_address_probe_lost(self):
+        with client_and_server() as (client, server):
+            client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
+
+            # The probe is lost.
+            datagrams = client.datagrams_to_send(now=time.time())
+            self.assertEqual(datagrams[-1][1], SERVER_PREFERRED_ADDR)
+
+            # The client stays on the original address and does not probe again.
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(
+                set(receive_from(client, server, CLIENT_ADDR)), {SERVER_ADDR}
+            )
+            self.assertEqual(client._network_paths[0].addr, SERVER_ADDR)
+            self.assertEqual(client._peer_cid.sequence_number, 0)
+
+    def test_preferred_address_receive_before_validation(self):
+        with client_and_server() as (client, server):
+            consume_events(client)
+            client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
+            drop(client)
+
+            # Data from the preferred address is accepted, but the client does not
+            # switch to it before validating it.
+            server.send_stream_data(3, b"hello")
+            receive_from(server, client, SERVER_PREFERRED_ADDR)
+            self.assertEqual(type(client.next_event()), events.StreamDataReceived)
+            self.assertEqual(client._network_paths[0].addr, SERVER_ADDR)
+            self.assertEqual(client._peer_cid.sequence_number, 0)
+
+    def test_preferred_address_receive_from_original_address(self):
+        with client_and_server() as (client, server):
+            client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
+            roundtrip(client, server)
+            self.assertEqual(client._network_paths[0].addr, SERVER_PREFERRED_ADDR)
+            consume_events(client)
+
+            # Data from the original address is accepted, and the client stays on
+            # the preferred address.
+            server.send_stream_data(3, b"hello")
+            receive_from(server, client, SERVER_ADDR)
+            self.assertEqual(type(client.next_event()), events.StreamDataReceived)
+            self.assertEqual(client._network_paths[0].addr, SERVER_PREFERRED_ADDR)
+
+    def test_preferred_address_retired_before_validation(self):
+        with client_and_server() as (client, server):
+            client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
+            datagrams = client.datagrams_to_send(now=time.time())
+            self.assertEqual(client._network_paths[1].peer_cid.sequence_number, 1)
+
+            # The server retires the connection ID reserved for the probe.
+            client._handle_new_connection_id_frame(
+                client_receive_context(client),
+                QuicFrameType.NEW_CONNECTION_ID,
+                new_connection_id(sequence_number=8, retire_prior_to=2),
+            )
+            self.assertIsNone(client._network_paths[1].peer_cid)
+            self.assertIn(1, client._retire_connection_ids)
+
+            # The path is validated, but the client does not migrate.
+            for data, addr in datagrams:
+                server.receive_datagram(data, CLIENT_ADDR, now=time.time())
+            receive_from(server, client, SERVER_ADDR)
+            self.assertTrue(client._network_paths[1].is_validated)
+            self.assertEqual(client._network_paths[0].addr, SERVER_ADDR)
+            self.assertEqual(client._peer_cid.sequence_number, 2)
+
+    def test_preferred_address_selection(self):
+        client = create_standalone_client(self)
+
+        def preferred_address(ipv4_address=None, ipv6_address=None):
+            return QuicPreferredAddress(
+                ipv4_address=ipv4_address,
+                ipv6_address=ipv6_address,
+                connection_id=bytes(8),
+                stateless_reset_token=bytes(16),
+            )
+
+        dual_stack = preferred_address(
+            ipv4_address=("3.4.5.6", 4433), ipv6_address=("2001:db8::1", 4433)
+        )
+
+        for description, current_addr, preferred, expected_addr in [
+            ("ipv4", ("2.3.4.5", 4433), dual_stack, ("3.4.5.6", 4433)),
+            (
+                "ipv4-mapped",
+                ("::ffff:2.3.4.5", 4433, 0, 0),
+                dual_stack,
+                ("::ffff:3.4.5.6", 4433, 0, 0),
+            ),
+            (
+                "ipv6",
+                ("2001:db8::2", 4433, 0, 0),
+                dual_stack,
+                ("2001:db8::1", 4433, 0, 0),
+            ),
+            ("ipv6 2-tuple", ("2001:db8::2", 4433), dual_stack, ("2001:db8::1", 4433)),
+            (
+                "loopback from loopback",
+                ("127.0.0.1", 4433),
+                preferred_address(ipv4_address=("127.0.0.2", 4433)),
+                ("127.0.0.2", 4433),
+            ),
+            (
+                "loopback from ipv4-mapped loopback",
+                ("::ffff:127.0.0.1", 4433, 0, 0),
+                preferred_address(ipv4_address=("127.0.0.2", 4433)),
+                ("::ffff:127.0.0.2", 4433, 0, 0),
+            ),
+            (
+                "missing family",
+                ("2001:db8::2", 4433),
+                preferred_address(ipv4_address=("3.4.5.6", 4433)),
+                None,
+            ),
+            ("current address", ("3.4.5.6", 4433), dual_stack, None),
+            ("unparsable current address", ("example.com", 4433), dual_stack, None),
+            (
+                "port 0",
+                ("2.3.4.5", 4433),
+                preferred_address(ipv4_address=("3.4.5.6", 0)),
+                None,
+            ),
+            (
+                "ipv4 multicast",
+                ("2.3.4.5", 4433),
+                preferred_address(ipv4_address=("224.0.0.1", 4433)),
+                None,
+            ),
+            (
+                "ipv6 multicast",
+                ("2001:db8::2", 4433),
+                preferred_address(ipv6_address=("ff02::1", 4433)),
+                None,
+            ),
+            (
+                "ipv4 broadcast",
+                ("2.3.4.5", 4433),
+                preferred_address(ipv4_address=("255.255.255.255", 4433)),
+                None,
+            ),
+            (
+                "ipv4 loopback",
+                ("::ffff:2.3.4.5", 4433, 0, 0),
+                preferred_address(ipv4_address=("127.0.0.1", 4433)),
+                None,
+            ),
+            (
+                "ipv6 loopback",
+                ("2001:db8::2", 4433),
+                preferred_address(ipv6_address=("::1", 4433)),
+                None,
+            ),
+            (
+                "ipv4-mapped ipv6",
+                ("2001:db8::2", 4433),
+                preferred_address(ipv6_address=("::ffff:3.4.5.6", 4433)),
+                None,
+            ),
+        ]:
+            with self.subTest(description):
+                client._network_paths[0].addr = current_addr
+                client._remote_preferred_address = preferred
+                self.assertEqual(client._find_preferred_address(), expected_addr)
+
+    def test_preferred_address_without_matching_family(self):
+        with client_and_server() as (client, server):
+            client._remote_preferred_address = QuicPreferredAddress(
+                ipv4_address=None,
+                ipv6_address=("2001:db8::1", 4433),
+                connection_id=bytes(8),
+                stateless_reset_token=bytes(16),
+            )
+
+            # The client has no IPv6 address to probe and stays where it is.
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(
+                set(receive_from(client, server, CLIENT_ADDR)), {SERVER_ADDR}
+            )
+            self.assertIsNone(client._remote_preferred_address)
+            self.assertEqual(len(client._network_paths), 1)
 
     def test_send_max_data_blocked_by_cc(self):
         with client_and_server() as (client, server):
