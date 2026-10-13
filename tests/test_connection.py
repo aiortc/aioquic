@@ -3,6 +3,7 @@ import contextlib
 import io
 import os
 import time
+from typing import Optional
 from unittest import TestCase, skipIf
 
 from aioquic import tls
@@ -383,6 +384,48 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
         consume_events(client)
         consume_events(server)
         return now
+
+    def path_challenges(self, connection: QuicConnection) -> list[str]:
+        """
+        Return the data of the PATH_CHALLENGE frames sent by `connection`.
+        """
+        log = connection.configuration.quic_logger.to_dict()
+        return [
+            frame["data"]
+            for event in log["traces"][0]["events"]
+            if event["name"] == "transport:packet_sent"
+            for frame in event["data"]["frames"]
+            if frame["frame_type"] == "path_challenge"
+        ]
+
+    def probing_datagram(
+        self,
+        client: QuicConnection,
+        connection_id: QuicConnectionId,
+        frame_type: int,
+        data: bytes,
+        max_total_bytes: Optional[int] = None,
+    ) -> bytes:
+        """
+        Build a datagram with which the client probes a new path, using a
+        connection ID reserved for that path, as a client which supports
+        migration would.
+        """
+        builder = QuicPacketBuilder(
+            host_cid=client.host_cid,
+            is_client=True,
+            max_datagram_size=SMALLEST_MAX_DATAGRAM_SIZE,
+            packet_number=client._packet_number,
+            peer_cid=connection_id.cid,
+            version=client._version,
+        )
+        builder.max_total_bytes = max_total_bytes
+        builder.start_packet(QuicPacketType.ONE_RTT, client._cryptos[tls.Epoch.ONE_RTT])
+        buf = builder.start_frame(frame_type, capacity=9)
+        buf.push_bytes(data)
+        datagrams, packets = builder.flush()
+        client._packet_number = builder.packet_number
+        return datagrams[0]
 
     def test_connect_with_delayed_client_finished_and_session_ticket(self):
         """
@@ -1255,6 +1298,177 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertSentPackets(client, [0, 0, 1])
             self.assertEvents(client, [])
 
+    def test_migrate_after_probing(self):
+        """
+        Check the server answers a client probing a new path, and validates the
+        path before the client migrates to it.
+
+        The server sends PATH_RESPONSE and its own PATH_CHALLENGE on the probed
+        path (RFC 9000 sections 8.2.2 and 9.6.3), using a connection ID reserved
+        for that path, without changing the one used on the active path (RFC
+        9000 section 9.5). When the client migrates, the server switches to the
+        reserved connection ID and is not limited by anti-amplification.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Client probes a new path with a new connection ID.
+            probe_cid = client._peer_cid_available.pop(0)
+            challenge = os.urandom(8)
+            client._add_local_challenge(
+                challenge=challenge, network_path=client._network_paths[0]
+            )
+            data = self.probing_datagram(
+                client, probe_cid, QuicFrameType.PATH_CHALLENGE, challenge
+            )
+            self.assertEqual(len(data), 1200)
+
+            # Server receives the probe, sends ACK on the active path and
+            # PATH_RESPONSE + PATH_CHALLENGE on the probed path.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(data, NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(
+                [(len(data), addr) for data, addr in items],
+                [(32, CLIENT_ADDR), (1200, NEW_CLIENT_ADDR)],
+            )
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertSentPackets(server, [0, 0, 2])
+            self.assertEvents(server, [])
+            self.assertEqual(server._network_paths[0].addr, CLIENT_ADDR)
+            self.assertEqual(server._peer_cid.sequence_number, 0)
+            self.assertEqual(server._network_paths[1].peer_cid.sequence_number, 1)
+            self.assertEqual(len(self.path_challenges(server)), 1)
+
+            # Client receives ACK, PATH_RESPONSE and PATH_CHALLENGE. It sends ACK
+            # on its active path and PATH_RESPONSE on the probed path.
+            now = self.advance_by_tick(now)
+            for data, addr in items:
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            server_challenge = client._network_paths[0].remote_challenges.popleft()
+            data = self.probing_datagram(
+                client, probe_cid, QuicFrameType.PATH_RESPONSE, server_challenge
+            )
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+
+            # Server receives ACK and PATH_RESPONSE, the probed path is validated.
+            now = self.advance_by_tick(now)
+            for item in items:
+                server.receive_datagram(item[0], CLIENT_ADDR, now=now)
+            server.receive_datagram(data, NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(
+                [(len(data), addr) for data, addr in items], [(32, CLIENT_ADDR)]
+            )
+            self.assertAlmostEqual(server.get_timer(), 60.5)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [])
+            self.assertEqual(server._network_paths[0].addr, CLIENT_ADDR)
+            self.assertTrue(server._network_paths[1].is_validated)
+
+            # Client receives ACK, migrates to the probed path and sends data.
+            now = self.advance_by_tick(now)
+            for data, addr in items:
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            client._peer_cid = probe_cid
+            client.send_stream_data(0, bytes(3000))
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200, 1200, 697])
+
+            # Server receives the data on the probed path, switches to it with the
+            # reserved connection ID, and is not limited by anti-amplification.
+            now = self.advance_by_tick(now)
+            for data, addr in items:
+                server.receive_datagram(data, NEW_CLIENT_ADDR, now=now)
+            self.assertEqual(server._network_paths[0].addr, NEW_CLIENT_ADDR)
+            self.assertEqual(server._peer_cid.sequence_number, 1)
+            self.assertEqual(server._retire_connection_ids, [0])
+            server.send_stream_data(1, bytes(3000))
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(
+                [(len(data), addr) for data, addr in items],
+                [
+                    (1200, NEW_CLIENT_ADDR),
+                    (1200, NEW_CLIENT_ADDR),
+                    (704, NEW_CLIENT_ADDR),
+                ],
+            )
+            self.assertEqual(server._retire_connection_ids, [])
+            self.assertEvents(server, [events.StreamDataReceived] * 3)
+
+    def test_migrate_after_probing_with_lost_path_challenge(self):
+        """
+        Check the server validates the client's new address when the client
+        migrates after its PATH_CHALLENGE was answered, but the server's own
+        PATH_CHALLENGE on the probed path was lost.
+
+        A PATH_CHALLENGE on a path which is not the active one is not sent
+        again, so the server starts validating the path afresh when the client
+        migrates to it (RFC 9000 section 9.3).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Client probes a new path with a new connection ID.
+            probe_cid = client._peer_cid_available.pop(0)
+            challenge = os.urandom(8)
+            client._add_local_challenge(
+                challenge=challenge, network_path=client._network_paths[0]
+            )
+            data = self.probing_datagram(
+                client, probe_cid, QuicFrameType.PATH_CHALLENGE, challenge
+            )
+
+            # Server receives the probe, sends ACK on the active path and
+            # PATH_RESPONSE + PATH_CHALLENGE on the probed path, which is lost.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(data, NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(
+                [(len(data), addr) for data, addr in items],
+                [(32, CLIENT_ADDR), (1200, NEW_CLIENT_ADDR)],
+            )
+            self.assertEqual(len(self.path_challenges(server)), 1)
+
+            # Client receives ACK, migrates to the probed path and sends data.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            client._peer_cid = probe_cid
+            client.send_stream_data(0, b"01234567")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [39])
+
+            # Server receives the data on the probed path, switches to it with the
+            # reserved connection ID and sends a new PATH_CHALLENGE, padded up to
+            # the anti-amplification limit.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            self.assertEqual(server._network_paths[0].addr, NEW_CLIENT_ADDR)
+            self.assertFalse(server._network_paths[0].is_validated)
+            self.assertEqual(server._peer_cid.sequence_number, 1)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(len(self.path_challenges(server)), 2)
+            self.assertEqual(
+                [addr for data, addr in items], [NEW_CLIENT_ADDR] * len(items)
+            )
+            self.assertIsNotNone(server._path_validation_deadline())
+
+            # Client receives PATH_CHALLENGE, sends PATH_RESPONSE.
+            now = self.advance_by_tick(now)
+            for data, addr in items:
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+
+            # Server receives PATH_RESPONSE, the path is validated.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            self.assertTrue(server._network_paths[0].is_validated)
+            self.assertIsNone(server._path_validation_deadline())
+
     def test_migrate_to_spoofed_address(self):
         """
         Check the server sends no more than three times the data received from
@@ -1472,8 +1686,8 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertAlmostEqual(server._path_validation_deadline(), 1.1125)
             self.assertEvents(server, [events.StreamDataReceived])
 
-            # Server forgets its previous address was validated.
-            server._network_paths[1].is_validated = False
+            # Server has no state about its previous address.
+            server._network_paths.pop(1)
 
             # Server's PTO fires, it cannot send anything to the new address.
             now = self.advance_to_timer(now, server)
@@ -1494,18 +1708,93 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertEqual(event.error_code, QuicErrorCode.NO_VIABLE_PATH)
             self.assertEqual(event.reason_phrase, "No validated network path")
 
-    def path_challenges(self, connection: QuicConnection) -> list[str]:
+    def test_probe_from_spoofed_address(self):
         """
-        Return the data of the PATH_CHALLENGE frames sent by `connection`.
+        Check the server sends no more than three times the data received from
+        a new address when answering a probe, and only probes it once.
+
+        An attacker rewrites the source address of a small probing packet. The
+        server's PATH_RESPONSE and PATH_CHALLENGE are padded only up to the
+        anti-amplification limit, and a lost PATH_CHALLENGE is not sent again on
+        a path which is not the active one.
         """
-        log = connection.configuration.quic_logger.to_dict()
-        return [
-            frame["data"]
-            for event in log["traces"][0]["events"]
-            if event["name"] == "transport:packet_sent"
-            for frame in event["data"]["frames"]
-            if frame["frame_type"] == "path_challenge"
-        ]
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+            self.watch_timers(server)
+
+            # Client sends a small probe, whose source address is rewritten.
+            probe_cid = client._peer_cid_available.pop(0)
+            challenge = os.urandom(8)
+            client._add_local_challenge(
+                challenge=challenge, network_path=client._network_paths[0]
+            )
+            data = self.probing_datagram(
+                client,
+                probe_cid,
+                QuicFrameType.PATH_CHALLENGE,
+                challenge,
+                max_total_bytes=60,
+            )
+            self.assertEqual(len(data), 60)
+
+            # Server receives the probe, sends ACK on the active path and
+            # PATH_RESPONSE + PATH_CHALLENGE within the anti-amplification limit.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(data, SPOOFED_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(
+                [(len(data), addr) for data, addr in items],
+                [(32, CLIENT_ADDR), (3 * 60, SPOOFED_ADDR)],
+            )
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertSentPackets(server, [0, 0, 2])
+            self.assertEqual(server._network_paths[0].addr, CLIENT_ADDR)
+            self.assertEqual(server._peer_cid.sequence_number, 0)
+
+            # Server's PTO fires, it probes the active path only.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(
+                [(len(data), addr) for data, addr in items], [(29, CLIENT_ADDR)]
+            )
+            self.assertEqual(len(self.path_challenges(server)), 1)
+
+    def test_probe_without_spare_connection_id(self):
+        """
+        Check the server sends nothing on a probed path when the client has not
+        provided a spare connection ID for it (RFC 9000 section 9.5).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Server has no spare connection ID.
+            server._peer_cid_available.clear()
+
+            # Client probes a new path with a new connection ID.
+            probe_cid = client._peer_cid_available.pop(0)
+            challenge = os.urandom(8)
+            client._add_local_challenge(
+                challenge=challenge, network_path=client._network_paths[0]
+            )
+            data = self.probing_datagram(
+                client, probe_cid, QuicFrameType.PATH_CHALLENGE, challenge
+            )
+
+            # Server receives the probe, sends ACK on the active path only.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(data, NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(
+                [(len(data), addr) for data, addr in items], [(32, CLIENT_ADDR)]
+            )
+            self.assertAlmostEqual(server.get_timer(), 60.4)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertIsNone(server._network_paths[1].peer_cid)
+            self.assertEqual(len(server._network_paths[1].remote_challenges), 1)
+            self.assertEqual(self.path_challenges(server), [])
 
     def watch_timers(self, *connections: QuicConnection) -> None:
         """
@@ -3246,6 +3535,19 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(server._network_paths[0].addr, ("1.2.3.4", 1234))
             self.assertEqual(server._network_paths[1].addr, ("1.2.3.4", 2001))
             self.assertEqual(server._network_paths[-1].addr, ("1.2.3.4", 3000))
+
+    def test_network_paths_eviction_retires_connection_id(self):
+        with client_and_server() as (client, server):
+            # A path has a connection ID reserved for it.
+            network_path = QuicNetworkPath(("1.2.3.4", 2000))
+            network_path.peer_cid = server._peer_cid_available.pop(0)
+            server._add_network_path(network_path)
+            for port in range(2001, 2001 + MAX_NETWORK_PATHS - 1):
+                server._add_network_path(QuicNetworkPath(("1.2.3.4", port)))
+
+            # The path is evicted and its connection ID is retired.
+            self.assertNotIn(network_path, server._network_paths)
+            self.assertEqual(server._retire_connection_ids, [1])
 
     def test_remote_path_challenges_are_bounded(self):
         with client_and_server() as (client, server):

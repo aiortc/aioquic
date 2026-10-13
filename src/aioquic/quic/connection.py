@@ -613,18 +613,29 @@ class QuicConnection:
             now=now,
         )
 
-        if self._is_client and self._state not in END_STATES:
+        if self._handshake_complete and self._state not in END_STATES:
             # RFC 9000 section 9.6.1 says that once the handshake is confirmed, the
             # client should validate the server's preferred address.
-            if self._handshake_confirmed and self._remote_preferred_address is not None:
+            if (
+                self._is_client
+                and self._handshake_confirmed
+                and self._remote_preferred_address is not None
+            ):
                 self._probe_preferred_address()
 
-            # Send probing frames on paths being validated.
+            # Send probing frames on the other paths, which need a connection ID
+            # of their own, see RFC 9000 section 9.5. Without a spare connection
+            # ID, nothing can be sent on a path.
             for probe_path in self._network_paths[1:]:
-                if probe_path.peer_cid is not None and (
-                    not probe_path.local_challenge_sent or probe_path.remote_challenges
+                if probe_path.remote_challenges or not (
+                    probe_path.is_validated or probe_path.local_challenge_sent
                 ):
-                    ret += self._send_probing_frames(network_path=probe_path, now=now)
+                    if probe_path.peer_cid is None and self._peer_cid_available:
+                        probe_path.peer_cid = self._peer_cid_available.pop(0)
+                    if probe_path.peer_cid is not None:
+                        ret += self._send_probing_frames(
+                            network_path=probe_path, now=now
+                        )
 
         return ret
 
@@ -1074,9 +1085,12 @@ class QuicConnection:
             # update idle timeout
             self._close_at = now + self._idle_timeout()
 
-            # handle migration
+            # Handle migration. Probing packets must not change the connection ID
+            # used on the active path, as it would then be used to send to more
+            # than one address, see RFC 9000 section 9.5.
             if (
                 not self._is_client
+                and not is_probing
                 and context.host_cid != self.host_cid
                 and epoch == tls.Epoch.ONE_RTT
             ):
@@ -1086,7 +1100,11 @@ class QuicConnection:
                     destination_cid_seq,
                 )
                 self.host_cid = context.host_cid
-                self.change_connection_id()
+
+                # A path with a connection ID reserved for it uses that one once
+                # promoted.
+                if network_path.peer_cid is None:
+                    self.change_connection_id()
 
             # update network path
             if not network_path.is_validated and epoch == tls.Epoch.HANDSHAKE:
@@ -1109,6 +1127,15 @@ class QuicConnection:
                 self._logger.debug("Network path %s promoted", network_path.addr)
                 self._network_paths.pop(idx)
                 self._network_paths.insert(0, network_path)
+                if network_path.peer_cid is not None:
+                    self._use_reserved_peer_cid(network_path)
+
+                # RFC 9000 section 9.3 requires validating the new peer address. A
+                # challenge sent while the path was probed is not retransmitted, so
+                # validation starts afresh.
+                if not network_path.is_validated:
+                    network_path.local_challenge_sent = False
+                    network_path.validation_deadline = None
 
             # record packet as received
             if not space.discarded:
@@ -2331,10 +2358,7 @@ class QuicConnection:
         # using the connection ID reserved for it.
         if self._is_client and network_path.peer_cid is not None:
             self._logger.debug("Migrating to server address %s", network_path.addr)
-            self._retire_peer_cid(self._peer_cid)
-            self._peer_cid = network_path.peer_cid
-            network_path.peer_cid = None
-            self._spin_bit = False
+            self._use_reserved_peer_cid(network_path)
             self._network_paths.remove(network_path)
             self._network_paths.insert(0, network_path)
 
@@ -3245,11 +3269,13 @@ class QuicConnection:
             version=self._version,
         )
 
-        # Probing frames are not limited by congestion control. Our PATH_CHALLENGE
-        # is sent once, without waiting for data from the path. Anything sent
-        # afterwards is in response to data received from an address which is not
-        # validated, so it is subject to the anti-amplification limit.
-        if network_path.local_challenge_sent:
+        # Probing frames are not limited by congestion control. A client sends its
+        # PATH_CHALLENGE to the server's preferred address without waiting for
+        # data from it. Anything else sent to an address which is not validated is
+        # subject to the anti-amplification limit.
+        if not network_path.is_validated and (
+            network_path.local_challenge_sent or not self._is_client
+        ):
             builder.max_total_bytes = (
                 network_path.bytes_received * 3 - network_path.bytes_sent
             )
@@ -3417,6 +3443,8 @@ class QuicConnection:
             )
             self._network_paths.remove(evicted)
             self._logger.debug("Network path %s evicted", evicted.addr)
+            if evicted.peer_cid is not None:
+                self._retire_peer_cid(evicted.peer_cid)
 
         self._network_paths.append(network_path)
 
@@ -3427,6 +3455,20 @@ class QuicConnection:
             # limit.
             key = next(iter(self._local_challenges.keys()))
             del self._local_challenges[key]
+
+    def _use_reserved_peer_cid(self, network_path: QuicNetworkPath) -> None:
+        """
+        Switch to the peer connection ID reserved for a network path, retiring the
+        current one.
+        """
+        assert network_path.peer_cid is not None
+        self._retire_peer_cid(self._peer_cid)
+        self._peer_cid = network_path.peer_cid
+        network_path.peer_cid = None
+
+        # RFC 9000 section 17.4 requires resetting the spin value when changing
+        # the connection ID used on a network path.
+        self._spin_bit = False
 
     def _write_application(
         self, builder: QuicPacketBuilder, network_path: QuicNetworkPath, now: float
