@@ -32,6 +32,7 @@ from aioquic.quic.packet import (
     QuicVersionInformation,
     encode_quic_retry,
     encode_quic_version_negotiation,
+    get_spin_bit,
     pull_quic_header,
     push_quic_transport_parameters,
 )
@@ -1744,6 +1745,19 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 sequence_numbers(client._peer_cid_available), [2, 3, 4, 5, 6, 7, 8]
             )
 
+    def test_change_connection_id_resets_spin_bit(self):
+        with client_and_server() as (client, server):
+            client._spin_bit = True
+            client.send_ping(1)
+            datagrams = client.datagrams_to_send(now=time.time())
+            self.assertTrue(get_spin_bit(datagrams[0][0][0]))
+
+            # The spin value is reset when the client changes connection ID.
+            client.change_connection_id()
+            client.send_ping(2)
+            datagrams = client.datagrams_to_send(now=time.time())
+            self.assertFalse(get_spin_bit(datagrams[0][0][0]))
+
     def test_change_connection_id_retransmit_new_connection_id(self):
         with client_and_server() as (client, server):
             self.assertEqual(
@@ -2592,6 +2606,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_handle_new_connection_id_with_retire_prior_to(self):
         with client_and_server() as (client, server):
             buf = new_connection_id(sequence_number=8, retire_prior_to=2, capacity=42)
+            client._spin_bit = True
 
             # client receives NEW_CONNECTION_ID
             client._handle_new_connection_id_frame(
@@ -2601,6 +2616,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             )
 
             self.assertEqual(client._peer_cid.sequence_number, 2)
+            self.assertFalse(client._spin_bit)
             self.assertEqual(
                 sequence_numbers(client._peer_cid_available), [3, 4, 5, 6, 7, 8]
             )
