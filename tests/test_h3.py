@@ -3292,17 +3292,21 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase, "Header b'x-f:oo' contains a non-initial colon"
         )
 
-        # good transfer-encoding; this test passes by not asserting
+        # good te; this test passes by not asserting
         with self.assertRaises(MessageError) as cm:
-            validate_request_headers([(b"transfer-encoding", b"trailers")])
+            validate_request_headers([(b"te", b"trailers")])
 
-        # bad transfer-encoding
+        # bad te
         with self.assertRaises(MessageError) as cm:
-            validate_request_headers([(b"transfer-encoding", b"bogus")])
+            validate_request_headers([(b"te", b"bogus")])
         self.assertEqual(
             cm.exception.reason_phrase,
-            "The only valid value for transfer-encoding is trailers",
+            "The only valid value for te is trailers",
         )
+
+        # transfer-encoding header not allowed under RFC 9114 in HTTP/3
+        with self.assertRaises(MessageError) as cm:
+            validate_request_headers([(b"transfer-encoding", b"trailers")])
 
         # value with a forbidden NUL, LF, or CR:
         for prefix in [b"\x00", b"\x0a", b"\x0d"]:

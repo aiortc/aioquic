@@ -307,10 +307,11 @@ def validate_headers(
                     raise MessageError("content-length is not a non-negative integer")
                 if stream:
                     stream.expected_content_length = content_length
-            elif key == b"transfer-encoding" and value != b"trailers":
-                raise MessageError(
-                    "The only valid value for transfer-encoding is trailers"
-                )
+            elif key == b"transfer-encoding":
+                raise MessageError("Transfer-Encoding is forbidden in HTTP/3")
+
+            elif key == b"te" and value != b"trailers":
+                raise MessageError("The only valid value for te is trailers")
 
     # check required pseudo-headers are present
     missing = required_pseudo_headers.difference(seen_pseudo_headers)
