@@ -1,4 +1,5 @@
 import binascii
+import ipaddress
 import logging
 import os
 from collections import deque
@@ -38,6 +39,7 @@ from .packet import (
     QuicFrameType,
     QuicHeader,
     QuicPacketType,
+    QuicPreferredAddress,
     QuicProtocolVersion,
     QuicStreamFrame,
     QuicTransportParameters,
@@ -204,6 +206,7 @@ class QuicNetworkPath:
         self.bytes_sent: int = 0
         self.is_validated: bool = is_validated
         self.local_challenge_sent: bool = False
+        self.peer_cid: Optional[QuicConnectionId] = None
         self.remote_challenges: Deque[bytes] = deque()
         self.validation_deadline: Optional[float] = None
 
@@ -359,6 +362,7 @@ class QuicConnection:
         self._remote_max_stream_data_uni = 0
         self._remote_max_streams_bidi = 0
         self._remote_max_streams_uni = 0
+        self._remote_preferred_address: Optional[QuicPreferredAddress] = None
         self._remote_version_information: Optional[QuicVersionInformation] = None
         self._retry_count = 0
         self._retry_source_connection_id = retry_source_connection_id
@@ -602,69 +606,26 @@ class QuicConnection:
             except QuicPacketBuilderStop:
                 pass
 
-        datagrams, packets = builder.flush()
+        ret = self._flush_builder(
+            builder=builder,
+            network_path=network_path,
+            peer_cid=self._peer_cid.cid,
+            now=now,
+        )
 
-        if datagrams:
-            self._packet_number = builder.packet_number
+        if self._is_client and self._state not in END_STATES:
+            # RFC 9000 section 9.6.1 says that once the handshake is confirmed, the
+            # client should validate the server's preferred address.
+            if self._handshake_confirmed and self._remote_preferred_address is not None:
+                self._probe_preferred_address()
 
-            # register packets
-            sent_handshake = False
-            for packet in packets:
-                packet.sent_time = now
-                self._loss.on_packet_sent(
-                    packet=packet, space=self._spaces[packet.epoch]
-                )
-                if packet.epoch == tls.Epoch.HANDSHAKE:
-                    sent_handshake = True
+            # Send probing frames on paths being validated.
+            for probe_path in self._network_paths[1:]:
+                if probe_path.peer_cid is not None and (
+                    not probe_path.local_challenge_sent or probe_path.remote_challenges
+                ):
+                    ret += self._send_probing_frames(network_path=probe_path, now=now)
 
-                # log packet
-                if self._quic_logger is not None:
-                    self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_sent",
-                        data={
-                            "frames": packet.quic_logger_frames,
-                            "header": {
-                                "packet_number": packet.packet_number,
-                                "packet_type": self._quic_logger.packet_type(
-                                    packet.packet_type
-                                ),
-                                "scid": (
-                                    ""
-                                    if packet.packet_type == QuicPacketType.ONE_RTT
-                                    else dump_cid(self.host_cid)
-                                ),
-                                "dcid": dump_cid(self._peer_cid.cid),
-                            },
-                            "raw": {"length": packet.sent_bytes},
-                        },
-                    )
-
-            # check if we can discard initial keys
-            if sent_handshake and self._is_client:
-                self._discard_epoch(tls.Epoch.INITIAL)
-
-        # return datagrams to send and the destination network address
-        ret = []
-        for datagram in datagrams:
-            payload_length = len(datagram)
-            network_path.bytes_sent += payload_length
-            ret.append((datagram, network_path.addr))
-
-            if self._quic_logger is not None:
-                self._quic_logger.log_event(
-                    category="transport",
-                    event="datagrams_sent",
-                    data={
-                        "count": 1,
-                        "raw": [
-                            {
-                                "length": UDP_HEADER_SIZE + payload_length,
-                                "payload_length": payload_length,
-                            }
-                        ],
-                    },
-                )
         return ret
 
     def get_next_available_stream_id(self, is_unidirectional=False) -> int:
@@ -1136,7 +1097,15 @@ class QuicConnection:
             if network_path not in self._network_paths:
                 self._add_network_path(network_path)
             idx = self._network_paths.index(network_path)
-            if idx and not is_probing and packet_number > space.largest_received_packet:
+
+            # Only clients initiate migration (RFC 9000 section 9). A client only
+            # switches to a server address once it has validated it.
+            if (
+                not self._is_client
+                and idx
+                and not is_probing
+                and packet_number > space.largest_received_packet
+            ):
                 self._logger.debug("Network path %s promoted", network_path.addr)
                 self._network_paths.pop(idx)
                 self._network_paths.insert(0, network_path)
@@ -1470,6 +1439,128 @@ class QuicConnection:
         network_path = QuicNetworkPath(addr)
         self._logger.debug("Network path %s discovered", network_path.addr)
         return network_path
+
+    def _find_preferred_address(self) -> Optional[NetworkAddress]:
+        """
+        Return the server's preferred address in the same address family and
+        format as the current server address, or `None` if there is none.
+        """
+        assert self._remote_preferred_address is not None
+        addr = self._network_paths[0].addr
+        try:
+            host = ipaddress.ip_address(addr[0])
+        except (TypeError, ValueError):
+            return None
+
+        # Datagram sockets report IPv4 peers of a dual-stack IPv6 socket as
+        # IPv4-mapped addresses, along with a flow info and scope ID.
+        if host.version == 4:
+            preferred = self._remote_preferred_address.ipv4_address
+            host_prefix = ""
+        elif host.ipv4_mapped is not None:
+            host = host.ipv4_mapped
+            preferred = self._remote_preferred_address.ipv4_address
+            host_prefix = "::ffff:"
+        else:
+            preferred = self._remote_preferred_address.ipv6_address
+            host_prefix = ""
+        if preferred is None:
+            return None
+
+        # Refuse addresses which are malformed or could be used for request
+        # forgery, see RFC 9000 section 21.5.6.
+        preferred_host = ipaddress.ip_address(preferred[0])
+        if (
+            preferred[1] == 0
+            or preferred_host.is_multicast
+            or preferred_host == ipaddress.IPv4Address("255.255.255.255")
+            or (preferred_host.is_loopback and not host.is_loopback)
+            or (preferred_host.version == 6 and preferred_host.ipv4_mapped is not None)
+        ):
+            return None
+
+        preferred_addr: NetworkAddress = (host_prefix + preferred[0], preferred[1])
+        if len(addr) == 4:
+            preferred_addr += (0, 0)
+        if preferred_addr == addr:
+            return None
+        return preferred_addr
+
+    def _flush_builder(
+        self,
+        builder: QuicPacketBuilder,
+        network_path: QuicNetworkPath,
+        peer_cid: bytes,
+        now: float,
+    ) -> list[tuple[bytes, NetworkAddress]]:
+        """
+        Register the packets built by `builder` and return the datagrams to send
+        on `network_path`.
+        """
+        datagrams, packets = builder.flush()
+
+        if datagrams:
+            self._packet_number = builder.packet_number
+
+            # register packets
+            sent_handshake = False
+            for packet in packets:
+                packet.sent_time = now
+                self._loss.on_packet_sent(
+                    packet=packet, space=self._spaces[packet.epoch]
+                )
+                if packet.epoch == tls.Epoch.HANDSHAKE:
+                    sent_handshake = True
+
+                # log packet
+                if self._quic_logger is not None:
+                    self._quic_logger.log_event(
+                        category="transport",
+                        event="packet_sent",
+                        data={
+                            "frames": packet.quic_logger_frames,
+                            "header": {
+                                "packet_number": packet.packet_number,
+                                "packet_type": self._quic_logger.packet_type(
+                                    packet.packet_type
+                                ),
+                                "scid": (
+                                    ""
+                                    if packet.packet_type == QuicPacketType.ONE_RTT
+                                    else dump_cid(self.host_cid)
+                                ),
+                                "dcid": dump_cid(peer_cid),
+                            },
+                            "raw": {"length": packet.sent_bytes},
+                        },
+                    )
+
+            # check if we can discard initial keys
+            if sent_handshake and self._is_client:
+                self._discard_epoch(tls.Epoch.INITIAL)
+
+        # return datagrams to send and the destination network address
+        ret = []
+        for datagram in datagrams:
+            payload_length = len(datagram)
+            network_path.bytes_sent += payload_length
+            ret.append((datagram, network_path.addr))
+
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="transport",
+                    event="datagrams_sent",
+                    data={
+                        "count": 1,
+                        "raw": [
+                            {
+                                "length": UDP_HEADER_SIZE + payload_length,
+                                "payload_length": payload_length,
+                            }
+                        ],
+                    },
+                )
+        return ret
 
     def _get_or_create_stream(self, frame_type: int, stream_id: int) -> QuicStream:
         """
@@ -2076,6 +2167,13 @@ class QuicConnection:
         if self._peer_cid.sequence_number < self._peer_retire_prior_to:
             change_cid = True
             retire.insert(0, self._peer_cid)
+        for network_path in self._network_paths:
+            if (
+                network_path.peer_cid is not None
+                and network_path.peer_cid.sequence_number < self._peer_retire_prior_to
+            ):
+                retire.append(network_path.peer_cid)
+                network_path.peer_cid = None
 
         # update available CIDs
         self._peer_cid_available = [
@@ -2109,8 +2207,17 @@ class QuicConnection:
         if change_cid:
             self._consume_peer_cid()
 
-        # check number of active connection IDs, including the selected one
-        if 1 + len(self._peer_cid_available) > self._local_active_connection_id_limit:
+        # Check the number of active connection IDs, including the selected one and
+        # those reserved for paths being validated.
+        reserved_count = sum(
+            1
+            for network_path in self._network_paths
+            if network_path.peer_cid is not None
+        )
+        if (
+            1 + len(self._peer_cid_available) + reserved_count
+            > self._local_active_connection_id_limit
+        ):
             raise QuicConnectionError(
                 error_code=QuicErrorCode.CONNECTION_ID_LIMIT_ERROR,
                 frame_type=frame_type,
@@ -2219,6 +2326,17 @@ class QuicConnection:
             )
         self._logger.debug("Network path %s validated by challenge", network_path.addr)
         network_path.is_validated = True
+
+        # A client switches to the server's preferred address once it is validated,
+        # using the connection ID reserved for it.
+        if self._is_client and network_path.peer_cid is not None:
+            self._logger.debug("Migrating to server address %s", network_path.addr)
+            self._retire_peer_cid(self._peer_cid)
+            self._peer_cid = network_path.peer_cid
+            network_path.peer_cid = None
+            self._spin_bit = False
+            self._network_paths.remove(network_path)
+            self._network_paths.insert(0, network_path)
 
     def _handle_ping_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -2673,6 +2791,24 @@ class QuicConnection:
 
         return is_ack_eliciting, bool(is_probing)
 
+    def _probe_preferred_address(self) -> None:
+        """
+        Start validating the server's preferred address.
+
+        https://datatracker.ietf.org/doc/html/rfc9000#section-9.6.1
+        """
+        addr = self._find_preferred_address()
+        self._remote_preferred_address = None
+        if addr is None or not self._peer_cid_available:
+            return
+
+        # Reserve a connection ID for this path, as a connection ID must not be
+        # used to send to more than one destination address.
+        network_path = QuicNetworkPath(addr)
+        network_path.peer_cid = self._peer_cid_available.pop(0)
+        self._add_network_path(network_path)
+        self._logger.debug("Probing server preferred address %s", addr)
+
     def _receive_retry_packet(
         self, header: QuicHeader, packet_without_tag: bytes, now: float
     ) -> None:
@@ -2935,6 +3071,21 @@ class QuicConnection:
                     frame_type=QuicFrameType.CRYPTO,
                     reason_phrase="retry_source_connection_id does not match",
                 )
+            # RFC 9000 section 18.2 forbids a preferred address when the server
+            # uses a zero-length connection ID.
+            if (
+                self._is_client
+                and quic_transport_parameters.preferred_address is not None
+                and not self._remote_initial_source_connection_id
+            ):
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase=(
+                        "preferred_address is not allowed "
+                        "with a zero-length connection ID"
+                    ),
+                )
             if (
                 quic_transport_parameters.active_connection_id_limit is not None
                 and quic_transport_parameters.active_connection_id_limit < 2
@@ -3033,6 +3184,19 @@ class QuicConnection:
                 self._peer_cid.stateless_reset_token = (
                     quic_transport_parameters.stateless_reset_token
                 )
+            preferred_address = quic_transport_parameters.preferred_address
+            if self._is_client and preferred_address is not None:
+                # The connection ID in the preferred address has sequence number 1,
+                # and the client may use it on any path.
+                self._peer_cid_available.append(
+                    QuicConnectionId(
+                        cid=preferred_address.connection_id,
+                        sequence_number=1,
+                        stateless_reset_token=preferred_address.stateless_reset_token,
+                    )
+                )
+                self._peer_cid_sequence_numbers.add(1)
+                self._remote_preferred_address = preferred_address
             self._remote_version_information = (
                 quic_transport_parameters.version_information
             )
@@ -3059,6 +3223,68 @@ class QuicConnection:
             value = getattr(quic_transport_parameters, "initial_" + param)
             if value is not None:
                 setattr(self, "_remote_" + param, value)
+
+    def _send_probing_frames(
+        self, network_path: QuicNetworkPath, now: float
+    ) -> list[tuple[bytes, NetworkAddress]]:
+        """
+        Send probing frames on a path being validated, using the connection ID
+        reserved for it.
+
+        Non-probing frames must not be sent to an address before it is validated,
+        see RFC 9000 section 21.5.3.
+        """
+        assert network_path.peer_cid is not None
+        builder = QuicPacketBuilder(
+            host_cid=self.host_cid,
+            is_client=self._is_client,
+            max_datagram_size=self._max_datagram_size,
+            packet_number=self._packet_number,
+            peer_cid=network_path.peer_cid.cid,
+            quic_logger=self._quic_logger,
+            version=self._version,
+        )
+
+        # Probing frames are not limited by congestion control. Our PATH_CHALLENGE
+        # is sent once, without waiting for data from the path. Anything sent
+        # afterwards is in response to data received from an address which is not
+        # validated, so it is subject to the anti-amplification limit.
+        if network_path.local_challenge_sent:
+            builder.max_total_bytes = (
+                network_path.bytes_received * 3 - network_path.bytes_sent
+            )
+
+        try:
+            builder.start_packet(
+                QuicPacketType.ONE_RTT, self._cryptos[tls.Epoch.ONE_RTT]
+            )
+
+            # PATH_CHALLENGE
+            if not network_path.local_challenge_sent:
+                challenge = os.urandom(8)
+                self._write_path_challenge_frame(
+                    builder=builder, challenge=challenge, network_path=network_path
+                )
+                self._add_local_challenge(
+                    challenge=challenge, network_path=network_path
+                )
+                network_path.local_challenge_sent = True
+
+            # PATH_RESPONSE, on the path where the PATH_CHALLENGE was received.
+            while network_path.remote_challenges:
+                self._write_path_response_frame(
+                    builder=builder, challenge=network_path.remote_challenges[0]
+                )
+                network_path.remote_challenges.popleft()
+        except QuicPacketBuilderStop:
+            pass
+
+        return self._flush_builder(
+            builder=builder,
+            network_path=network_path,
+            peer_cid=network_path.peer_cid.cid,
+            now=now,
+        )
 
     def _serialize_transport_parameters(self) -> bytes:
         quic_transport_parameters = QuicTransportParameters(

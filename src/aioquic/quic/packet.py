@@ -416,6 +416,10 @@ def pull_quic_preferred_address(buf: Buffer) -> QuicPreferredAddress:
         ipv6_address = (str(ipaddress.IPv6Address(ipv6_host)), ipv6_port)
 
     connection_id_length = buf.pull_uint8()
+    if not 1 <= connection_id_length <= CONNECTION_ID_MAX_SIZE:
+        raise ValueError(
+            f"Invalid preferred address CID length ({connection_id_length} bytes)"
+        )
     connection_id = buf.pull_bytes(connection_id_length)
     stateless_reset_token = buf.pull_bytes(16)
 
