@@ -43,7 +43,7 @@ from aioquic.quic.packet import (
     push_quic_transport_parameters,
 )
 from aioquic.quic.packet_builder import QuicDeliveryState, QuicPacketBuilder
-from aioquic.quic.recovery import QuicPacketPacer
+from aioquic.quic.recovery import K_GRANULARITY, QuicPacketPacer
 
 from .utils import (
     SERVER_CACERTFILE,
@@ -365,6 +365,20 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
                 role = "client" if connection._is_client else "server"
                 self.assertGreaterEqual(timer, when, f"The {role}'s timer is overdue.")
 
+    def create_session_ticket(self):
+        """
+        Perform a handshake and return the client's session ticket, along with
+        the server's ticket store.
+        """
+        client_tickets = []
+        ticket_store = SessionTicketStore()
+        with client_and_server(
+            client_kwargs={"session_ticket_handler": client_tickets.append},
+            server_kwargs={"session_ticket_handler": ticket_store.add},
+        ):
+            pass
+        return client_tickets[0], ticket_store
+
     def handshake(
         self, client: QuicConnection, server: QuicConnection, now: float
     ) -> float:
@@ -437,29 +451,22 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
         server acknowledges the retransmitted INITIAL, the congestion window has
         room for less than a full datagram. The padding after the INITIAL and
         HANDSHAKE packets is not in flight, but 1-RTT data would have to be padded
-        with PADDING frames, so it is sent in a datagram of its own.
+        with PADDING frames, so it is sent in a datagram of its own. The server
+        delays its ACK of the 0-RTT data, which would make the client detect the
+        loss of its first flight and free the congestion window.
         """
-        client_ticket = None
-        ticket_store = SessionTicketStore()
+        client_ticket, ticket_store = self.create_session_ticket()
 
-        def save_session_ticket(ticket):
-            nonlocal client_ticket
-            client_ticket = ticket
-
-        with client_and_server(
-            client_kwargs={"session_ticket_handler": save_session_ticket},
-            server_kwargs={"session_ticket_handler": ticket_store.add},
-        ) as (client, server):
-            pass
+        def patch(server):
+            server._ack_delay = K_GRANULARITY
 
         with client_and_server(
             client_options={"session_ticket": client_ticket},
             handshake=False,
             server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+            server_patch=patch,
         ) as (client, server):
-            # The server cannot acknowledge 0-RTT data before the handshake
-            # completes, so its ACK timer stays due and is not watched.
-            self.watch_timers(client)
+            self.watch_timers(client, server)
 
             # Client sends INITIAL and 0-RTT data, which fill the congestion window.
             now = 0.0
@@ -489,8 +496,19 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(server.get_timer(), 0.251)
             self.assertSentPackets(server, [1, 1, 0])
             self.assertEvents(server, [events.ProtocolNegotiated])
+
+            # Server's ACK timer fires, it sends an ACK for the 0-RTT data, which
+            # arrives after INITIAL + HANDSHAKE.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            ack_items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(ack_items), [33])
+            self.assertAlmostEqual(server.get_timer(), 0.45)
+            self.assertSentPackets(server, [1, 1, 1])
+            self.assertEvents(server, [])
 
             # Client receives INITIAL + HANDSHAKE, sends a padded datagram with
             # INITIAL + HANDSHAKE, and 1-RTT data in a datagram of its own.
@@ -501,11 +519,77 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             )
             items = client.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200, 580])
-            self.assertAlmostEqual(client.get_timer(), 0.6)
+            self.assertAlmostEqual(client.get_timer(), 0.604)
             self.assertSentPackets(client, [0, 1, 12])
             self.assertEvents(
                 client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
             )
+
+    def test_connect_with_0rtt_without_loss(self):
+        """
+        Check the server acknowledges 0-RTT data in 1-RTT packets before the
+        handshake completes (RFC 9000 sections 7 and 13.2.1).
+        """
+        client_ticket, ticket_store = self.create_session_ticket()
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            handshake=False,
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+        ) as (client, server):
+            self.watch_timers(client, server)
+
+            # Client sends INITIAL + 0-RTT data.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, b"hello", end_stream=True)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 1])
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL + 0-RTT data, sends INITIAL + HANDSHAKE and
+            # an ACK for the 0-RTT data.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(server.get_timer(), 0.25)
+            self.assertSentPackets(server, [1, 1, 1])
+            self.assertEvents(
+                server, [events.ProtocolNegotiated, events.StreamDataReceived]
+            )
+
+            # Client receives INITIAL + HANDSHAKE and the ACK, sends FINISHED.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.35)
+            self.assertSentPackets(client, [0, 1, 1])
+            self.assertEvents(
+                client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
+            )
+
+            # Server receives FINISHED, sends HANDSHAKE_DONE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [231])
+            self.assertAlmostEqual(server.get_timer(), 0.425)
+            self.assertSentPackets(server, [0, 0, 2])
+            self.assertEvents(server, HANDSHAKE_COMPLETED_EVENTS)
+
+            # Client receives HANDSHAKE_DONE, sends ACK.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(client.get_timer(), 60.2)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 1])
+            self.assertEvents(client, [])
 
     def test_connect_with_delayed_client_finished_and_session_ticket(self):
         """
