@@ -649,6 +649,13 @@ class H3Connection:
         """
         return self._sent_settings
 
+    def _abort_incomplete_request(self, stream_id: int) -> None:
+        """
+        Abort the response to a request stream which terminated before the
+        request's headers were passed to the application (RFC 9114 section 4.1).
+        """
+        self._quic.reset_stream(stream_id, ErrorCode.H3_REQUEST_INCOMPLETE)
+
     def _create_uni_stream(
         self, stream_type: int, push_id: Optional[int] = None
     ) -> int:
@@ -919,23 +926,31 @@ class H3Connection:
             # PUSH_PROMISE can be the last frame of a response, see RFC 9114
             # section 4.1.
             if stream_ended:
-                http_events.append(self._handle_request_or_push_end(stream))
+                http_events.extend(self._handle_request_or_push_end(stream))
 
         return http_events
 
-    def _handle_request_or_push_end(self, stream: H3Stream) -> DataReceived:
+    def _handle_request_or_push_end(self, stream: H3Stream) -> list[H3Event]:
         """
         Handle the end of a request or push stream which is not conveyed by
         a DATA or HEADERS frame.
         """
+        if not self._is_client and stream.headers_recv_state == HeadersState.INITIAL:
+            # The application never saw the request, so nothing would respond.
+            self._abort_incomplete_request(stream.stream_id)
+            stream.sending_ended = True
+            return []
+
         self._check_content_length(stream)
 
-        return DataReceived(
-            data=b"",
-            push_id=stream.push_id,
-            stream_id=stream.stream_id,
-            stream_ended=True,
-        )
+        return [
+            DataReceived(
+                data=b"",
+                push_id=stream.push_id,
+                stream_id=stream.stream_id,
+                stream_ended=True,
+            )
+        ]
 
     def _check_push_id(self, push_id: int) -> None:
         """
@@ -1114,7 +1129,7 @@ class H3Connection:
 
         # handle lone FIN
         if stream_ended and not stream.buffer and stream.frame_size is None:
-            http_events.append(self._handle_request_or_push_end(stream))
+            http_events.extend(self._handle_request_or_push_end(stream))
             return http_events
 
         buf = Buffer(data=stream.buffer)
@@ -1189,7 +1204,7 @@ class H3Connection:
                 # Unknown frames can be the last frame on the stream, see
                 # RFC 9114 section 4.1.
                 if stream.receiving_ended and buf.eof() and stream.frame_size is None:
-                    http_events.append(self._handle_request_or_push_end(stream))
+                    http_events.extend(self._handle_request_or_push_end(stream))
                 continue
 
             if stream.frame_type != FrameType.DATA and chunk_size < stream.frame_size:
@@ -1466,8 +1481,25 @@ class H3Connection:
             stream.blocked_push_id = None
             stream.buffer = b""
             stream.receiving_ended = True
-            if stream.is_ended():
-                self._stream.pop(stream_id)
+
+        # The application never saw the request, so nothing would respond.
+        if (
+            not self._is_client
+            and stream_is_request_response(stream_id)
+            and (
+                stream is None
+                or (
+                    stream.headers_recv_state == HeadersState.INITIAL
+                    and stream.session_id is None
+                )
+            )
+        ):
+            self._abort_incomplete_request(stream_id)
+            if stream is not None:
+                stream.sending_ended = True
+
+        if stream is not None and stream.is_ended():
+            self._stream.pop(stream_id)
 
     def _validate_settings(self, settings: dict[int, int]) -> None:
         for setting in [
