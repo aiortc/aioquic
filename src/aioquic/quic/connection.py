@@ -3297,8 +3297,13 @@ class QuicConnection:
                 QuicPacketType.ONE_RTT, self._cryptos[tls.Epoch.ONE_RTT]
             )
 
-            # PATH_CHALLENGE
-            if not network_path.local_challenge_sent:
+            # PATH_CHALLENGE, unless the path is already validated, as on the active
+            # path. In particular, a client answering the server's probe from its
+            # original address must not validate that address again, as it would
+            # then migrate back to it, whereas RFC 9000 section 9.6.1 says that once
+            # the preferred address is validated, the client SHOULD "discontinue use
+            # of the old server address".
+            if not (network_path.is_validated or network_path.local_challenge_sent):
                 challenge = os.urandom(8)
                 self._write_path_challenge_frame(
                     builder=builder, challenge=challenge, network_path=network_path

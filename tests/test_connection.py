@@ -4600,6 +4600,50 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 server.receive_datagram(data, CLIENT_ADDR, now=time.time())
             self.assertTrue(server._network_paths[0].is_validated)
 
+    def test_preferred_address_challenged_from_original_address(self):
+        with client_and_server() as (client, server):
+            client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
+            roundtrip(client, server)
+            self.assertEqual(client.get_peer_address(), SERVER_PREFERRED_ADDR)
+
+            # The server challenges the client from its original address.
+            server._network_paths[0].is_validated = False
+            server._network_paths[0].local_challenge_sent = False
+            server.send_ping(1)
+            receive_from(server, client, SERVER_ADDR)
+
+            # The client responds on that path with a padded datagram, but does not
+            # challenge it, as the handshake validated it.
+            datagrams = client.datagrams_to_send(now=time.time())
+            self.assertEqual(
+                [(len(data), addr) for data, addr in datagrams if addr == SERVER_ADDR],
+                [(1200, SERVER_ADDR)],
+            )
+            log = client.configuration.quic_logger.to_dict()
+            packet_sent = [
+                event
+                for event in log["traces"][0]["events"]
+                if event["name"] == "transport:packet_sent"
+            ][-1]
+            self.assertEqual(
+                [frame["frame_type"] for frame in packet_sent["data"]["frames"]],
+                ["path_response", "padding"],
+            )
+            original_path = client._network_paths[1]
+            self.assertEqual(original_path.addr, SERVER_ADDR)
+            self.assertEqual(
+                packet_sent["data"]["header"]["dcid"],
+                dump_cid(original_path.peer_cid.cid),
+            )
+
+            # The response validates the server's path, and the client stays on the
+            # preferred address.
+            for data, addr in datagrams:
+                server.receive_datagram(data, CLIENT_ADDR, now=time.time())
+            self.assertTrue(server._network_paths[0].is_validated)
+            receive_from(server, client, SERVER_ADDR)
+            self.assertEqual(client.get_peer_address(), SERVER_PREFERRED_ADDR)
+
     def test_preferred_address_challenged_with_amplification(self):
         with client_and_server() as (client, server):
             client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
