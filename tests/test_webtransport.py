@@ -162,6 +162,28 @@ class WebTransportTest(TestCase):
                 ],
             )
 
+    def test_bidirectional_stream_reset(self):
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # Create session.
+            session_id = self._make_session(h3_client, h3_server)
+
+            # Send data on bidirectional stream, then reset it.
+            stream_id = h3_client.create_webtransport_stream(session_id)
+            quic_client.send_stream_data(stream_id, b"foo")
+            h3_transfer(quic_client, h3_server)
+            quic_client.reset_stream(stream_id, error_code=0)
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+
+            # The server's sending part of the stream is left open.
+            self.assertIn(stream_id, h3_server._stream)
+            self.assertFalse(quic_server._streams[stream_id].sender.reset_pending)
+
     def test_bidirectional_stream_server_initiated(self):
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,

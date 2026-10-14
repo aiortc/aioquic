@@ -82,11 +82,21 @@ def h3_transfer(quic_sender, h3_receiver):
     return http_events
 
 
+def drain_events(quic):
+    events = []
+    event = quic.next_event()
+    while event is not None:
+        events.append(event)
+        event = quic.next_event()
+    return events
+
+
 class FakeQuicConnection:
     def __init__(self, configuration):
         self.closed = None
         self.configuration = configuration
         self.stream_queue = []
+        self.stream_resets = []
         self._events = []
         self._next_stream_bidi = 0 if configuration.is_client else 1
         self._next_stream_uni = 2 if configuration.is_client else 3
@@ -112,6 +122,9 @@ class FakeQuicConnection:
             return self._events.pop(0)
         except IndexError:
             return None
+
+    def reset_stream(self, stream_id, error_code):
+        self.stream_resets.append((stream_id, error_code))
 
     def send_stream_data(self, stream_id, data, end_stream=False):
         # chop up data into individual bytes
@@ -2472,6 +2485,59 @@ class H3ConnectionTest(TestCase):
         )
         self.assertNotIn(0, h3_client._stream)
 
+    def test_blocked_stream_reset_by_client(self):
+        """
+        A request whose HEADERS frame is still blocked when the client resets
+        the stream was never processed, so the server aborts its response with
+        H3_REQUEST_INCOMPLETE, see RFC 9114 section 4.1.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        # Receive request headers, which are blocked.
+        h3_server.handle_event(
+            StreamDataReceived(stream_id=6, data=b"\x02", end_stream=False)
+        )
+        h3_server.handle_event(
+            StreamDataReceived(stream_id=10, data=b"\x03", end_stream=False)
+        )
+        h3_server.handle_event(
+            StreamDataReceived(
+                stream_id=0, data=binascii.unhexlify("01040280d910"), end_stream=False
+            )
+        )
+        self.assertTrue(h3_server._stream[0].blocked)
+
+        # The client resets the request, the server aborts its response.
+        self.assertEqual(
+            h3_server.handle_event(
+                StreamReset(error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=0)
+            ),
+            [],
+        )
+        self.assertEqual(
+            quic_server.stream_resets, [(0, ErrorCode.H3_REQUEST_INCOMPLETE)]
+        )
+        self.assertNotIn(0, h3_server._stream)
+
+        # The encoder stream data no longer unblocks the stream.
+        self.assertEqual(
+            h3_server.handle_event(
+                StreamDataReceived(
+                    stream_id=6,
+                    data=binascii.unhexlify(
+                        "3fe101c696d07abe941094cb6d0a08017d403971966e32ca98b46f"
+                    ),
+                    end_stream=False,
+                )
+            ),
+            [],
+        )
+        self.assertIsNone(quic_server.closed)
+        self.assertNotIn(0, h3_server._stream)
+
     def test_blocked_stream_trailer(self):
         quic_client = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=True)
@@ -2995,6 +3061,53 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(len(h3_client._stream), 3)
             self.assertEqual(len(h3_server._stream), 3)
 
+    def test_streams_are_closed_after_end_without_headers(self):
+        """
+        A request stream which ends before its HEADERS frame is received is
+        aborted with H3_REQUEST_INCOMPLETE, see RFC 9114 section 4.1.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # The client ends a request stream without sending HEADERS.
+            stream_id = quic_client.get_next_available_stream_id()
+            quic_client.send_stream_data(stream_id, b"", end_stream=True)
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertNotIn(stream_id, h3_server._stream)
+
+            # The server aborts its response, which closes the QUIC stream.
+            transfer(quic_server, quic_client)
+            self.assertIn(
+                StreamReset(
+                    error_code=ErrorCode.H3_REQUEST_INCOMPLETE, stream_id=stream_id
+                ),
+                drain_events(quic_client),
+            )
+            transfer(quic_client, quic_server)
+            self.assertEqual(transfer(quic_server, quic_client), 0)
+            self.assertNotIn(stream_id, quic_server._streams)
+
+            # The client ends a request stream after an unknown frame.
+            stream_id = quic_client.get_next_available_stream_id()
+            quic_client.send_stream_data(
+                stream_id, encode_frame(0x21, b"grease"), end_stream=True
+            )
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertNotIn(stream_id, h3_server._stream)
+
+            # The server aborts its response, which closes the QUIC stream.
+            transfer(quic_server, quic_client)
+            self.assertIn(
+                StreamReset(
+                    error_code=ErrorCode.H3_REQUEST_INCOMPLETE, stream_id=stream_id
+                ),
+                drain_events(quic_client),
+            )
+            transfer(quic_client, quic_server)
+            self.assertEqual(transfer(quic_server, quic_client), 0)
+            self.assertNotIn(stream_id, quic_server._streams)
+
     def test_streams_are_closed_after_reset(self):
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
@@ -3027,6 +3140,34 @@ class H3ConnectionTest(TestCase):
             quic_client.stop_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
             self.assertNotIn(stream_id, h3_server._stream)
+
+    def test_streams_are_closed_after_reset_before_headers(self):
+        """
+        A request stream which is reset before its HEADERS frame is received is
+        aborted with H3_REQUEST_INCOMPLETE, see RFC 9114 section 4.1.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # The client opens a request stream, then resets it.
+            stream_id = quic_client.get_next_available_stream_id()
+            quic_client.send_stream_data(stream_id, b"")
+            quic_client.reset_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertNotIn(stream_id, h3_server._stream)
+
+            # The server aborts its response, which closes the QUIC stream.
+            transfer(quic_server, quic_client)
+            self.assertIn(
+                StreamReset(
+                    error_code=ErrorCode.H3_REQUEST_INCOMPLETE, stream_id=stream_id
+                ),
+                drain_events(quic_client),
+            )
+            transfer(quic_client, quic_server)
+            self.assertEqual(transfer(quic_server, quic_client), 0)
+            self.assertNotIn(stream_id, quic_server._streams)
 
     def test_streams_are_closed_after_stop_sending(self):
         with h3_client_and_server() as (quic_client, quic_server):
