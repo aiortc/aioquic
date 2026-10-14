@@ -1,0 +1,4 @@
+[codespell]
+check-filenames =
+ignore-words-list = assertIn,quicly
+skip = *.bin,./build,./docs/_build,./env,./venv

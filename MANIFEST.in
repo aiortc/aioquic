@@ -1,5 +1,8 @@
+exclude .codespellrc
 exclude .readthedocs.yaml
+include CONTRIBUTING.md
 include LICENSE
+include SECURITY.md
 recursive-include docs *.py *.rst *.svg Makefile
 recursive-include examples *.css *.html *.py *.rst *.txt
 recursive-include requirements *.txt
