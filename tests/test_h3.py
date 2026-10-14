@@ -22,7 +22,7 @@ from aioquic.h3.connection import (
     validate_response_headers,
     validate_trailers,
 )
-from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
+from aioquic.h3.events import DataReceived, GoAwayReceived, H3Event, HeadersReceived
 from aioquic.h3.exceptions import InvalidStreamStateError, InvalidStreamTypeError
 from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import (
@@ -104,6 +104,16 @@ def drain_events(quic: QuicConnection) -> list[QuicEvent]:
         events.append(event)
         event = quic.next_event()
     return events
+
+
+def send_goaway(h3: H3Connection, frame_data: bytes) -> None:
+    """
+    Send a GOAWAY frame on the control stream of `h3`, which cannot send one.
+    """
+    assert h3._local_control_stream_id is not None
+    h3._quic.send_stream_data(
+        h3._local_control_stream_id, encode_frame(FrameType.GOAWAY, frame_data)
+    )
 
 
 class H3ConnectionTest(TestCase):
@@ -231,6 +241,150 @@ class H3ConnectionTest(TestCase):
                     closed(quic),
                     (ErrorCode.H3_ID_ERROR, "Server push is not supported"),
                 )
+
+    def test_handle_control_frame_goaway(self) -> None:
+        """
+        A client reports the stream ID of a GOAWAY frame, while a server only
+        checks the push ID, as it never pushes. Later GOAWAY frames may keep or
+        lower the ID, but not raise it, see RFC 9114 section 5.2.
+        """
+        for is_client, goaway_ids, expected_events in [
+            (True, [8], [GoAwayReceived(stream_id=8)]),
+            (
+                True,
+                [8, 8, 4],
+                [
+                    GoAwayReceived(stream_id=8),
+                    GoAwayReceived(stream_id=8),
+                    GoAwayReceived(stream_id=4),
+                ],
+            ),
+            (False, [3], []),
+            (False, [3, 3, 1], []),
+        ]:
+            with (
+                self.subTest(is_client=is_client, goaway_ids=goaway_ids),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                h3_receiver, h3_sender = (
+                    (h3_client, h3_server) if is_client else (h3_server, h3_client)
+                )
+
+                for goaway_id in goaway_ids:
+                    send_goaway(h3_sender, encode_uint_var(goaway_id))
+                events = h3_transfer(h3_sender._quic, h3_receiver)
+                self.assertIsNone(closed(h3_receiver._quic))
+                self.assertEqual(events, expected_events)
+
+    def test_handle_control_frame_goaway_fragmented(self) -> None:
+        """
+        A GOAWAY frame received one byte at a time is reported once complete.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            send_goaway(h3_server, encode_uint_var(1024))
+            events = h3_transfer(quic_server, h3_client, split=True)
+            self.assertIsNone(closed(quic_client))
+            self.assertEqual(events, [GoAwayReceived(stream_id=1024)])
+
+    def test_handle_control_frame_goaway_invalid_id(self) -> None:
+        """
+        A client must reject a GOAWAY frame which does not carry a
+        client-initiated bidirectional stream ID, see RFC 9114 section 7.2.6.
+
+        A GOAWAY frame must not raise the ID of a previous one, see RFC 9114
+        section 5.2.
+        """
+        for is_client, goaway_ids, reason_phrase in [
+            (
+                True,
+                [5],
+                "GOAWAY does not carry a client-initiated bidirectional stream ID",
+            ),
+            (True, [4, 8], "GOAWAY increased the ID of a previous GOAWAY"),
+            (False, [1, 3], "GOAWAY increased the ID of a previous GOAWAY"),
+        ]:
+            with (
+                self.subTest(is_client=is_client, goaway_ids=goaway_ids),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                h3_receiver, h3_sender = (
+                    (h3_client, h3_server) if is_client else (h3_server, h3_client)
+                )
+
+                for goaway_id in goaway_ids:
+                    send_goaway(h3_sender, encode_uint_var(goaway_id))
+                h3_transfer(h3_sender._quic, h3_receiver)
+                self.assertEqual(
+                    closed(h3_receiver._quic), (ErrorCode.H3_ID_ERROR, reason_phrase)
+                )
+
+    def test_handle_control_frame_goaway_malformed(self) -> None:
+        """
+        A GOAWAY frame which is empty or has trailing data must be rejected.
+        """
+        for frame_data, reason_phrase in [
+            (b"", "Could not parse GOAWAY frame"),
+            (b"\x04\x00", "GOAWAY frame has trailing data"),
+        ]:
+            with (
+                self.subTest(frame_data=frame_data),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+
+                send_goaway(h3_server, frame_data)
+                h3_transfer(quic_server, h3_client)
+                self.assertEqual(
+                    closed(quic_client), (ErrorCode.H3_FRAME_ERROR, reason_phrase)
+                )
+
+    def test_handle_control_frame_goaway_too_long(self) -> None:
+        """
+        A GOAWAY frame carries a single variable-length integer, so one which
+        is longer than 8 bytes is rejected from its header alone, see RFC 9114
+        sections 7.1 and 7.2.6.
+        """
+        for frame_size, data, expected_closed, expected_events in [
+            (
+                8,
+                encode_frame(FrameType.GOAWAY, encode_uint_var(2**30)),
+                None,
+                [GoAwayReceived(stream_id=2**30)],
+            ),
+            (
+                9,
+                encode_uint_var(FrameType.GOAWAY) + encode_uint_var(9),
+                (ErrorCode.H3_FRAME_ERROR, "GOAWAY frame has trailing data"),
+                [],
+            ),
+        ]:
+            with (
+                self.subTest(frame_size=frame_size),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+
+                events = h3_client.handle_event(
+                    StreamDataReceived(
+                        stream_id=3,
+                        data=encode_uint_var(StreamType.CONTROL)
+                        + encode_frame(
+                            FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)
+                        )
+                        + data,
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(closed(quic_client), expected_closed)
+                self.assertEqual(events, expected_events)
 
     def test_handle_control_frame_headers(self) -> None:
         """

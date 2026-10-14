@@ -9,6 +9,7 @@ from aioquic.buffer import UINT_VAR_MAX_SIZE, Buffer, BufferReadError, encode_ui
 from aioquic.h3.events import (
     DatagramReceived,
     DataReceived,
+    GoAwayReceived,
     H3Event,
     Headers,
     HeadersReceived,
@@ -223,15 +224,19 @@ def is_interim_response(headers: Headers) -> bool:
     return False
 
 
-def parse_max_push_id(data: bytes) -> int:
+def parse_id_frame(frame_type: FrameType, data: bytes) -> int:
+    """
+    Parse the payload of a frame which carries a single ID, such as GOAWAY or
+    MAX_PUSH_ID.
+    """
     buf = Buffer(data=data)
     try:
-        max_push_id = buf.pull_uint_var()
+        frame_id = buf.pull_uint_var()
     except BufferReadError:
-        raise FrameError("Could not parse MAX_PUSH_ID frame")
+        raise FrameError(f"Could not parse {frame_type.name} frame")
     if not buf.eof():
-        raise FrameError("MAX_PUSH_ID frame has trailing data")
-    return max_push_id
+        raise FrameError(f"{frame_type.name} frame has trailing data")
+    return frame_id
 
 
 def parse_settings(data: bytes) -> dict[int, int]:
@@ -461,6 +466,7 @@ class H3Connection:
 
         # The maximum push ID received by a server, which never pushes.
         self._max_push_id: int | None = None
+        self._received_goaway_id: int | None = None
 
         self._local_control_stream_id: int | None = None
         self._local_decoder_stream_id: int | None = None
@@ -697,10 +703,13 @@ class H3Connection:
         elif frame_type == FrameType.MAX_PUSH_ID and self._is_client:
             # RFC 9114 section 7.2.7
             raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
-        elif frame_type == FrameType.MAX_PUSH_ID and frame_size > UINT_VAR_MAX_SIZE:
+        elif (
+            frame_type in (FrameType.GOAWAY, FrameType.MAX_PUSH_ID)
+            and frame_size > UINT_VAR_MAX_SIZE
+        ):
             # The payload is a single variable-length integer, so a longer one
-            # has trailing data (RFC 9114 sections 7.1 and 7.2.7).
-            raise FrameError("MAX_PUSH_ID frame has trailing data")
+            # has trailing data (RFC 9114 sections 7.1, 7.2.6 and 7.2.7).
+            raise FrameError(f"{FrameType(frame_type).name} frame has trailing data")
         elif frame_type == FrameType.SETTINGS and frame_size > MAX_SETTINGS_SIZE:
             raise ExcessiveLoad("SETTINGS frame is too large")
         elif frame_type == FrameType.CANCEL_PUSH:
@@ -805,10 +814,12 @@ class H3Connection:
             settings[Setting.ENABLE_WEBTRANSPORT] = 1
         return settings
 
-    def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> None:
+    def _handle_control_frame(
+        self, frame_type: int, frame_data: bytes
+    ) -> GoAwayReceived | None:
         """
-        Handle a SETTINGS or MAX_PUSH_ID frame received on the peer's control
-        stream.
+        Handle a SETTINGS, MAX_PUSH_ID or GOAWAY frame received on the peer's
+        control stream.
 
         The frame header must have been validated by `_check_control_frame_header`.
         """
@@ -822,13 +833,36 @@ class H3Connection:
             )
             self._quic.send_stream_data(self._local_encoder_stream_id, encoder)
             self._settings_received = True
-        else:
-            max_push_id = parse_max_push_id(frame_data)
+        elif frame_type == FrameType.MAX_PUSH_ID:
+            max_push_id = parse_id_frame(FrameType.MAX_PUSH_ID, frame_data)
 
             # The maximum push ID cannot be reduced, see RFC 9114 section 7.2.7.
             if self._max_push_id is not None and max_push_id < self._max_push_id:
                 raise IdError("MAX_PUSH_ID reduced the maximum push ID")
             self._max_push_id = max_push_id
+        else:
+            goaway_id = parse_id_frame(FrameType.GOAWAY, frame_data)
+
+            # A server's GOAWAY carries a client-initiated bidirectional stream ID
+            # (RFC 9114 section 7.2.6).
+            if self._is_client and not stream_is_request_response(goaway_id):
+                raise IdError(
+                    "GOAWAY does not carry a client-initiated bidirectional stream ID"
+                )
+
+            # A GOAWAY cannot increase the ID of a previous one (RFC 9114 section 5.2).
+            if (
+                self._received_goaway_id is not None
+                and goaway_id > self._received_goaway_id
+            ):
+                raise IdError("GOAWAY increased the ID of a previous GOAWAY")
+            self._received_goaway_id = goaway_id
+
+            # A client's GOAWAY carries a push ID, which is of no use as we never
+            # push.
+            if self._is_client:
+                return GoAwayReceived(stream_id=goaway_id)
+        return None
 
     def _check_content_length(self, stream: H3Stream) -> None:
         if (
@@ -1303,7 +1337,11 @@ class H3Connection:
                 frame_type = stream.frame_type
                 frame_size = stream.frame_size
                 available = buf.capacity - consumed
-                if frame_type in (FrameType.SETTINGS, FrameType.MAX_PUSH_ID):
+                if frame_type in (
+                    FrameType.SETTINGS,
+                    FrameType.GOAWAY,
+                    FrameType.MAX_PUSH_ID,
+                ):
                     # wait for the complete frame
                     if available < frame_size:
                         break
@@ -1312,13 +1350,14 @@ class H3Connection:
                     stream.frame_size = None
                     stream.frame_type = None
 
-                    self._handle_control_frame(frame_type, frame_data)
+                    event = self._handle_control_frame(frame_type, frame_data)
+                    if event is not None:
+                        http_events.append(event)
                 else:
                     # Unknown frame types MUST be ignored (RFC 9114 section
                     # 7.2.8 and section 9) and their length is unbounded, so
                     # discard their payload as it arrives instead of buffering
-                    # it (RFC 9114 section 10.5). The same applies to frames
-                    # whose payload we do not use, such as GOAWAY.
+                    # it (RFC 9114 section 10.5).
                     if available == 0 and frame_size > 0:
                         break
                     chunk_size = min(frame_size, available)
