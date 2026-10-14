@@ -3529,6 +3529,15 @@ class QuicConnection:
                     break
             builder.start_packet(packet_type, crypto)
 
+            # ACK, which a server sends for 0-RTT packets before the handshake
+            # completes (RFC 9000 section 13.2.1), but not in 0-RTT packets.
+            if (
+                packet_type == QuicPacketType.ONE_RTT
+                and space.ack_at is not None
+                and space.ack_at <= now
+            ):
+                self._write_ack_frame(builder=builder, space=space, now=now)
+
             if self._handshake_complete:
                 # PATH_CHALLENGE, while the active path is not validated, which only
                 # happens on a server whose client migrated (RFC 9000 section 9.3).
@@ -3545,10 +3554,6 @@ class QuicConnection:
                             self._loss.get_probe_timeout(),
                             2 * self._configuration.initial_rtt,
                         )
-
-                # ACK
-                if space.ack_at is not None and space.ack_at <= now:
-                    self._write_ack_frame(builder=builder, space=space, now=now)
 
                 # HANDSHAKE_DONE
                 if self._handshake_done_pending:
