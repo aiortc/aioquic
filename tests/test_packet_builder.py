@@ -904,3 +904,29 @@ class QuicPacketBuilderTest(TestCase):
                 )
             ],
         )
+
+    def test_short_header_ping_only_max_total_bytes(self):
+        """
+        max_total_bytes must leave room for the padding which header protection
+        needs, so a PING alone needs 29 bytes.
+        """
+        crypto = create_crypto()
+
+        # 28 bytes do not allow a PING.
+        builder = create_builder()
+        builder.max_total_bytes = 28
+        builder.start_packet(QuicPacketType.ONE_RTT, crypto)
+        with self.assertRaises(QuicPacketBuilderStop):
+            builder.start_frame(QuicFrameType.PING)
+        datagrams, packets = builder.flush()
+        self.assertEqual(datagrams, [])
+        self.assertEqual(packets, [])
+
+        # 29 bytes do.
+        builder = create_builder()
+        builder.max_total_bytes = 29
+        builder.start_packet(QuicPacketType.ONE_RTT, crypto)
+        builder.start_frame(QuicFrameType.PING)
+        datagrams, packets = builder.flush()
+        self.assertEqual(datagram_sizes(datagrams), [29])
+        self.assertEqual(packets[0].sent_bytes, 29)
