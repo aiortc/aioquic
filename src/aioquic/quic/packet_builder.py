@@ -170,6 +170,11 @@ class QuicPacketBuilder:
         method returns, the frame is part of a packet returned by `flush`, so callers
         should only update state related to the frame after this call.
         """
+        # The first frame must leave room for the padding which lets header
+        # protection sample enough bytes (RFC 9001 section 5.4.2).
+        if self.packet_is_empty:
+            capacity = max(capacity, PACKET_NUMBER_MAX_SIZE - PACKET_NUMBER_SEND_SIZE)
+
         if self.remaining_buffer_space < capacity or (
             frame_type not in NON_IN_FLIGHT_FRAME_TYPES
             and self.remaining_flight_space < capacity
