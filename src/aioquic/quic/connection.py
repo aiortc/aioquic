@@ -206,6 +206,7 @@ class QuicNetworkPath:
         self.bytes_sent: int = 0
         self.is_validated: bool = is_validated
         self.local_challenge_sent: bool = False
+        self.local_challenges: Deque[bytes] = deque(maxlen=MAX_LOCAL_CHALLENGES)
         self.peer_cid: Optional[QuicConnectionId] = None
         self.remote_challenges: Deque[bytes] = deque()
         self.validation_deadline: Optional[float] = None
@@ -317,7 +318,6 @@ class QuicConnection:
         self._key_update_pending = False
         self._local_ack_delay_exponent = 3
         self._local_active_connection_id_limit = 8
-        self._local_challenges: dict[bytes, QuicNetworkPath] = {}
         self._local_initial_source_connection_id = self._host_cids[0].cid
         self._local_max_data = Limit(
             frame_type=QuicFrameType.MAX_DATA,
@@ -2355,16 +2355,18 @@ class QuicConnection:
                 self._quic_logger.encode_path_response_frame(data=data)
             )
 
-        try:
-            network_path = self._local_challenges.pop(data)
-        except KeyError:
-            raise QuicConnectionError(
-                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
-                frame_type=frame_type,
-                reason_phrase="Response does not match challenge",
-            )
+        # A response validates the path its challenge was sent on (RFC 9000 section
+        # 8.2.3). An unknown one is ignored, as its challenge may have been dropped
+        # (RFC 9000 section 19.18).
+        network_path = next(
+            (path for path in self._network_paths if data in path.local_challenges),
+            None,
+        )
+        if network_path is None:
+            return
         self._logger.debug("Network path %s validated by challenge", network_path.addr)
         network_path.is_validated = True
+        network_path.local_challenges.clear()
 
         # A client switches to the server's preferred address once it is validated,
         # using the connection ID reserved for it.
@@ -3457,14 +3459,6 @@ class QuicConnection:
 
         self._network_paths.append(network_path)
 
-    def _add_local_challenge(self, challenge: bytes, network_path: QuicNetworkPath):
-        self._local_challenges[challenge] = network_path
-        while len(self._local_challenges) > MAX_LOCAL_CHALLENGES:
-            # Dictionaries are ordered, so pop the first key until we are below the
-            # limit.
-            key = next(iter(self._local_challenges.keys()))
-            del self._local_challenges[key]
-
     def _use_reserved_peer_cid(self, network_path: QuicNetworkPath) -> None:
         """
         Switch to the peer connection ID reserved for a network path, retiring the
@@ -3909,7 +3903,7 @@ class QuicConnection:
         buf.push_bytes(challenge)
 
         # Record the challenge once the frame is written, see `start_frame`.
-        self._add_local_challenge(challenge=challenge, network_path=network_path)
+        network_path.local_challenges.append(challenge)
         network_path.local_challenge_sent = True
 
         # log frame

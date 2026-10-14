@@ -1317,9 +1317,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             # Client probes a new path with a new connection ID.
             probe_cid = client._peer_cid_available.pop(0)
             challenge = os.urandom(8)
-            client._add_local_challenge(
-                challenge=challenge, network_path=client._network_paths[0]
-            )
+            client._network_paths[0].local_challenges.append(challenge)
             data = self.probing_datagram(
                 client, probe_cid, QuicFrameType.PATH_CHALLENGE, challenge
             )
@@ -1342,11 +1340,13 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertEqual(server._network_paths[1].peer_cid.sequence_number, 1)
             self.assertEqual(len(self.path_challenges(server)), 1)
 
-            # Client receives ACK, PATH_RESPONSE and PATH_CHALLENGE. It sends ACK
-            # on its active path and PATH_RESPONSE on the probed path.
+            # Client receives ACK, PATH_RESPONSE matching its challenge and
+            # PATH_CHALLENGE. It sends ACK on its active path and PATH_RESPONSE on
+            # the probed path.
             now = self.advance_by_tick(now)
             for data, addr in items:
                 client.receive_datagram(data, SERVER_ADDR, now=now)
+            self.assertEqual(len(client._network_paths[0].local_challenges), 0)
             server_challenge = client._network_paths[0].remote_challenges.popleft()
             data = self.probing_datagram(
                 client, probe_cid, QuicFrameType.PATH_RESPONSE, server_challenge
@@ -1416,9 +1416,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             # Client probes a new path with a new connection ID.
             probe_cid = client._peer_cid_available.pop(0)
             challenge = os.urandom(8)
-            client._add_local_challenge(
-                challenge=challenge, network_path=client._network_paths[0]
-            )
+            client._network_paths[0].local_challenges.append(challenge)
             data = self.probing_datagram(
                 client, probe_cid, QuicFrameType.PATH_CHALLENGE, challenge
             )
@@ -1727,9 +1725,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             # Client sends a small probe, whose source address is rewritten.
             probe_cid = client._peer_cid_available.pop(0)
             challenge = os.urandom(8)
-            client._add_local_challenge(
-                challenge=challenge, network_path=client._network_paths[0]
-            )
+            client._network_paths[0].local_challenges.append(challenge)
             data = self.probing_datagram(
                 client,
                 probe_cid,
@@ -1777,9 +1773,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             # Client probes a new path with a new connection ID.
             probe_cid = client._peer_cid_available.pop(0)
             challenge = os.urandom(8)
-            client._add_local_challenge(
-                challenge=challenge, network_path=client._network_paths[0]
-            )
+            client._network_paths[0].local_challenges.append(challenge)
             data = self.probing_datagram(
                 client, probe_cid, QuicFrameType.PATH_CHALLENGE, challenge
             )
@@ -3501,17 +3495,13 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertTrue(server._network_paths[1].is_validated)
 
     def test_local_path_challenges_are_bounded(self):
-        with client_and_server() as (client, server):
-            for i in range(MAX_LOCAL_CHALLENGES + 2):
-                server._add_local_challenge(
-                    int.to_bytes(i, 8, "big"), QuicNetworkPath(f"1.2.3.{i}")
-                )
-            self.assertEqual(len(server._local_challenges), MAX_LOCAL_CHALLENGES)
-            for i in range(2, MAX_LOCAL_CHALLENGES + 2):
-                self.assertEqual(
-                    server._local_challenges[int.to_bytes(i, 8, "big")].addr,
-                    f"1.2.3.{i}",
-                )
+        network_path = QuicNetworkPath(("1.2.3.4", 2345))
+        for i in range(MAX_LOCAL_CHALLENGES + 2):
+            network_path.local_challenges.append(int.to_bytes(i, 8, "big"))
+        self.assertEqual(
+            list(network_path.local_challenges),
+            [int.to_bytes(i, 8, "big") for i in range(2, MAX_LOCAL_CHALLENGES + 2)],
+        )
 
     def test_network_paths_are_bounded(self):
         with client_and_server() as (client, server):
@@ -3585,17 +3575,57 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 challenges[0:MAX_REMOTE_CHALLENGES],
             )
 
-    def test_handle_path_response_frame_bad(self):
+    def test_handle_path_response_frame_after_other_challenges(self):
         with client_and_server() as (client, server):
-            # server receives unsolicited PATH_RESPONSE
-            with self.assertRaises(QuicConnectionError) as cm:
-                server._handle_path_response_frame(
-                    client_receive_context(client),
-                    QuicFrameType.PATH_RESPONSE,
-                    Buffer(data=b"\x11\x22\x33\x44\x55\x66\x77\x88"),
-                )
-            self.assertEqual(cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION)
-            self.assertEqual(cm.exception.frame_type, QuicFrameType.PATH_RESPONSE)
+            network_path = QuicNetworkPath(("1.2.3.4", 2345))
+            server._add_network_path(network_path)
+            network_path.local_challenges.append(bytes(8))
+
+            # Every other path sends more challenges than it keeps before the
+            # response arrives.
+            for port in range(3000, 3000 + MAX_NETWORK_PATHS - 2):
+                server._add_network_path(QuicNetworkPath(("1.2.3.4", port)))
+            self.assertEqual(len(server._network_paths), MAX_NETWORK_PATHS)
+            for i, other_path in enumerate(server._network_paths):
+                if other_path is not network_path:
+                    for j in range(MAX_LOCAL_CHALLENGES + 1):
+                        other_path.local_challenges.append(
+                            bytes([i + 1, j, 0, 0, 0, 0, 0, 0])
+                        )
+
+            # The response still validates the path, and its challenges are cleared.
+            server._handle_path_response_frame(
+                client_receive_context(client),
+                QuicFrameType.PATH_RESPONSE,
+                Buffer(data=bytes(8)),
+            )
+            self.assertTrue(network_path.is_validated)
+            self.assertEqual(len(network_path.local_challenges), 0)
+
+    def test_handle_path_response_frame_unknown(self):
+        with client_and_server() as (client, server):
+            # The server sent more challenges on a path than it keeps, so the first
+            # one was dropped.
+            network_path = QuicNetworkPath(("1.2.3.4", 2345))
+            server._add_network_path(network_path)
+            for i in range(MAX_LOCAL_CHALLENGES + 1):
+                network_path.local_challenges.append(int.to_bytes(i, 8, "big"))
+
+            # The response to the evicted challenge is ignored.
+            server._handle_path_response_frame(
+                client_receive_context(client),
+                QuicFrameType.PATH_RESPONSE,
+                Buffer(data=int.to_bytes(0, 8, "big")),
+            )
+            self.assertFalse(network_path.is_validated)
+
+            # A response to a challenge which is still kept validates the path.
+            server._handle_path_response_frame(
+                client_receive_context(client),
+                QuicFrameType.PATH_RESPONSE,
+                Buffer(data=int.to_bytes(1, 8, "big")),
+            )
+            self.assertTrue(network_path.is_validated)
 
     def test_handle_padding_frame(self):
         client = create_standalone_client(self)
