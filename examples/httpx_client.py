@@ -98,21 +98,20 @@ class H3Transport(QuicConnectionProtocol, httpx.AsyncBaseTransport):
         """
         Read the response status and headers.
         """
-        stream_ended = False
         while True:
             event = await self._wait_for_http_event(stream_id)
             if isinstance(event, HeadersReceived):
-                stream_ended = event.stream_ended
-                break
+                headers = []
+                status_code = 0
+                for header, value in event.headers:
+                    if header == b":status":
+                        status_code = int(value.decode())
+                    else:
+                        headers.append((header, value))
 
-        headers = []
-        status_code = 0
-        for header, value in event.headers:
-            if header == b":status":
-                status_code = int(value.decode())
-            else:
-                headers.append((header, value))
-        return status_code, headers, stream_ended
+                # Skip interim (1xx) responses, which precede the final response.
+                if status_code >= 200:
+                    return status_code, headers, event.stream_ended
 
     async def _receive_response_data(
         self, stream_id: int, stream_ended: bool
