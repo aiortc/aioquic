@@ -7,7 +7,7 @@ class BufferTest(TestCase):
     def test_capacity_negative(self):
         with self.assertRaises(ValueError) as cm:
             Buffer(capacity=-1)
-        self.assertEqual(str(cm.exception), "capacity cannot be negative")
+        self.assertEqual(str(cm.exception), "negative count")
 
     def test_capacity_zero(self):
         buf = Buffer(capacity=0)
