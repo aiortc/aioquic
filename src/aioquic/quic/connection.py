@@ -586,10 +586,12 @@ class QuicConnection:
             builder.max_flight_bytes = (
                 self._loss.congestion_window - self._loss.bytes_in_flight
             )
+            # RFC 9002 section 7 only lets probes exceed the congestion window.
+            # Deviate from it for stranded HANDSHAKE data, which would otherwise
+            # deadlock the handshake until the idle timeout.
             if (
-                self._probe_pending
-                and builder.max_flight_bytes < self._max_datagram_size
-            ):
+                self._probe_pending or self._handshake_data_stranded()
+            ) and builder.max_flight_bytes < self._max_datagram_size:
                 builder.max_flight_bytes = self._max_datagram_size
 
             # limit data on un-validated network paths
@@ -2638,6 +2640,25 @@ class QuicConnection:
                     limit=limit,
                 )
             )
+
+    def _handshake_data_stranded(self) -> bool:
+        """
+        Return whether HANDSHAKE data is waiting to be sent with no loss
+        detection timer armed.
+
+        Before the handshake is confirmed, 1-RTT packets do not arm the PTO
+        (RFC 9002 section 6.2.1) and the peer may be unable to acknowledge them
+        (RFC 9001 section 5.7), so they can fill the congestion window for good.
+
+        This also holds when a server first sends its HANDSHAKE data, but the
+        congestion window then has room for it.
+        """
+        return (
+            not self._handshake_confirmed
+            and self._cryptos[tls.Epoch.HANDSHAKE].send.is_valid()
+            and not self._crypto_streams[tls.Epoch.HANDSHAKE].sender.buffer_is_empty
+            and self._loss.get_loss_detection_time() is None
+        )
 
     def _log_key_retired(self, key_type: str, trigger: str) -> None:
         """

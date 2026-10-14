@@ -1052,6 +1052,85 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertSentPackets(client, [0, 0, 1])
             self.assertEvents(client, [])
 
+    def test_connect_with_lost_server_handshake_and_full_congestion_window(self):
+        """
+        Check the server resends lost HANDSHAKE data when its congestion window
+        is full of 1-RTT data.
+
+        The server's certificate chain makes its HANDSHAKE data span three
+        packets, and the second one is lost. The client cannot process the 1-RTT
+        data which follows until the handshake completes. Once the server
+        declares the HANDSHAKE packet lost, its congestion window is below bytes
+        in flight, and no PTO is armed: the client acknowledged the other
+        HANDSHAKE packets, and 1-RTT data does not arm the PTO before the
+        handshake is confirmed (RFC 9002 section 6.2.1).
+        """
+        with client_and_server(
+            handshake=False, server_certfile=SERVER_CERTFILE_WITH_CHAIN
+        ) as (client, server):
+            self.watch_timers(client, server)
+
+            # Client sends INITIAL.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 0])
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL, sends INITIAL + HANDSHAKE and 1-RTT data, up
+            # to the anti-amplification limit.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            server.send_stream_data(3, bytes(20000))
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200, 1200, 1155, 45])
+            self.assertAlmostEqual(server.get_timer(), 0.25)
+            self.assertSentPackets(server, [1, 3, 1])
+            self.assertEvents(server, [events.ProtocolNegotiated])
+
+            # The second datagram is lost. Client receives the others, drops the
+            # 1-RTT data and sends ACKs.
+            now = self.advance_by_tick(now)
+            for data, addr in [items[0], items[2], items[3]]:
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.3)
+            self.assertSentPackets(client, [0, 1, 0])
+            self.assertEvents(client, [events.ProtocolNegotiated])
+
+            # Server receives ACKs, which validate the client's address, so it
+            # sends 1-RTT data which fills the congestion window. It arms its loss
+            # timer for the second HANDSHAKE packet.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200] * 10 + [1110])
+            self.assertAlmostEqual(server.get_timer(), 0.1625)
+            self.assertSentPackets(server, [0, 1, 12])
+            self.assertEvents(server, [])
+            self.assertEqual(server._loss.bytes_in_flight, 14355)
+            self.assertEqual(server._loss.congestion_window, 14355)
+
+            # Server's loss timer fires, it declares the HANDSHAKE packet lost
+            # and resends its data although the congestion window is full.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            self.assertEqual(server._loss.bytes_in_flight, 13155)
+            self.assertEqual(server._loss.congestion_window, 7177)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(server.get_timer(), 0.4125)
+            self.assertSentPackets(server, [0, 1, 12])
+            self.assertEvents(server, [])
+
+            # Client receives HANDSHAKE, completes the handshake.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEvents(client, [events.HandshakeCompleted])
+
     def test_connect_with_lost_server_handshake_done(self):
         """
         Check the handshake is confirmed if the server's HANDSHAKE_DONE is lost.
