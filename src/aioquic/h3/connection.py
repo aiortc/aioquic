@@ -33,6 +33,18 @@ from aioquic.quic.logger import QuicLoggerTrace
 
 logger = logging.getLogger("http3")
 
+# Connection-specific fields (RFC 9110 section 7.6.1), which make an HTTP/3
+# message malformed (RFC 9114 section 4.2).
+CONNECTION_SPECIFIC_HEADERS = frozenset(
+    (
+        b"connection",
+        b"keep-alive",
+        b"proxy-connection",
+        b"te",
+        b"transfer-encoding",
+        b"upgrade",
+    )
+)
 H3_ALPN = ["h3"]
 # Frame types used in HTTP/2 which have no HTTP/3 equivalent, receiving them
 # is an error (RFC 9114 section 7.2.8 and section 11.2.1).
@@ -262,6 +274,8 @@ def validate_header_value(key: bytes, value: bytes):
 
 def validate_headers(
     headers: Headers,
+    *,
+    allow_te: bool = False,
     allowed_pseudo_headers: FrozenSet[bytes],
     required_pseudo_headers: FrozenSet[bytes],
     stream: Optional["H3Stream"] = None,
@@ -307,10 +321,12 @@ def validate_headers(
                     raise MessageError("content-length is not a non-negative integer")
                 if stream:
                     stream.expected_content_length = content_length
-            elif key == b"transfer-encoding" and value != b"trailers":
-                raise MessageError(
-                    "The only valid value for transfer-encoding is trailers"
-                )
+            elif key == b"te" and allow_te:
+                # TE may only be "trailers" in request headers (RFC 9114 section 4.2).
+                if value.lower() != b"trailers":
+                    raise MessageError(f"Header {key!r} value is not trailers")
+            elif key in CONNECTION_SPECIFIC_HEADERS:
+                raise MessageError(f"Header {key!r} is connection-specific")
 
     # check required pseudo-headers are present
     missing = required_pseudo_headers.difference(seen_pseudo_headers)
@@ -327,6 +343,7 @@ def validate_headers(
 def validate_push_promise_headers(headers: Headers) -> None:
     validate_headers(
         headers,
+        allow_te=True,
         allowed_pseudo_headers=frozenset(
             (b":method", b":scheme", b":authority", b":path")
         ),
@@ -341,6 +358,7 @@ def validate_request_headers(
 ) -> None:
     validate_headers(
         headers,
+        allow_te=True,
         allowed_pseudo_headers=frozenset(
             # FIXME: The pseudo-header :protocol is not actually defined, but
             # we use it for the WebSocket demo.
