@@ -3,6 +3,7 @@ import binascii
 import contextlib
 import random
 import socket
+import weakref
 from typing import AsyncGenerator, Optional
 from unittest import TestCase, skipIf
 from unittest.mock import patch
@@ -31,13 +32,24 @@ from .utils import (
 
 real_sendto = socket.socket.sendto
 
+# Sockets whose last datagram was dropped.
+dropped_sockets: weakref.WeakSet[socket.socket] = weakref.WeakSet()
+
 
 def sendto_with_loss(self, data, addr=None):
     """
-    Simulate 25% packet loss.
+    Simulate 25% packet loss, without dropping two datagrams in a row from the
+    same socket.
+
+    Unbounded loss can drop every probe or every acknowledgement until the PTO
+    backoff exceeds the idle timeout, failing the test. Dropping one datagram
+    in three after a delivered one keeps the overall loss rate at 25%.
     """
-    if random.random() > 0.25:
+    if self in dropped_sockets or random.random() >= 1 / 3:
+        dropped_sockets.discard(self)
         real_sendto(self, data, addr)
+    else:
+        dropped_sockets.add(self)
 
 
 class SessionTicketStore:
