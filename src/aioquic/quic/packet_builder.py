@@ -215,6 +215,17 @@ class QuicPacketBuilder:
             self._flush_current_datagram()
             packet_start = 0
 
+        # A short header packet would have to pad the datagram with PADDING
+        # frames, which are congestion controlled (RFC 9002 section 2), so if
+        # the congestion window cannot cover them, start a new datagram.
+        if (
+            packet_type == QuicPacketType.ONE_RTT
+            and self._datagram_needs_padding
+            and self._flight_capacity < self._buffer_capacity
+        ):
+            self._flush_current_datagram()
+            packet_start = 0
+
         # initialize datagram if needed
         if self._datagram_init:
             if self.max_total_bytes is not None:
@@ -382,10 +393,12 @@ class QuicPacketBuilder:
             # Padding for datagrams containing initial packets or path validation
             # frames; see RFC 9000 sections 8.2 and 14.1.
             if self._datagram_needs_padding:
-                extra_bytes = self._flight_capacity - self._buffer.tell()
+                # These bytes follow the last packet, so they are not PADDING
+                # frames and are neither in flight nor congestion controlled
+                # (RFC 9002 section 2), but still count for anti-amplification.
+                extra_bytes = self._buffer_capacity - self._buffer.tell()
                 if extra_bytes > 0:
                     self._buffer.push_bytes(bytes(extra_bytes))
-                    self._datagram_flight_bytes += extra_bytes
                     datagram_bytes += extra_bytes
 
             self._datagrams.append(self._buffer.data)

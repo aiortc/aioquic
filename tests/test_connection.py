@@ -428,6 +428,85 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
         client._packet_number = builder.packet_number
         return datagrams[0]
 
+    def test_connect_with_0rtt_and_lost_client_first_flight(self):
+        """
+        Check the client pads datagrams carrying INITIAL packets to 1200 bytes
+        when its congestion window is nearly full (RFC 9000 section 14.1).
+
+        The client's first flight of INITIAL and 0-RTT data is lost, so when the
+        server acknowledges the retransmitted INITIAL, the congestion window has
+        room for less than a full datagram. The padding after the INITIAL and
+        HANDSHAKE packets is not in flight, but 1-RTT data would have to be padded
+        with PADDING frames, so it is sent in a datagram of its own.
+        """
+        client_ticket = None
+        ticket_store = SessionTicketStore()
+
+        def save_session_ticket(ticket):
+            nonlocal client_ticket
+            client_ticket = ticket
+
+        with client_and_server(
+            client_kwargs={"session_ticket_handler": save_session_ticket},
+            server_kwargs={"session_ticket_handler": ticket_store.add},
+        ) as (client, server):
+            pass
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            handshake=False,
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+        ) as (client, server):
+            # The server cannot acknowledge 0-RTT data before the handshake
+            # completes, so its ACK timer stays due and is not watched.
+            self.watch_timers(client)
+
+            # Client sends INITIAL and 0-RTT data, which fill the congestion window.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, bytes(20000), end_stream=True)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200] * 10)
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 10])
+            self.assertEvents(client, [])
+            self.assertEqual(client._loss.bytes_in_flight, 12000)
+            self.assertEqual(client._loss.congestion_window, 12000)
+
+            # The first flight is lost, client's PTO fires and it retransmits
+            # INITIAL with 0-RTT data.
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.6)
+            self.assertSentPackets(client, [1, 0, 11])
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL and 0-RTT data, sends INITIAL + HANDSHAKE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertSentPackets(server, [1, 1, 0])
+            self.assertEvents(server, [events.ProtocolNegotiated])
+
+            # Client receives INITIAL + HANDSHAKE, sends a padded datagram with
+            # INITIAL + HANDSHAKE, and 1-RTT data in a datagram of its own.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEqual(
+                client._loss.congestion_window - client._loss.bytes_in_flight, 684
+            )
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200, 580])
+            self.assertAlmostEqual(client.get_timer(), 0.6)
+            self.assertSentPackets(client, [0, 1, 12])
+            self.assertEvents(
+                client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
+            )
+
     def test_connect_with_delayed_client_finished_and_session_ticket(self):
         """
         Check the server does not send a session ticket before the client's
