@@ -3297,21 +3297,13 @@ class QuicConnection:
                 QuicPacketType.ONE_RTT, self._cryptos[tls.Epoch.ONE_RTT]
             )
 
-            # PATH_CHALLENGE, unless the path is already validated, as on the active
-            # path. In particular, a client answering the server's probe from its
-            # original address must not validate that address again, as it would
-            # then migrate back to it, whereas RFC 9000 section 9.6.1 says that once
-            # the preferred address is validated, the client SHOULD "discontinue use
-            # of the old server address".
+            # PATH_CHALLENGE, unless the path is already validated, so a client
+            # does not migrate back to the server's original address (RFC 9000
+            # section 9.6.1).
             if not (network_path.is_validated or network_path.local_challenge_sent):
-                challenge = os.urandom(8)
                 self._write_path_challenge_frame(
-                    builder=builder, challenge=challenge, network_path=network_path
+                    builder=builder, network_path=network_path
                 )
-                self._add_local_challenge(
-                    challenge=challenge, network_path=network_path
-                )
-                network_path.local_challenge_sent = True
 
             # PATH_RESPONSE, on the path where the PATH_CHALLENGE was received.
             while network_path.remote_challenges:
@@ -3511,16 +3503,12 @@ class QuicConnection:
             builder.start_packet(packet_type, crypto)
 
             if self._handshake_complete:
-                # PATH CHALLENGE
+                # PATH_CHALLENGE, while the active path is not validated, which only
+                # happens on a server whose client migrated (RFC 9000 section 9.3).
                 if not (network_path.is_validated or network_path.local_challenge_sent):
-                    challenge = os.urandom(8)
                     self._write_path_challenge_frame(
-                        builder=builder, challenge=challenge, network_path=network_path
+                        builder=builder, network_path=network_path
                     )
-                    self._add_local_challenge(
-                        challenge=challenge, network_path=network_path
-                    )
-                    network_path.local_challenge_sent = True
 
                     # RFC 9000 section 8.2.4 recommends abandoning path validation
                     # after three times the larger of the current PTO and the PTO
@@ -3909,10 +3897,7 @@ class QuicConnection:
             )
 
     def _write_path_challenge_frame(
-        self,
-        builder: QuicPacketBuilder,
-        challenge: bytes,
-        network_path: QuicNetworkPath,
+        self, builder: QuicPacketBuilder, network_path: QuicNetworkPath
     ) -> None:
         buf = builder.start_frame(
             QuicFrameType.PATH_CHALLENGE,
@@ -3920,7 +3905,12 @@ class QuicConnection:
             handler=self._on_path_challenge_delivery,
             handler_args=(network_path,),
         )
+        challenge = os.urandom(8)
         buf.push_bytes(challenge)
+
+        # Record the challenge once the frame is written, see `start_frame`.
+        self._add_local_challenge(challenge=challenge, network_path=network_path)
+        network_path.local_challenge_sent = True
 
         # log frame
         if self._quic_logger is not None:
