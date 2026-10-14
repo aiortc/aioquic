@@ -1299,6 +1299,74 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertSentPackets(client, [0, 0, 1])
             self.assertEvents(client, [])
 
+    def test_idle_timeout_restarted_on_send(self):
+        """
+        Check the idle timer restarts when sending the first ack-eliciting packet
+        since the last packet was received, but not when sending later ones, so
+        PTO probes do not keep an unresponsive connection open (RFC 9000 section
+        10.1).
+        """
+        with client_and_server(
+            client_options={"idle_timeout": 2.0}, handshake=False
+        ) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+            self.assertAlmostEqual(client.get_timer(), 2.2)  # idle timeout
+            self.assertAlmostEqual(server.get_timer(), 2.25)  # idle timeout
+
+            # Client sends stream data after a pause, which is lost. This restarts
+            # its idle timer.
+            now += 0.5
+            client.send_stream_data(0, b"ping")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [35])
+            self.assertAlmostEqual(client.get_timer(), 1.125)
+            self.assertSentPackets(client, [0, 0, 2])
+
+            # Client's PTO fires, its probe is lost.
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [36])
+            self.assertAlmostEqual(client.get_timer(), 1.675)
+            self.assertSentPackets(client, [0, 0, 2])
+            self.assertEvents(client, [])
+
+            # Client's PTO fires again, its probe is lost.
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [36])
+            self.assertAlmostEqual(client.get_timer(), 2.775)
+            self.assertSentPackets(client, [0, 0, 2])
+            self.assertEvents(client, [])
+
+            # Server's idle timer expires, as it received nothing since the
+            # handshake.
+            now = self.advance_to_timer(now, server)
+            self.assertAlmostEqual(now, 2.25)
+            server.handle_timer(now=now)
+            self.assertEqual(server.datagrams_to_send(now=now), [])
+            self.assertIsNone(server.get_timer())
+            self.assertEvents(server, [events.ConnectionTerminated])
+
+            # Client's PTO fires again, its probe is lost. The idle timer was not
+            # restarted by the probes.
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [36])
+            self.assertAlmostEqual(client.get_timer(), 2.85)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 2])
+            self.assertEvents(client, [])
+
+            # Client's idle timer expires.
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertIsNone(client.get_timer())
+            self.assertEvents(client, [events.ConnectionTerminated])
+
     def test_migrate_after_probing(self):
         """
         Check the server answers a client probing a new path, and validates the

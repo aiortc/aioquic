@@ -292,6 +292,7 @@ class QuicConnection:
         self._is_client = configuration.is_client
 
         self._ack_delay = K_GRANULARITY
+        self._ack_eliciting_sent_since_receipt = False
         self._close_at: Optional[float] = None
         self._close_event: Optional[events.ConnectionTerminated] = None
         self._connect_called = False
@@ -1096,6 +1097,7 @@ class QuicConnection:
 
             # update idle timeout
             self._close_at = now + self._idle_timeout()
+            self._ack_eliciting_sent_since_receipt = False
 
             # Handle migration. Probing packets must not change the connection ID
             # used on the active path, as it would then be used to send to more
@@ -1550,6 +1552,15 @@ class QuicConnection:
                 )
                 if packet.epoch == tls.Epoch.HANDSHAKE:
                     sent_handshake = True
+
+                # Restart the idle timer on the first ack-eliciting packet sent
+                # since the last one received (RFC 9000 section 10.1).
+                if (
+                    packet.is_ack_eliciting
+                    and not self._ack_eliciting_sent_since_receipt
+                ):
+                    self._close_at = now + self._idle_timeout()
+                    self._ack_eliciting_sent_since_receipt = True
 
                 # log packet
                 if self._quic_logger is not None:
