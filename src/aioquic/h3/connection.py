@@ -207,6 +207,16 @@ def encode_settings(settings: dict[int, int]) -> bytes:
     return buf.data
 
 
+def is_interim_response(headers: Headers) -> bool:
+    """
+    Return whether the headers are those of an interim (1xx) response.
+    """
+    for key, value in headers:
+        if key == b":status":
+            return value.startswith(b"1")
+    return False
+
+
 def parse_max_push_id(data: bytes) -> int:
     buf = Buffer(data=data)
     try:
@@ -379,6 +389,15 @@ def validate_response_headers(
         stream=stream,
     )
 
+    # The status code is a three-digit integer (RFC 9110 section 15).
+    status = dict(headers)[b":status"]
+    if len(status) != 3 or not status.isdigit():
+        raise MessageError(f"Pseudo-header b':status' has invalid value {status!r}")
+
+    # HTTP/3 does not support 101 Switching Protocols (RFC 9114 section 4.5).
+    if status == b"101":
+        raise MessageError("Pseudo-header b':status' cannot be 101")
+
 
 def validate_trailers(headers: Headers) -> None:
     validate_headers(
@@ -401,6 +420,7 @@ class H3Stream:
         self.frame_type: Optional[int] = None
         self.headers_recv_state: HeadersState = HeadersState.INITIAL
         self.headers_send_state: HeadersState = HeadersState.INITIAL
+        self.interim_response_received = False
         self.push_id: Optional[int] = None
         self.session_id: Optional[int] = None
         self.stream_id = stream_id
@@ -629,7 +649,16 @@ class H3Connection:
         with self._get_or_create_stream(stream_id) as stream:
             if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
                 raise FrameUnexpected("HEADERS frame is not allowed in this state")
+
+            # Interim responses precede the final response (RFC 9114 section 4.1).
+            interim = (
+                not self._is_client
+                and stream.headers_send_state == HeadersState.INITIAL
+                and is_interim_response(headers)
+            )
             if end_stream:
+                if interim:
+                    raise FrameUnexpected("Interim response cannot end the stream")
                 stream.finish_sending()
 
             frame_data = self._encode_headers(stream_id, headers)
@@ -646,7 +675,8 @@ class H3Connection:
 
             # update state and send headers
             if stream.headers_send_state == HeadersState.INITIAL:
-                stream.headers_send_state = HeadersState.AFTER_HEADERS
+                if not interim:
+                    stream.headers_send_state = HeadersState.AFTER_HEADERS
             else:
                 stream.headers_send_state = HeadersState.AFTER_TRAILERS
             self._quic.send_stream_data(
@@ -852,9 +882,15 @@ class H3Connection:
             headers = self._decode_headers(stream.stream_id, frame_data)
 
             # validate headers
+            interim = False
             if stream.headers_recv_state == HeadersState.INITIAL:
                 if self._is_client:
-                    validate_response_headers(headers, stream)
+                    interim = is_interim_response(headers)
+                    # Interim responses have no content, so their content-length
+                    # does not apply (RFC 9110 section 6.4.1).
+                    validate_response_headers(headers, None if interim else stream)
+                    if interim:
+                        stream.interim_response_received = True
                 else:
                     validate_request_headers(headers, stream)
             else:
@@ -862,6 +898,10 @@ class H3Connection:
 
             # content-length needs checking even when there is no data
             if stream_ended:
+                # A final response must follow interim responses (RFC 9114
+                # section 4.1).
+                if interim:
+                    raise MessageError("Interim response cannot end the stream")
                 self._check_content_length(stream)
 
             # log frame
@@ -882,7 +922,8 @@ class H3Connection:
 
             # update state and emit headers
             if stream.headers_recv_state == HeadersState.INITIAL:
-                stream.headers_recv_state = HeadersState.AFTER_HEADERS
+                if not interim:
+                    stream.headers_recv_state = HeadersState.AFTER_HEADERS
             else:
                 stream.headers_recv_state = HeadersState.AFTER_TRAILERS
             http_events.append(
@@ -958,6 +999,13 @@ class H3Connection:
             self._abort_incomplete_request(stream.stream_id)
             stream.sending_ended = True
             return []
+
+        # A final response must follow interim responses (RFC 9114 section 4.1).
+        if (
+            stream.interim_response_received
+            and stream.headers_recv_state == HeadersState.INITIAL
+        ):
+            raise MessageError("Interim response cannot end the stream")
 
         self._check_content_length(stream)
 

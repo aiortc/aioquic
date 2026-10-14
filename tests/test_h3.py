@@ -16,6 +16,7 @@ from aioquic.h3.connection import (
     StreamType,
     encode_frame,
     encode_settings,
+    is_interim_response,
     parse_settings,
     validate_push_promise_headers,
     validate_request_headers,
@@ -1108,6 +1109,93 @@ class H3ConnectionTest(TestCase):
                 ),
             )
 
+    def test_handle_request_frame_interim_response_at_end(self):
+        """
+        A response stream cannot end after an interim response, whether or not
+        the end of stream comes with the HEADERS frame, see RFC 9114 section 4.1.
+        """
+        for fin_with_headers in (True, False):
+            with self.subTest(fin_with_headers=fin_with_headers):
+                with h3_fake_client_and_server() as (quic_client, quic_server):
+                    h3_client = H3Connection(quic_client)
+                    h3_server = H3Connection(quic_server)
+
+                    # Send the request.
+                    stream_id = quic_client.get_next_available_stream_id()
+                    h3_client.send_headers(
+                        stream_id=stream_id,
+                        headers=[
+                            (b":method", b"GET"),
+                            (b":scheme", b"https"),
+                            (b":authority", b"localhost"),
+                            (b":path", b"/"),
+                        ],
+                        end_stream=True,
+                    )
+                    h3_transfer(quic_client, h3_server)
+
+                    # Send an interim response, then end the stream.
+                    h3_server.send_headers(
+                        stream_id=stream_id, headers=[(b":status", b"103")]
+                    )
+                    if fin_with_headers:
+                        h3_client.handle_event(
+                            StreamDataReceived(
+                                stream_id=stream_id,
+                                data=b"".join(
+                                    e.data
+                                    for e in quic_server.stream_queue
+                                    if e.stream_id == stream_id
+                                ),
+                                end_stream=True,
+                            )
+                        )
+                    else:
+                        quic_server.send_stream_data(stream_id, b"", end_stream=True)
+                        h3_transfer(quic_server, h3_client)
+                    self.assertEqual(
+                        quic_client.closed,
+                        (
+                            ErrorCode.H3_MESSAGE_ERROR,
+                            "Interim response cannot end the stream",
+                        ),
+                    )
+
+    def test_handle_request_frame_interim_response_content_length(self):
+        """
+        The content-length of an interim response does not apply to the final
+        response, as interim responses have no content (RFC 9110 section 6.4.1).
+        """
+        with h3_fake_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # Send the request.
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+                end_stream=True,
+            )
+            h3_transfer(quic_client, h3_server)
+
+            # Send an interim response with a content-length, then the response.
+            h3_server.send_headers(
+                stream_id=stream_id,
+                headers=[(b":status", b"103"), (b"content-length", b"5")],
+            )
+            h3_server.send_headers(stream_id=stream_id, headers=[(b":status", b"200")])
+            h3_server.send_data(
+                stream_id=stream_id, data=b"hello world", end_stream=True
+            )
+            h3_transfer(quic_server, h3_client)
+            self.assertIsNone(quic_client.closed)
+
     def test_handle_request_frame_push_promise_at_end(self):
         """
         PUSH_PROMISE can be the last frame on a request stream, see
@@ -2174,6 +2262,28 @@ class H3ConnectionTest(TestCase):
                 end_stream=False,
             )
 
+    def test_send_headers_interim_end_stream(self):
+        """
+        We should not end the stream with an interim response.
+        """
+        quic_server = FakeQuicConnection(
+            configuration=QuicConfiguration(is_client=False)
+        )
+        h3_server = H3Connection(quic_server)
+
+        with self.assertRaises(FrameUnexpected) as cm:
+            h3_server.send_headers(
+                stream_id=0, headers=[(b":status", b"103")], end_stream=True
+            )
+        self.assertEqual(
+            cm.exception.reason_phrase, "Interim response cannot end the stream"
+        )
+
+        # The final response can still be sent.
+        h3_server.send_headers(
+            stream_id=0, headers=[(b":status", b"200")], end_stream=True
+        )
+
     def test_send_push_promise_from_client(self):
         """
         Clients cannot send a push promise.
@@ -2669,6 +2779,69 @@ class H3ConnectionTest(TestCase):
 
             # No Stream Cancellation is sent for unidirectional streams.
             self.assertEqual(h3_server._decoder_bytes_sent, 0)
+
+    def test_request_with_interim_responses(self):
+        """
+        A server can send interim responses before the final response, see
+        RFC 9114 section 4.1.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # Send the request.
+            stream_id = quic_client.get_next_available_stream_id()
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+                end_stream=True,
+            )
+            h3_transfer(quic_client, h3_server)
+
+            # Send interim responses, then the response.
+            h3_server.send_headers(stream_id=stream_id, headers=[(b":status", b"100")])
+            h3_server.send_headers(
+                stream_id=stream_id,
+                headers=[(b":status", b"103"), (b"link", b"</style.css>; rel=preload")],
+            )
+            h3_server.send_headers(stream_id=stream_id, headers=[(b":status", b"200")])
+            h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
+
+            # Receive interim responses, then the response.
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual(
+                events,
+                [
+                    HeadersReceived(
+                        headers=[(b":status", b"100")],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    HeadersReceived(
+                        headers=[
+                            (b":status", b"103"),
+                            (b"link", b"</style.css>; rel=preload"),
+                        ],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    HeadersReceived(
+                        headers=[(b":status", b"200")],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    DataReceived(
+                        data=b"hello",
+                        stream_id=stream_id,
+                        stream_ended=True,
+                    ),
+                ],
+            )
 
     def test_request_with_trailers(self):
         with h3_client_and_server() as (quic_client, quic_server):
@@ -3290,6 +3463,14 @@ class H3ConnectionTest(TestCase):
 
 
 class H3ParserTest(TestCase):
+    def test_is_interim_response(self):
+        self.assertTrue(is_interim_response([(b":status", b"100")]))
+        self.assertTrue(is_interim_response([(b":status", b"103"), (b"link", b"")]))
+        self.assertFalse(is_interim_response([(b":status", b"200")]))
+
+        # Headers without a status, such as trailers, are not a response.
+        self.assertFalse(is_interim_response([(b"x-foo", b"bar")]))
+
     def test_parse_settings_duplicate_identifier(self):
         buf = Buffer(capacity=1024)
         buf.push_uint_var(1)
@@ -3604,6 +3785,7 @@ class H3ParserTest(TestCase):
 
     def test_validate_response_headers(self):
         # OK
+        validate_response_headers([(b":status", b"103")])
         validate_response_headers([(b":status", b"200")])
         validate_response_headers(
             [
@@ -3629,6 +3811,23 @@ class H3ParserTest(TestCase):
             )
         self.assertEqual(
             cm.exception.reason_phrase, "Pseudo-header b':status' is included twice"
+        )
+
+        # The status code is a three-digit integer.
+        for status in (b"20", b"2000", b"+20", b"2_0", b"abc"):
+            with self.subTest(status=status):
+                with self.assertRaises(MessageError) as cm:
+                    validate_response_headers([(b":status", status)])
+                self.assertEqual(
+                    cm.exception.reason_phrase,
+                    f"Pseudo-header b':status' has invalid value {status!r}",
+                )
+
+        # 101 Switching Protocols is not supported.
+        with self.assertRaises(MessageError) as cm:
+            validate_response_headers([(b":status", b"101")])
+        self.assertEqual(
+            cm.exception.reason_phrase, "Pseudo-header b':status' cannot be 101"
         )
 
         # Connection-specific fields, including TE, are forbidden in responses.
