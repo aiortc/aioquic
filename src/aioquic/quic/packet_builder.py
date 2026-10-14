@@ -162,7 +162,13 @@ class QuicPacketBuilder:
         handler_args: Sequence[Any] = [],
     ) -> Buffer:
         """
-        Starts a new frame.
+        Starts a new frame, which needs at least `capacity` bytes.
+
+        If the current packet has less space left, or if the frame counts towards
+        bytes in flight and the congestion window has less room left,
+        `QuicPacketBuilderStop` is raised before anything is written. Once this
+        method returns, the frame is part of a packet returned by `flush`, so callers
+        should only update state related to the frame after this call.
         """
         if self.remaining_buffer_space < capacity or (
             frame_type not in NON_IN_FLIGHT_FRAME_TYPES
