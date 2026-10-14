@@ -1,4 +1,6 @@
 [codespell]
 check-filenames =
 ignore-words-list = assertIn,quicly
+# Allow the HTTP "TE" header name, without ignoring "te" typos for "the".
+ignore-regex = \bb"te"|\bTE\b
 skip = *.bin,./build,./docs/_build,./env,./venv

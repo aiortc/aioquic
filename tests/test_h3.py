@@ -3193,6 +3193,40 @@ class H3ParserTest(TestCase):
             ]
         )
 
+        # TE is allowed in a promised request, but only as trailers.
+        for value in (b"trailers", b"Trailers"):
+            with self.subTest(value=value):
+                validate_push_promise_headers(
+                    [
+                        (b":method", b"GET"),
+                        (b":scheme", b"https"),
+                        (b":path", b"/"),
+                        (b":authority", b"localhost"),
+                        (b"te", value),
+                    ]
+                )
+        with self.assertRaises(MessageError) as cm:
+            validate_push_promise_headers([(b"te", b"bogus")])
+        self.assertEqual(
+            cm.exception.reason_phrase, "Header b'te' value is not trailers"
+        )
+
+        # Other connection-specific fields are forbidden.
+        for name in (
+            b"connection",
+            b"keep-alive",
+            b"proxy-connection",
+            b"transfer-encoding",
+            b"upgrade",
+        ):
+            with self.subTest(header=name):
+                with self.assertRaises(MessageError) as cm:
+                    validate_push_promise_headers([(name, b"trailers")])
+                self.assertEqual(
+                    cm.exception.reason_phrase,
+                    f"Header {name!r} is connection-specific",
+                )
+
         # invalid pseudo-header
         with self.assertRaises(MessageError) as cm:
             validate_push_promise_headers([(b":status", b"foo")])
@@ -3292,17 +3326,39 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase, "Header b'x-f:oo' contains a non-initial colon"
         )
 
-        # good transfer-encoding; this test passes by not asserting
+        # TE is allowed in a request, but only as trailers.
+        for value in (b"trailers", b"Trailers"):
+            with self.subTest(value=value):
+                validate_request_headers(
+                    [
+                        (b":method", b"GET"),
+                        (b":scheme", b"https"),
+                        (b":path", b"/"),
+                        (b":authority", b"localhost"),
+                        (b"te", value),
+                    ]
+                )
         with self.assertRaises(MessageError) as cm:
-            validate_request_headers([(b"transfer-encoding", b"trailers")])
-
-        # bad transfer-encoding
-        with self.assertRaises(MessageError) as cm:
-            validate_request_headers([(b"transfer-encoding", b"bogus")])
+            validate_request_headers([(b"te", b"bogus")])
         self.assertEqual(
-            cm.exception.reason_phrase,
-            "The only valid value for transfer-encoding is trailers",
+            cm.exception.reason_phrase, "Header b'te' value is not trailers"
         )
+
+        # Other connection-specific fields are forbidden.
+        for name in (
+            b"connection",
+            b"keep-alive",
+            b"proxy-connection",
+            b"transfer-encoding",
+            b"upgrade",
+        ):
+            with self.subTest(header=name):
+                with self.assertRaises(MessageError) as cm:
+                    validate_request_headers([(name, b"trailers")])
+                self.assertEqual(
+                    cm.exception.reason_phrase,
+                    f"Header {name!r} is connection-specific",
+                )
 
         # value with a forbidden NUL, LF, or CR:
         for prefix in [b"\x00", b"\x0a", b"\x0d"]:
@@ -3434,6 +3490,25 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase, "Pseudo-header b':status' is included twice"
         )
 
+        # Connection-specific fields, including TE, are forbidden in responses.
+        for name in (
+            b"connection",
+            b"keep-alive",
+            b"proxy-connection",
+            b"te",
+            b"transfer-encoding",
+            b"upgrade",
+        ):
+            with self.subTest(header=name):
+                with self.assertRaises(MessageError) as cm:
+                    validate_response_headers(
+                        [(b":status", b"200"), (name, b"trailers")]
+                    )
+                self.assertEqual(
+                    cm.exception.reason_phrase,
+                    f"Header {name!r} is connection-specific",
+                )
+
     def test_validate_trailers(self):
         # OK
         validate_trailers([(b"x-foo", b"bar")])
@@ -3457,3 +3532,20 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase,
             "Pseudo-header b':authority' is not allowed after regular headers",
         )
+
+        # Connection-specific fields, including TE, are forbidden in trailers.
+        for name in (
+            b"connection",
+            b"keep-alive",
+            b"proxy-connection",
+            b"te",
+            b"transfer-encoding",
+            b"upgrade",
+        ):
+            with self.subTest(header=name):
+                with self.assertRaises(MessageError) as cm:
+                    validate_trailers([(name, b"trailers")])
+                self.assertEqual(
+                    cm.exception.reason_phrase,
+                    f"Header {name!r} is connection-specific",
+                )
