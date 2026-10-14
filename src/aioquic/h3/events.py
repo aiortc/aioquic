@@ -45,6 +45,25 @@ class DatagramReceived(H3Event):
 
 
 @dataclass
+class GoAwayReceived(H3Event):
+    """
+    The GoAwayReceived event is fired when the remote peer sends a GOAWAY frame
+    to start shutting down the connection (RFC 9114 section 5.2).
+
+    A client should not open new requests on this connection. Requests on
+    streams whose ID is ``stream_id`` or higher were not processed by the
+    server and can be retried on another connection. A peer may send several
+    GOAWAY frames, each with an ID no higher than the last.
+    """
+
+    stream_id: Optional[int] = None
+    "The first request stream ID the server will not process (received by a client)."
+
+    push_id: Optional[int] = None
+    "The first push ID the client will not accept (received by a server)."
+
+
+@dataclass
 class HeadersReceived(H3Event):
     """
     The HeadersReceived event is fired whenever headers are received.
