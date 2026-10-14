@@ -1,6 +1,83 @@
 Changelog
 =========
 
+1.7.0
+-----
+
+* Migrate clients to the server's preferred address, as :rfc:`9000` allows.
+
+  .. note::
+
+     If you drive :class:`~aioquic.quic.connection.QuicConnection` with your
+     own I/O, you must send each datagram to the address returned alongside
+     it by ``datagrams_to_send()``. That address may now differ from the one
+     passed to ``connect()``, so a connected UDP socket or a tunnel with a
+     single fixed destination no longer works.
+
+* Add :meth:`~aioquic.quic.connection.QuicConnection.get_peer_address`, which
+  returns the address datagrams are currently sent to. It can change when
+  either endpoint migrates.
+* Improve path validation and connection migration as :rfc:`9000` requires:
+
+  * Discard datagrams received by clients from unknown server addresses.
+  * Pad datagrams carrying PATH_CHALLENGE or PATH_RESPONSE frames to 1200
+    bytes, within the anti-amplification limit.
+  * Retransmit lost PATH_CHALLENGE frames on servers, abandon failed
+    validations and revert to the last validated address.
+  * Answer path probes on servers on the path they arrive on, with a
+    connection ID kept for each path.
+  * Keep outstanding PATH_CHALLENGE data for each path, and ignore a
+    PATH_RESPONSE that matches no challenge instead of closing the
+    connection.
+  * Keep clients on the preferred address when the server probes them from
+    its original address.
+  * Reset the spin bit when changing connection ID.
+
+* Grant MAX_STREAMS credit as the peer's streams close, instead of whenever
+  half the limit was used, so the stream limit bounds concurrency. Stream IDs
+  an application skips can no longer be used later.
+* Restart the idle timer when sending the first ack-eliciting packet after
+  receiving one, as :rfc:`9000` requires.
+* Fix handshakes stalling or failing:
+
+  * Pad datagrams carrying INITIAL packets to 1200 bytes even when the
+    congestion window is full, as :rfc:`9000` requires. A client sending
+    0-RTT data could send short datagrams, which servers discard.
+  * Acknowledge 0-RTT packets before the handshake completes, as :rfc:`9000`
+    requires.
+  * Send lost HANDSHAKE data even when the congestion window is full, instead
+    of stalling until the idle timeout when no probe timer was armed.
+  * Only assume the server's INITIAL packets were lost while the client is
+    waiting for the ServerHello, as :rfc:`9002` describes, instead of sending
+    spurious probes for packets it cannot decrypt later on.
+
+* Do not arm the ACK timer or the probe timeout while the anti-amplification
+  limit leaves no room to send, as :rfc:`9002` requires. A server answering a
+  0-RTT request could otherwise busy loop until the client sent again, or
+  until the idle timeout.
+* Stop servers from exceeding the anti-amplification limit by one byte when a
+  packet's only frame is a single byte, such as a PING.
+* Improve ACK frame handling as :rfc:`9000` requires:
+
+  * Reject ACK frames containing negative packet numbers with
+    ``FRAME_ENCODING_ERROR``.
+  * Keep at most 64 ACK ranges, and leave out the oldest ranges which do not
+    fit in an ACK frame.
+  * Lower the cost of processing ACK frames, which now grows with the number
+    of ranges and of newly acknowledged packets, not of packets in flight.
+
+* Encrypt retry tokens with AES-GCM instead of RSA, which makes validating
+  them much cheaper. Only accept a token on the Retry packet's connection ID
+  and for 30 seconds, to limit replays as :rfc:`9000` requires.
+* Support interim (1xx) responses in HTTP/3. A final response which follows
+  them is no longer rejected as trailers.
+* Reject HTTP/3 messages containing connection-specific header fields, and
+  only allow ``TE: trailers``, as :rfc:`9114` requires.
+* Abort HTTP/3 request streams with ``H3_REQUEST_INCOMPLETE`` when they end
+  before their HEADERS frame, instead of keeping them until the connection
+  closes.
+* Skip interim responses in the `httpx` example.
+
 1.6.1
 -----
 
