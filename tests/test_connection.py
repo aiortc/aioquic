@@ -4035,6 +4035,36 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(cm.exception.frame_type, QuicFrameType.STOP_SENDING)
             self.assertEqual(cm.exception.reason_phrase, "Stream is receive-only")
 
+    def test_handle_stream_frame_fin_only(self):
+        frame_type = QuicFrameType.STREAM_BASE | 1
+        with client_and_server() as (client, server):
+            # The server receives FIN-only STREAM frames on 100 unidirectional
+            # streams, which use no flow control credit.
+            for i in range(100):
+                server._handle_stream_frame(
+                    client_receive_context(server),
+                    frame_type,
+                    Buffer(data=encode_uint_var(i * 4 + 2)),
+                )
+            consume_events(server)
+            self.assertEqual(len(server._streams), 100)
+
+            # The server discards the streams and lets the client open as many.
+            self.assertEqual(drop(server), 1)
+            self.assertEqual(server._streams, {})
+            self.assertEqual(server._local_max_streams_uni.sent, 228)
+            self.assertEqual(server._local_max_streams_uni.used, 100)
+            self.assertEqual(server._local_max_streams_uni.value, 228)
+
+            # The server receives a FIN-only STREAM frame on a discarded stream,
+            # which is ignored.
+            server._payload_received(
+                client_receive_context(server),
+                encode_uint_var(frame_type) + encode_uint_var(2),
+            )
+            self.assertIsNone(server.next_event())
+            self.assertEqual(server._streams, {})
+
     def test_handle_stream_frame_final_size_error(self):
         with client_and_server() as (client, server):
             frame_type = QuicFrameType.STREAM_BASE | 7
@@ -4065,6 +4095,37 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(cm.exception.error_code, QuicErrorCode.FINAL_SIZE_ERROR)
             self.assertEqual(cm.exception.frame_type, frame_type)
             self.assertEqual(cm.exception.reason_phrase, "Cannot change final size")
+
+    def test_handle_stream_frame_opens_lower_streams(self):
+        with client_and_server() as (client, server):
+            consume_events(client)
+
+            # The client receives a STREAM frame on unidirectional stream 11,
+            # which also opens streams 3 and 7.
+            client._handle_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.STREAM_BASE,
+                Buffer(data=encode_uint_var(11) + b"c"),
+            )
+            self.assertEqual(sorted(client._streams), [3, 7, 11])
+            self.assertEqual(client._local_max_streams_uni.used, 3)
+            self.assertEqual(
+                client.next_event(),
+                events.StreamDataReceived(data=b"c", end_stream=False, stream_id=11),
+            )
+
+            # The client receives a STREAM frame on stream 3.
+            client._handle_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.STREAM_BASE,
+                Buffer(data=encode_uint_var(3) + b"a"),
+            )
+            self.assertEqual(sorted(client._streams), [3, 7, 11])
+            self.assertEqual(client._local_max_streams_uni.used, 3)
+            self.assertEqual(
+                client.next_event(),
+                events.StreamDataReceived(data=b"a", end_stream=False, stream_id=3),
+            )
 
     def test_handle_stream_frame_over_largest_offset(self):
         with client_and_server() as (client, server):
@@ -4138,6 +4199,36 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 )
             self.assertEqual(cm.exception.error_code, QuicErrorCode.STREAM_LIMIT_ERROR)
             self.assertEqual(cm.exception.frame_type, QuicFrameType.STREAM_BASE)
+            self.assertEqual(cm.exception.reason_phrase, "Too many streams open")
+
+    def test_handle_stream_frame_over_max_streams_still_open(self):
+        frame_type = QuicFrameType.STREAM_BASE
+        with client_and_server() as (client, server):
+            # The server receives zero-byte STREAM frames on 128 unidirectional
+            # streams, which remain open.
+            for i in range(128):
+                server._handle_stream_frame(
+                    client_receive_context(server),
+                    frame_type,
+                    Buffer(data=encode_uint_var(i * 4 + 2)),
+                )
+            self.assertEqual(len(server._streams), 128)
+
+            # The server does not let the client open more streams.
+            self.assertEqual(drop(server), 0)
+            self.assertEqual(server._local_max_streams_uni.sent, 128)
+            self.assertEqual(server._local_max_streams_uni.used, 128)
+            self.assertEqual(server._local_max_streams_uni.value, 128)
+
+            # The server receives a STREAM frame on one stream too many.
+            with self.assertRaises(QuicConnectionError) as cm:
+                server._handle_stream_frame(
+                    client_receive_context(server),
+                    frame_type,
+                    Buffer(data=encode_uint_var(128 * 4 + 2)),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.STREAM_LIMIT_ERROR)
+            self.assertEqual(cm.exception.frame_type, frame_type)
             self.assertEqual(cm.exception.reason_phrase, "Too many streams open")
 
     def test_handle_stream_frame_send_only(self):
@@ -5068,36 +5159,37 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
     def test_send_max_streams_retransmit(self):
         with client_and_server() as (client, server):
-            # client opens 65 streams
-            client.send_stream_data(4 * 64, b"Z")
+            # The client opens and closes 65 unidirectional streams.
+            for i in range(65):
+                client.send_stream_data(i * 4 + 2, b"", end_stream=True)
             self.assertEqual(transfer(client, server), 1)
-            self.assertEqual(client._remote_max_streams_bidi, 128)
-            self.assertEqual(server._local_max_streams_bidi.sent, 128)
-            self.assertEqual(server._local_max_streams_bidi.used, 65)
-            self.assertEqual(server._local_max_streams_bidi.value, 128)
+            self.assertEqual(client._remote_max_streams_uni, 128)
+            self.assertEqual(server._local_max_streams_uni.sent, 128)
+            self.assertEqual(server._local_max_streams_uni.used, 65)
+            self.assertEqual(server._local_max_streams_uni.value, 128)
 
-            # MAX_STREAMS is sent and lost
-            self.assertEqual(drop(server), 1)
-            self.assertEqual(client._remote_max_streams_bidi, 128)
-            self.assertEqual(server._local_max_streams_bidi.sent, 256)
-            self.assertEqual(server._local_max_streams_bidi.used, 65)
-            self.assertEqual(server._local_max_streams_bidi.value, 256)
+            # The server discards the streams, then MAX_STREAMS is sent and lost.
+            self.assertEqual(drop(server), 2)
+            self.assertEqual(client._remote_max_streams_uni, 128)
+            self.assertEqual(server._local_max_streams_uni.sent, 193)
+            self.assertEqual(server._local_max_streams_uni.used, 65)
+            self.assertEqual(server._local_max_streams_uni.value, 193)
 
-            # MAX_STREAMS loss is detected
+            # MAX_STREAMS loss is detected.
             server._on_connection_limit_delivery(
-                QuicDeliveryState.LOST, server._local_max_streams_bidi
+                QuicDeliveryState.LOST, server._local_max_streams_uni
             )
-            self.assertEqual(client._remote_max_streams_bidi, 128)
-            self.assertEqual(server._local_max_streams_bidi.sent, 0)
-            self.assertEqual(server._local_max_streams_bidi.used, 65)
-            self.assertEqual(server._local_max_streams_bidi.value, 256)
+            self.assertEqual(client._remote_max_streams_uni, 128)
+            self.assertEqual(server._local_max_streams_uni.sent, 0)
+            self.assertEqual(server._local_max_streams_uni.used, 65)
+            self.assertEqual(server._local_max_streams_uni.value, 193)
 
-            # MAX_STREAMS is retransmitted and acked
+            # MAX_STREAMS is retransmitted and acked.
             roundtrip_until_done(server, client)
-            self.assertEqual(client._remote_max_streams_bidi, 256)
-            self.assertEqual(server._local_max_streams_bidi.sent, 256)
-            self.assertEqual(server._local_max_streams_bidi.used, 65)
-            self.assertEqual(server._local_max_streams_bidi.value, 256)
+            self.assertEqual(client._remote_max_streams_uni, 193)
+            self.assertEqual(server._local_max_streams_uni.sent, 193)
+            self.assertEqual(server._local_max_streams_uni.used, 65)
+            self.assertEqual(server._local_max_streams_uni.value, 193)
 
     def test_send_ping(self):
         with client_and_server() as (client, server):
@@ -5331,6 +5423,18 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(
                 str(cm.exception), "Cannot send data on unknown peer-initiated stream"
             )
+
+    def test_send_stream_data_skipped_stream(self):
+        with client_and_server() as (client, server):
+            # The client creates bidirectional stream 8, skipping streams 0 and 4.
+            client.send_stream_data(8, b"hello")
+            self.assertEqual(client.get_next_available_stream_id(), 12)
+
+            # The client tries to send data on a skipped stream.
+            with self.assertRaises(ValueError) as cm:
+                client.send_stream_data(0, b"hello")
+            self.assertEqual(str(cm.exception), "Cannot send data on a finished stream")
+            self.assertEqual(client.get_next_available_stream_id(), 12)
 
     def test_stream_direction(self):
         with client_and_server() as (client, server):

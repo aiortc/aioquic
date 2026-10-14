@@ -375,7 +375,6 @@ class QuicConnection:
         self._streams_queue: list[QuicStream] = []
         self._streams_blocked_bidi: list[QuicStream] = []
         self._streams_blocked_uni: list[QuicStream] = []
-        self._streams_finished: Set[int] = set()
         self._version: Optional[int] = None
         self._version_negotiated_compatible = False
         self._version_negotiated_incompatible = False
@@ -1192,7 +1191,7 @@ class QuicConnection:
         :param stream_id: The stream's ID.
         :param error_code: An error code indicating why the stream is being reset.
         """
-        if self._stream_can_send(stream_id) and stream_id in self._streams_finished:
+        if self._stream_can_send(stream_id) and self._stream_is_discarded(stream_id):
             # The stream finished and its state was discarded, so there is nothing
             # to reset.
             return
@@ -1616,7 +1615,7 @@ class QuicConnection:
         """
         Get or create a stream in response to a received frame.
         """
-        if stream_id in self._streams_finished:
+        if self._stream_is_discarded(stream_id):
             # the stream was created, but its state was since discarded
             raise StreamFinishedError
 
@@ -1634,11 +1633,10 @@ class QuicConnection:
             if stream_is_unidirectional(stream_id):
                 max_stream_data_local = self._local_max_stream_data_uni
                 max_stream_data_remote = 0
-                max_streams = self._local_max_streams_uni
             else:
                 max_stream_data_local = self._local_max_stream_data_bidi_remote
                 max_stream_data_remote = self._remote_max_stream_data_bidi_local
-                max_streams = self._local_max_streams_bidi
+            max_streams = self._stream_limit(stream_id)
 
             # check max streams
             stream_count = (stream_id // 4) + 1
@@ -1648,18 +1646,21 @@ class QuicConnection:
                     frame_type=frame_type,
                     reason_phrase="Too many streams open",
                 )
-            elif stream_count > max_streams.used:
-                max_streams.used = stream_count
 
-            # create stream
-            self._logger.debug("Stream %d created by peer" % stream_id)
-            stream = self._streams[stream_id] = QuicStream(
-                stream_id=stream_id,
-                max_stream_data_local=max_stream_data_local,
-                max_stream_data_remote=max_stream_data_remote,
-                writable=not stream_is_unidirectional(stream_id),
-            )
-            self._streams_queue.append(stream)
+            # Opening a stream also opens all lower-numbered streams of the same
+            # type (RFC 9000 section 2.1).
+            for new_stream_id in range(
+                max_streams.used * 4 + stream_id % 4, stream_id + 4, 4
+            ):
+                self._logger.debug("Stream %d created by peer", new_stream_id)
+                stream = self._streams[new_stream_id] = QuicStream(
+                    stream_id=new_stream_id,
+                    max_stream_data_local=max_stream_data_local,
+                    max_stream_data_remote=max_stream_data_remote,
+                    writable=not stream_is_unidirectional(stream_id),
+                )
+                self._streams_queue.append(stream)
+            max_streams.used = stream_count
         return stream
 
     def _get_or_create_stream_for_send(self, stream_id: int) -> QuicStream:
@@ -1670,7 +1671,7 @@ class QuicConnection:
         """
         if not self._stream_can_send(stream_id):
             raise ValueError("Cannot send data on peer-initiated unidirectional stream")
-        if stream_id in self._streams_finished:
+        if self._stream_is_discarded(stream_id):
             raise ValueError("Cannot send data on a finished stream")
 
         stream = self._streams.get(stream_id, None)
@@ -3395,6 +3396,27 @@ class QuicConnection:
             stream_id
         ) == self._is_client or not stream_is_unidirectional(stream_id)
 
+    def _stream_is_discarded(self, stream_id: int) -> bool:
+        """
+        Return whether the stream was opened and its state since discarded.
+        """
+        if stream_is_client_initiated(stream_id) != self._is_client:
+            is_opened = stream_id // 4 < self._stream_limit(stream_id).used
+        elif stream_is_unidirectional(stream_id):
+            is_opened = stream_id < self._local_next_stream_id_uni
+        else:
+            is_opened = stream_id < self._local_next_stream_id_bidi
+        return is_opened and stream_id not in self._streams
+
+    def _stream_limit(self, stream_id: int) -> Limit:
+        """
+        Return the limit on streams of this type which the peer can open.
+        """
+        if stream_is_unidirectional(stream_id):
+            return self._local_max_streams_uni
+        else:
+            return self._local_max_streams_bidi
+
     def _unblock_streams(self, is_unidirectional: bool) -> None:
         if is_unidirectional:
             max_stream_data_remote = self._remote_max_stream_data_uni
@@ -3613,7 +3635,13 @@ class QuicConnection:
                     if stream.is_finished:
                         self._logger.debug("Stream %d discarded", stream.stream_id)
                         self._streams.pop(stream.stream_id)
-                        self._streams_finished.add(stream.stream_id)
+                        if (
+                            stream_is_client_initiated(stream.stream_id)
+                            != self._is_client
+                        ):
+                            # Let the peer open a new stream for each one that
+                            # closes (RFC 9000 section 4.6).
+                            self._stream_limit(stream.stream_id).value += 1
                         discarded.add(stream)
                         continue
 
@@ -3655,7 +3683,10 @@ class QuicConnection:
                 self._streams_queue.extend(sent)
 
             if builder.packet_is_empty:
-                break
+                # Discarded streams may let the peer open new ones, which the next
+                # packet announces with MAX_STREAMS.
+                if not discarded:
+                    break
             else:
                 self._loss._pacer.update_after_send(now=now)
 
@@ -3781,14 +3812,22 @@ class QuicConnection:
         """
         Raise MAX_DATA or MAX_STREAMS if needed.
         """
+        max_data = self._local_max_data
+        if max_data.used * 2 > max_data.value:
+            max_data.value *= 2
+            self._logger.debug("Local %s raised to %d", max_data.name, max_data.value)
+
         for limit in (
             self._local_max_data,
             self._local_max_streams_bidi,
             self._local_max_streams_uni,
         ):
-            if limit.used * 2 > limit.value:
-                limit.value *= 2
-                self._logger.debug("Local %s raised to %d", limit.name, limit.value)
+            if limit is not max_data and (
+                limit.sent - limit.used >= limit.value - limit.sent
+            ):
+                # Batch MAX_STREAMS frames: wait until the peer has fewer streams
+                # left to open (sent - used) than the update would grant (value - sent).
+                continue
             if limit.value != limit.sent:
                 buf = builder.start_frame(
                     limit.frame_type,
