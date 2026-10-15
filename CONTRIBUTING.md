@@ -40,6 +40,10 @@ and judge how much a requirement matters in practice, but they are not a
 source of truth: they deviate from the RFCs in places, and their behaviour
 must be checked in their source code. Do not cite them in commit messages.
 
+**Review your changes critically.** Look for side effects on other code
+paths, and treat the peer as untrusted: consider how a malicious peer
+could abuse the new behaviour.
+
 ## Scope
 
 aioquic does not support TLS client authentication: servers never
