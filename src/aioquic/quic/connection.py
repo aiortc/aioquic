@@ -970,6 +970,7 @@ class QuicConnection:
                 if (
                     self._is_client
                     and epoch in (tls.Epoch.HANDSHAKE, tls.Epoch.ONE_RTT)
+                    and self.tls.state == tls.State.CLIENT_EXPECT_SERVER_HELLO
                     and not self._crypto_retransmitted
                 ):
                     self._loss.reschedule_data(now=now, speed_up_handshake=True)

@@ -656,6 +656,77 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
                 client_tickets[0].ticket, list(ticket_store.tickets.keys())[0]
             )
 
+    def test_connect_with_late_server_handshake(self):
+        """
+        Check the client does not speed up handshake completion when a HANDSHAKE
+        packet arrives after it discarded its handshake keys.
+
+        Only a packet which arrives before the client obtains handshake keys
+        suggests the server's INITIAL was lost (RFC 9002 section 6.2.3).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+
+            # Client sends INITIAL.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 0])
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL, sends INITIAL + HANDSHAKE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            server_items = server.datagrams_to_send(now=now)
+            self.assertEqual(
+                datagram_sizes(server_items), SERVER_INITIAL_DATAGRAM_SIZES
+            )
+            self.assertAlmostEqual(server.get_timer(), 0.25)
+            self.assertSentPackets(server, [1, 2, 0])
+            self.assertEvents(server, [events.ProtocolNegotiated])
+
+            # Client receives INITIAL + HANDSHAKE, sends FINISHED.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(server_items[0][0], SERVER_ADDR, now=now)
+            client.receive_datagram(server_items[1][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), CLIENT_HANDSHAKE_DATAGRAM_SIZES)
+            self.assertAlmostEqual(client.get_timer(), 0.4)
+            self.assertSentPackets(client, [0, 1, 1])
+            self.assertEvents(
+                client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
+            )
+
+            # Server receives FINISHED, sends HANDSHAKE_DONE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [229])
+            self.assertAlmostEqual(server.get_timer(), 0.425)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, HANDSHAKE_COMPLETED_EVENTS)
+
+            # Client receives HANDSHAKE_DONE, discards its handshake keys and
+            # sends ACK.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(client.get_timer(), 60.2)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 1])
+            self.assertEvents(client, [])
+
+            # Client receives a late copy of the server's second HANDSHAKE packet,
+            # which it cannot decrypt, and sends nothing.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(server_items[1][0], SERVER_ADDR, now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(client.get_timer(), 60.2)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 1])
+            self.assertEvents(client, [])
+
     def test_connect_with_lost_client_initial(self):
         """
         Check the handshake completes if the client's INITIAL is lost.
