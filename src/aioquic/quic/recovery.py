@@ -1,6 +1,8 @@
 import logging
 import math
-from typing import Any, Callable, Iterable, Optional
+from bisect import bisect_left
+from collections.abc import Callable, Iterable
+from typing import Any, Optional
 
 from .congestion import cubic, reno  # noqa
 from .congestion.base import K_GRANULARITY, create_congestion_control
@@ -253,11 +255,15 @@ class QuicPacketRecovery:
         if largest_acked > space.largest_acked_packet:
             space.largest_acked_packet = largest_acked
 
-        for packet_number in sorted(space.sent_packets.keys()):
-            if packet_number > largest_acked:
-                break
-            if packet_number in ack_rangeset:
-                # remove packet and update counters
+        # Only visit the sent packets within the acknowledged ranges, as the peer
+        # chooses how many ranges and ACK frames it sends. Packets are stored in
+        # the order they are sent, so their numbers are sorted.
+        packet_numbers = list(space.sent_packets)
+        for r in ack_rangeset:
+            start = bisect_left(packet_numbers, r.start)
+            stop = bisect_left(packet_numbers, r.stop)
+            for packet_number in packet_numbers[start:stop]:
+                # Remove the packet and update the counters.
                 packet = space.sent_packets.pop(packet_number)
                 if packet.is_ack_eliciting:
                     is_ack_eliciting = True

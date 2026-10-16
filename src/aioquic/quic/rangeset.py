@@ -1,5 +1,5 @@
-from collections.abc import Sequence
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable, Iterator, Sequence
+from typing import Any, Optional
 
 
 class RangeSet(Sequence):
@@ -90,6 +90,9 @@ class RangeSet(Sequence):
 
     def __getitem__(self, key: Any) -> range:
         return self.__ranges[key]
+
+    def __iter__(self) -> Iterator[range]:
+        return iter(self.__ranges)
 
     def __len__(self) -> int:
         return len(self.__ranges)

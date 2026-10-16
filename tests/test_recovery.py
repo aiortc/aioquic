@@ -316,6 +316,32 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(self.recovery._rtt_min, math.inf)
         self.assertEqual(self.recovery._rtt_smoothed, 0.0)
 
+    def test_on_ack_received_with_ranges(self):
+        # Packets 1 and 3 were acknowledged and packet 2 lost earlier, so the first
+        # two ranges contain no packet in flight.
+        deliveries = send_watched_packets(
+            self.recovery, self.ONE_RTT_SPACE, dict.fromkeys([0, 4, 5, 6, 7, 8, 9], 1.0)
+        )
+
+        # Packets in the ranges are acknowledged, then those at least three below
+        # the largest acknowledged one are lost (RFC 9002 section 6.1.1).
+        self.recovery.on_ack_received(
+            ack_rangeset=RangeSet([range(1, 2), range(3, 4), range(5, 6), range(8, 9)]),
+            ack_delay=0.0,
+            now=2.0,
+            space=self.ONE_RTT_SPACE,
+        )
+        self.assertEqual(
+            deliveries,
+            [
+                (QuicDeliveryState.ACKED, 5),
+                (QuicDeliveryState.ACKED, 8),
+                (QuicDeliveryState.LOST, 0),
+                (QuicDeliveryState.LOST, 4),
+            ],
+        )
+        self.assertEqual(list(self.ONE_RTT_SPACE.sent_packets), [6, 7, 9])
+
     def test_on_ack_received_without_address_validation(self):
         self.recovery.peer_completed_address_validation = False
         self.recovery.on_packet_sent(
