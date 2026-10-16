@@ -1837,7 +1837,16 @@ class QuicConnection:
         """
         Handle an ACK frame.
         """
-        ack_rangeset, ack_delay_encoded = pull_ack_frame(buf)
+        try:
+            ack_rangeset, ack_delay_encoded = pull_ack_frame(buf)
+        except ValueError as exc:
+            # A negative packet number is a frame encoding error (RFC 9000
+            # section 19.3.1).
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
         if frame_type == QuicFrameType.ACK_ECN:
             buf.pull_uint_var()
             buf.pull_uint_var()

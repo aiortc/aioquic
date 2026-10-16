@@ -3263,6 +3263,22 @@ class QuicConnectionTest(QuicConnectionTestCase):
             Buffer(data=b"\x00\x02\x00\x00\x00\x00\x00"),
         )
 
+    def test_handle_ack_frame_negative_packet_number(self):
+        client = create_standalone_client(self)
+
+        # Client receives an ACK frame whose first range goes below zero.
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._handle_ack_frame(
+                client_receive_context(client),
+                QuicFrameType.ACK,
+                Buffer(data=b"\x00\x02\x00\x01"),
+            )
+        self.assertEqual(cm.exception.error_code, QuicErrorCode.FRAME_ENCODING_ERROR)
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.ACK)
+        self.assertEqual(
+            cm.exception.reason_phrase, "ACK range contains a negative packet number"
+        )
+
     def test_handle_connection_close_frame(self):
         with client_and_server() as (client, server):
             server.close(

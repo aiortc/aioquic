@@ -502,6 +502,24 @@ class FrameTest(TestCase):
         packet.push_ack_frame(buf, rangeset, delay)
         self.assertEqual(buf.data, data)
 
+    def test_ack_frame_with_negative_first_range(self):
+        # Largest acknowledged 0, first ACK range 1.
+        buf = Buffer(data=b"\x00\x02\x00\x01")
+        with self.assertRaises(ValueError) as cm:
+            packet.pull_ack_frame(buf)
+        self.assertEqual(
+            str(cm.exception), "ACK range contains a negative packet number"
+        )
+
+    def test_ack_frame_with_negative_gap(self):
+        # Largest acknowledged 2, first ACK range 0, gap 1, ACK range 0.
+        buf = Buffer(data=b"\x02\x02\x01\x00\x01\x00")
+        with self.assertRaises(ValueError) as cm:
+            packet.pull_ack_frame(buf)
+        self.assertEqual(
+            str(cm.exception), "ACK range contains a negative packet number"
+        )
+
     def test_ack_frame_with_one_range(self):
         data = b"\x02\x02\x01\x00\x00\x00"
 
