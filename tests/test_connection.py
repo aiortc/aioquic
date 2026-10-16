@@ -1962,8 +1962,8 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [events.StreamDataReceived])
             acked_ranges = self.acked_ranges(server)[-1]
-            self.assertEqual(len(acked_ranges), 21)
-            self.assertEqual(acked_ranges[0], [165, 165])
+            self.assertEqual(len(acked_ranges), 19)
+            self.assertEqual(acked_ranges[0], [169, 169])
             self.assertEqual(acked_ranges[-1], [205, 205])
             self.assertEqual(len(self.path_challenges(server)), 1)
 
@@ -2086,6 +2086,56 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [])
             self.assertEqual(self.acked_ranges(server)[-1], [[4, 6]])
+            self.assertEqual(len(self.path_challenges(server)), 1)
+
+    def test_migrate_with_small_datagram_and_many_ack_ranges(self):
+        """
+        Check the server sends a PATH_CHALLENGE when a client with many ACK ranges
+        migrates (RFC 9000 section 9.3).
+
+        The server's ACK timer fires as it receives a small datagram from the
+        client's new address. The PATH_CHALLENGE comes first, and the ACK omits
+        its oldest range to fit within the anti-amplification limit (RFC 9000
+        section 13.2.3).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+            self.watch_timers(server)
+
+            # Client sends PINGs, skipping a packet number after each one, which
+            # the server receives.
+            for uid in range(24):
+                client.send_ping(uid)
+                items = client.datagrams_to_send(now=now)
+                client._packet_number += 1
+                server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            ack_queue = server._spaces[tls.Epoch.ONE_RTT].ack_queue
+            self.assertEqual(len(ack_queue), 24)
+            self.assertEqual(ack_queue[0], range(4, 6))
+            self.assertEqual(ack_queue[-1], range(51, 52))
+
+            # Client changes address and sends a PING.
+            client.send_ping(24)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [29])
+
+            # Server receives the PING as its ACK timer fires, sends a
+            # PATH_CHALLENGE and an ACK which omits the oldest range, padded up to
+            # the anti-amplification limit.
+            now = self.advance_to_timer(now, server)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * 29])
+            self.assertEqual(items[0][1], NEW_CLIENT_ADDR)
+            self.assertAlmostEqual(server.get_timer(), 0.5875)
+            self.assertAlmostEqual(server._path_validation_deadline(), 1.0625)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [])
+            acked_ranges = self.acked_ranges(server)[-1]
+            self.assertEqual(len(acked_ranges), 24)
+            self.assertEqual(acked_ranges[0], [7, 7])
+            self.assertEqual(acked_ranges[-1], [53, 53])
             self.assertEqual(len(self.path_challenges(server)), 1)
 
     def test_migrate_without_loss(self):

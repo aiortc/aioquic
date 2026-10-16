@@ -3567,15 +3567,8 @@ class QuicConnection:
                     break
             builder.start_packet(packet_type, crypto)
 
-            # ACK, which a server sends for 0-RTT packets before the handshake
-            # completes (RFC 9000 section 13.2.1), but not in 0-RTT packets.
-            if (
-                packet_type == QuicPacketType.ONE_RTT
-                and space.ack_at is not None
-                and space.ack_at <= now
-            ):
-                self._write_ack_frame(builder=builder, space=space, now=now)
-
+            # Path validation frames come before the ACK, which can omit its oldest
+            # ranges to fit in what is left (RFC 9000 section 13.2.3).
             if self._handshake_complete:
                 # PATH_CHALLENGE, while the active path is not validated, which only
                 # happens on a server whose client migrated (RFC 9000 section 9.3).
@@ -3593,17 +3586,27 @@ class QuicConnection:
                             2 * self._configuration.initial_rtt,
                         )
 
-                # HANDSHAKE_DONE
-                if self._handshake_done_pending:
-                    self._write_handshake_done_frame(builder=builder)
-                    self._handshake_done_pending = False
-
                 # PATH RESPONSE
                 while len(network_path.remote_challenges) > 0:
                     self._write_path_response_frame(
                         builder=builder, challenge=network_path.remote_challenges[0]
                     )
                     network_path.remote_challenges.popleft()
+
+            # ACK, which a server sends for 0-RTT packets before the handshake
+            # completes (RFC 9000 section 13.2.1), but not in 0-RTT packets.
+            if (
+                packet_type == QuicPacketType.ONE_RTT
+                and space.ack_at is not None
+                and space.ack_at <= now
+            ):
+                self._write_ack_frame(builder=builder, space=space, now=now)
+
+            if self._handshake_complete:
+                # HANDSHAKE_DONE
+                if self._handshake_done_pending:
+                    self._write_handshake_done_frame(builder=builder)
+                    self._handshake_done_pending = False
 
                 # NEW_CONNECTION_ID
                 for connection_id in self._host_cids:
