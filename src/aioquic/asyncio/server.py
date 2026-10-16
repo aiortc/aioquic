@@ -148,7 +148,10 @@ class QuicServer(asyncio.DatagramProtocol):
                             destination_cid=header.source_cid,
                             original_destination_cid=header.destination_cid,
                             retry_token=self._retry.create_token(
-                                addr, header.destination_cid, source_cid
+                                address=addr,
+                                original_destination_connection_id=header.destination_cid,
+                                retry_source_connection_id=source_cid,
+                                now=self._loop.time(),
                             ),
                         ),
                         addr,
@@ -157,10 +160,12 @@ class QuicServer(asyncio.DatagramProtocol):
                 else:
                     # validate retry token
                     try:
-                        (
-                            original_destination_connection_id,
-                            retry_source_connection_id,
-                        ) = self._retry.validate_token(addr, header.token)
+                        original_destination_connection_id = self._retry.validate_token(
+                            address=addr,
+                            destination_cid=header.destination_cid,
+                            token=header.token,
+                            now=self._loop.time(),
+                        )
                     except ValueError:
                         # Close the connection with INVALID_TOKEN, see RFC 9000
                         # section 8.1.3.
@@ -173,6 +178,7 @@ class QuicServer(asyncio.DatagramProtocol):
                             addr,
                         )
                         return
+                    retry_source_connection_id = header.destination_cid
             else:
                 original_destination_connection_id = header.destination_cid
 
