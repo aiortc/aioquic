@@ -191,7 +191,9 @@ class QuicPacketRecovery:
         if self._quic_logger is not None:
             self._log_metrics_updated()
 
-    def get_loss_detection_time(self) -> Optional[float]:
+    def get_loss_detection_time(
+        self, *, amplification_limited: bool
+    ) -> Optional[float]:
         """
         Return the time at which the loss detection timer should fire, or None
         if no timer is needed.
@@ -200,11 +202,19 @@ class QuicPacketRecovery:
         result always reflects the current state rather than being re-armed on
         specific events as in RFC 9002 appendix A.8. When the timer fires, the
         connection calls :meth:`on_loss_detection_timeout`.
+
+        If `amplification_limited` is set, the anti-amplification limit leaves no
+        room for a probe, so only the loss time is returned, not the PTO.
         """
         # loss timer
         loss_space = self._get_loss_space()
         if loss_space is not None:
             return loss_space.loss_time
+
+        # A server blocked by the anti-amplification limit does not arm the PTO
+        # until it receives a datagram (RFC 9002 section 6.2.2.1).
+        if amplification_limited:
+            return None
 
         # packet timer
         # Application data does not arm the PTO until the handshake is confirmed
