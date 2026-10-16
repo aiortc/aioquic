@@ -3,7 +3,8 @@ import json
 import os
 import time
 from collections import deque
-from typing import Any, Deque, Optional
+from collections.abc import Iterable
+from typing import Any, Optional
 
 from ..h3.events import Headers
 from .packet import (
@@ -12,7 +13,6 @@ from .packet import (
     QuicStreamFrame,
     QuicTransportParameters,
 )
-from .rangeset import RangeSet
 
 PACKET_TYPE_NAMES = {
     QuicPacketType.INITIAL: "initial",
@@ -43,7 +43,7 @@ class QuicLoggerTrace:
 
     def __init__(self, *, is_client: bool, odcid: bytes) -> None:
         self._odcid = odcid
-        self._events: Deque[dict[str, Any]] = deque()
+        self._events: deque[dict[str, Any]] = deque()
         self._vantage_point = {
             "name": "aioquic",
             "type": "client" if is_client else "server",
@@ -51,7 +51,7 @@ class QuicLoggerTrace:
 
     # QUIC
 
-    def encode_ack_frame(self, ranges: RangeSet, delay: float) -> dict:
+    def encode_ack_frame(self, ranges: Iterable[range], delay: float) -> dict:
         return {
             "ack_delay": self.encode_time(delay),
             "acked_ranges": [[x.start, x.stop - 1] for x in ranges],

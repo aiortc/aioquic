@@ -7,7 +7,7 @@ from typing import Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from ..buffer import Buffer
+from ..buffer import UINT_VAR_MAX_SIZE, Buffer, size_uint_var
 from .rangeset import RangeSet
 
 PACKET_LONG_HEADER = 0x80
@@ -631,16 +631,32 @@ def pull_ack_frame(buf: Buffer) -> tuple[RangeSet, int]:
     return rangeset, delay
 
 
-def push_ack_frame(buf: Buffer, rangeset: RangeSet, delay: int) -> int:
+def push_ack_frame(buf: Buffer, rangeset: RangeSet, delay: int, capacity: int) -> int:
+    """
+    Push an ACK frame of at most `capacity` bytes, omitting the oldest ranges
+    which may not fit (RFC 9000 section 13.2.3), and return the number of ranges
+    pushed. The capacity must allow for four variable-length integers of the
+    largest size.
+    """
     ranges = len(rangeset)
     index = ranges - 1
     r = rangeset[index]
+
+    # Only bound the number of ranges when their largest possible size does not
+    # fit. No field exceeds the largest acknowledged packet number or the ACK
+    # delay, as ranges are ordered, so each takes at most as many bytes as the
+    # larger.
+    if 2 * (ranges + 1) * UINT_VAR_MAX_SIZE > capacity:
+        field_size = size_uint_var(max(r.stop - 1, delay))
+        ranges = min(ranges, capacity // (2 * field_size) - 1)
+    oldest = index - ranges + 1
+
     buf.push_uint_var(r.stop - 1)
     buf.push_uint_var(delay)
-    buf.push_uint_var(index)
+    buf.push_uint_var(ranges - 1)
     buf.push_uint_var(r.stop - 1 - r.start)
     start = r.start
-    while index > 0:
+    while index > oldest:
         index -= 1
         r = rangeset[index]
         buf.push_uint_var(start - r.stop - 1)

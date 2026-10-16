@@ -339,6 +339,19 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
     Check how connections recover when packets are lost or delayed.
     """
 
+    def acked_ranges(self, connection: QuicConnection) -> list[list[list[int]]]:
+        """
+        Return the ranges of the ACK frames sent by `connection`.
+        """
+        log = connection.configuration.quic_logger.to_dict()
+        return [
+            frame["acked_ranges"]
+            for event in log["traces"][0]["events"]
+            if event["name"] == "transport:packet_sent"
+            for frame in event["data"]["frames"]
+            if frame["frame_type"] == "ack"
+        ]
+
     def advance_by_tick(self, now: float) -> float:
         """
         Move time forward by one network hop, checking no timer is skipped.
@@ -1908,6 +1921,52 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [])
 
+    def test_migrate_to_spoofed_address_with_many_ack_ranges(self):
+        """
+        Check the server limits the number of ACK ranges it keeps and the size of
+        its ACK frames (RFC 9000 section 13.2.3), so a client which skips packet
+        numbers cannot make it exceed the anti-amplification limit of an address
+        it cannot validate (RFC 9000 section 8).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+            self.watch_timers(server)
+
+            # Client sends PINGs, skipping a packet number after each one, which
+            # the server receives. Only the newest ACK ranges are kept.
+            for uid in range(100):
+                client.send_ping(uid)
+                items = client.datagrams_to_send(now=now)
+                client._packet_number += 1
+                server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            ack_queue = server._spaces[tls.Epoch.ONE_RTT].ack_queue
+            self.assertEqual(len(ack_queue), 64)
+            self.assertEqual(ack_queue[0], range(77, 78))
+            self.assertEqual(ack_queue[-1], range(203, 204))
+
+            # Client sends some data.
+            client.send_stream_data(0, b"01234567")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [39])
+
+            # Server receives the data from the spoofed address as its ACK timer
+            # fires, sends an ACK which omits the oldest ranges and a
+            # PATH_CHALLENGE, within the anti-amplification limit.
+            now = self.advance_to_timer(now, server)
+            server.receive_datagram(items[0][0], SPOOFED_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * 39])
+            self.assertEqual(items[0][1], SPOOFED_ADDR)
+            self.assertAlmostEqual(server.get_timer(), 0.5875)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [events.StreamDataReceived])
+            acked_ranges = self.acked_ranges(server)[-1]
+            self.assertEqual(len(acked_ranges), 21)
+            self.assertEqual(acked_ranges[0], [165, 165])
+            self.assertEqual(acked_ranges[-1], [205, 205])
+            self.assertEqual(len(self.path_challenges(server)), 1)
+
     def test_migrate_with_lost_path_challenge(self):
         """
         Check the server sends a new PATH_CHALLENGE when one is lost.
@@ -1986,6 +2045,48 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertAlmostEqual(server.get_timer(), 60.7375)  # idle timeout
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [])
+
+    def test_migrate_with_small_datagram_and_ack_due(self):
+        """
+        Check the server only reserves room for the first ACK range, so it can
+        send an ACK in a datagram with little room left.
+
+        The server's ACK timer fires as it receives a small datagram from an
+        address it cannot validate. Its anti-amplification limit leaves room for
+        an ACK and a PATH_CHALLENGE (RFC 9000 section 8).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+            self.watch_timers(server)
+
+            # Client sends some data.
+            client.send_stream_data(0, b"01234567")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [39])
+
+            # Server receives the data, arms its ACK timer.
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertAlmostEqual(server.get_timer(), 0.35)
+            self.assertEvents(server, [events.StreamDataReceived])
+
+            # Client sends a PING.
+            client.send_ping(1)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [29])
+
+            # Server receives the PING from a new address as its ACK timer fires,
+            # sends an ACK and a PATH_CHALLENGE.
+            now = self.advance_to_timer(now, server)
+            server.receive_datagram(items[0][0], SPOOFED_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * 29])
+            self.assertEqual(items[0][1], SPOOFED_ADDR)
+            self.assertAlmostEqual(server.get_timer(), 0.5875)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [])
+            self.assertEqual(self.acked_ranges(server)[-1], [[4, 6]])
+            self.assertEqual(len(self.path_challenges(server)), 1)
 
     def test_migrate_without_loss(self):
         """

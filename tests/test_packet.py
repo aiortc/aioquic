@@ -19,6 +19,7 @@ from aioquic.quic.packet import (
     push_quic_preferred_address,
     push_quic_transport_parameters,
 )
+from aioquic.quic.rangeset import RangeSet
 
 from .test_crypto_v1 import LONG_CLIENT_ENCRYPTED_PACKET as CLIENT_INITIAL_V1
 from .test_crypto_v1 import LONG_SERVER_ENCRYPTED_PACKET as SERVER_INITIAL_V1
@@ -499,8 +500,38 @@ class FrameTest(TestCase):
 
         # serialize
         buf = Buffer(capacity=len(data))
-        packet.push_ack_frame(buf, rangeset, delay)
+        packet.push_ack_frame(buf, rangeset, delay, buf.capacity)
         self.assertEqual(buf.data, data)
+
+    def test_ack_frame_truncated(self):
+        small = RangeSet([range(0, 1), range(2, 3), range(4, 5)])
+        large = RangeSet([range(996, 997), range(998, 999), range(1000, 1001)])
+        for rangeset, capacity, ranges, data in [
+            # The largest possible encoding fits, all ranges are pushed.
+            (small, 64, 3, b"\x04\x02\x02\x00\x00\x00\x00\x00"),
+            # Fields take at most one byte, like the largest acknowledged packet
+            # number, and the oldest ranges which do not fit are omitted.
+            (small, 8, 3, b"\x04\x02\x02\x00\x00\x00\x00\x00"),
+            (small, 7, 2, b"\x04\x02\x01\x00\x00\x00"),
+            (small, 5, 1, b"\x04\x02\x00\x00"),
+            # Fields take at most two bytes, like the largest acknowledged packet
+            # number, so fewer ranges may be pushed than would fit.
+            (large, 16, 3, b"\x43\xe8\x02\x02\x00\x00\x00\x00\x00"),
+            (large, 15, 2, b"\x43\xe8\x02\x01\x00\x00\x00"),
+            (large, 9, 1, b"\x43\xe8\x02\x00\x00"),
+        ]:
+            with self.subTest(rangeset=rangeset, capacity=capacity):
+                buf = Buffer(capacity=capacity)
+                self.assertEqual(
+                    packet.push_ack_frame(buf, rangeset, 2, capacity), ranges
+                )
+                self.assertEqual(buf.data, data)
+
+                # The newest ranges are pushed.
+                buf = Buffer(data=data)
+                self.assertEqual(
+                    packet.pull_ack_frame(buf), (RangeSet(rangeset[-ranges:]), 2)
+                )
 
     def test_ack_frame_with_negative_first_range(self):
         # Largest acknowledged 0, first ACK range 1.
@@ -531,7 +562,7 @@ class FrameTest(TestCase):
 
         # serialize
         buf = Buffer(capacity=len(data))
-        packet.push_ack_frame(buf, rangeset, delay)
+        packet.push_ack_frame(buf, rangeset, delay, buf.capacity)
         self.assertEqual(buf.data, data)
 
     def test_ack_frame_with_one_range_2(self):
@@ -545,7 +576,7 @@ class FrameTest(TestCase):
 
         # serialize
         buf = Buffer(capacity=len(data))
-        packet.push_ack_frame(buf, rangeset, delay)
+        packet.push_ack_frame(buf, rangeset, delay, buf.capacity)
         self.assertEqual(buf.data, data)
 
     def test_ack_frame_with_one_range_3(self):
@@ -559,7 +590,7 @@ class FrameTest(TestCase):
 
         # serialize
         buf = Buffer(capacity=len(data))
-        packet.push_ack_frame(buf, rangeset, delay)
+        packet.push_ack_frame(buf, rangeset, delay, buf.capacity)
         self.assertEqual(buf.data, data)
 
     def test_ack_frame_with_two_ranges(self):
@@ -573,5 +604,5 @@ class FrameTest(TestCase):
 
         # serialize
         buf = Buffer(capacity=len(data))
-        packet.push_ack_frame(buf, rangeset, delay)
+        packet.push_ack_frame(buf, rangeset, delay, buf.capacity)
         self.assertEqual(buf.data, data)
