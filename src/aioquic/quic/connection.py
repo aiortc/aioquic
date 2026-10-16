@@ -54,7 +54,7 @@ from .packet import (
     push_quic_transport_parameters,
 )
 from .packet_builder import QuicDeliveryState, QuicPacketBuilder, QuicPacketBuilderStop
-from .recovery import QuicPacketRecovery, QuicPacketSpace
+from .recovery import MAX_ACK_RANGES, QuicPacketRecovery, QuicPacketSpace
 from .stream import FinalSizeError, QuicStream, StreamFinishedError
 
 logger = logging.getLogger("quic")
@@ -93,7 +93,7 @@ MAX_PENDING_CRYPTO = 524288  # in bytes
 NetworkAddress = Any
 
 # frame sizes
-ACK_FRAME_CAPACITY = 64  # FIXME: this is arbitrary!
+ACK_FRAME_CAPACITY = 1 + 4 * UINT_VAR_MAX_SIZE  # + ACK ranges
 APPLICATION_CLOSE_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE  # + reason length
 CONNECTION_LIMIT_FRAME_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 HANDSHAKE_DONE_FRAME_CAPACITY = 1
@@ -1160,6 +1160,13 @@ class QuicConnection:
                     space.largest_received_time = now
                 space.ack_queue.add(packet_number)
                 space.received_packets.add(packet_number)
+
+                # Limit the number of ACK ranges by dropping the oldest one, whose
+                # packets are all rejected as duplicates from now on (RFC 9000
+                # section 13.2.3).
+                if len(space.ack_queue) > MAX_ACK_RANGES:
+                    space.ack_queue.shift()
+
                 if is_ack_eliciting and space.ack_at is None:
                     space.ack_at = now + self._ack_delay
 
@@ -3782,14 +3789,16 @@ class QuicConnection:
             handler=self._on_ack_delivery,
             handler_args=(space, space.largest_received_packet),
         )
-        ranges = push_ack_frame(buf, space.ack_queue, ack_delay_encoded)
+        ranges = push_ack_frame(
+            buf, space.ack_queue, ack_delay_encoded, builder.remaining_buffer_space
+        )
         space.ack_at = None
 
         # log frame
         if self._quic_logger is not None:
             builder.quic_logger_frames.append(
                 self._quic_logger.encode_ack_frame(
-                    ranges=space.ack_queue, delay=ack_delay
+                    ranges=list(space.ack_queue)[-ranges:], delay=ack_delay
                 )
             )
 

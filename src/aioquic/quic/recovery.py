@@ -17,6 +17,12 @@ K_MICRO_SECOND = 0.000001
 K_PERSISTENT_CONGESTION_THRESHOLD = 3
 K_SECOND = 1.0
 
+# The number of ACK ranges kept. Duplicate detection accepts packets fewer than
+# twice this many below the largest received, and each range plus the gap above
+# it spans at least two, so the range dropped never holds a packet which was
+# just accepted (RFC 9000 section 13.2.1).
+MAX_ACK_RANGES = 64
+
 
 class QuicPacketNumberWindow:
     """
@@ -27,10 +33,10 @@ class QuicPacketNumberWindow:
     already been received.
     """
 
-    def __init__(self, size: int = 128) -> None:
+    def __init__(self) -> None:
         self._lower = 0
         self._received: set[int] = set()
-        self._size = size
+        self._size = 2 * MAX_ACK_RANGES
 
     def add(self, packet_number: int) -> None:
         if packet_number < self._lower:

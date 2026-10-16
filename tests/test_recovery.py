@@ -7,6 +7,7 @@ from aioquic.quic.packet import QuicPacketType
 from aioquic.quic.packet_builder import QuicDeliveryState, QuicSentPacket
 from aioquic.quic.rangeset import RangeSet
 from aioquic.quic.recovery import (
+    MAX_ACK_RANGES,
     QuicPacketNumberWindow,
     QuicPacketPacer,
     QuicPacketRecovery,
@@ -80,13 +81,13 @@ def take_rtt_sample(recovery: QuicPacketRecovery, space: QuicPacketSpace) -> Non
 
 class QuicPacketNumberWindowTest(TestCase):
     def test_empty(self):
-        window = QuicPacketNumberWindow(size=8)
+        window = QuicPacketNumberWindow()
         self.assertNotIn(0, window)
         self.assertNotIn(7, window)
         self.assertNotIn(100, window)
 
     def test_add(self):
-        window = QuicPacketNumberWindow(size=8)
+        window = QuicPacketNumberWindow()
         window.add(0)
         window.add(2)
         self.assertIn(0, window)
@@ -95,10 +96,11 @@ class QuicPacketNumberWindowTest(TestCase):
         self.assertNotIn(3, window)
 
     def test_slide(self):
-        window = QuicPacketNumberWindow(size=8)
+        window = QuicPacketNumberWindow()
+        size = 2 * MAX_ACK_RANGES
         window.add(1)
         window.add(5)
-        window.add(10)
+        window.add(size + 2)
 
         # packets below the window are considered received
         self.assertIn(0, window)
@@ -109,20 +111,21 @@ class QuicPacketNumberWindowTest(TestCase):
         self.assertNotIn(3, window)
         self.assertNotIn(4, window)
         self.assertIn(5, window)
-        self.assertNotIn(9, window)
-        self.assertIn(10, window)
-        self.assertNotIn(11, window)
+        self.assertNotIn(size + 1, window)
+        self.assertIn(size + 2, window)
+        self.assertNotIn(size + 3, window)
 
         # adding a packet below the window is a no-op
         window.add(0)
         self.assertNotIn(3, window)
 
     def test_slide_beyond_size(self):
-        window = QuicPacketNumberWindow(size=8)
+        window = QuicPacketNumberWindow()
+        size = 2 * MAX_ACK_RANGES
         window.add(3)
         window.add(1000)
-        self.assertIn(992, window)
-        self.assertNotIn(993, window)
+        self.assertIn(1000 - size, window)
+        self.assertNotIn(1000 - size + 1, window)
         self.assertNotIn(999, window)
         self.assertIn(1000, window)
         self.assertNotIn(1001, window)
