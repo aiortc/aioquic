@@ -197,6 +197,31 @@ class QuicPacketRecoveryTest(TestCase):
     def test_discard_space(self):
         self.recovery.discard_space(self.INITIAL_SPACE)
 
+    def test_get_loss_detection_time_amplification_limited(self):
+        take_rtt_sample(self.recovery, self.INITIAL_SPACE)
+        self.recovery.on_packet_sent(
+            packet=ack_eliciting_packet(
+                epoch=tls.Epoch.HANDSHAKE,
+                packet_type=QuicPacketType.HANDSHAKE,
+                sent_time=1.0,
+            ),
+            space=self.HANDSHAKE_SPACE,
+        )
+        self.assertAlmostEqual(
+            self.recovery.get_loss_detection_time(amplification_limited=False), 1.3
+        )
+
+        # A server blocked by the anti-amplification limit does not arm the PTO.
+        self.assertIsNone(
+            self.recovery.get_loss_detection_time(amplification_limited=True)
+        )
+
+        # It still detects losses based on time (RFC 9002 appendix A.8).
+        self.HANDSHAKE_SPACE.loss_time = 1.2
+        self.assertAlmostEqual(
+            self.recovery.get_loss_detection_time(amplification_limited=True), 1.2
+        )
+
     def test_get_loss_detection_time_application_data(self):
         take_rtt_sample(self.recovery, self.INITIAL_SPACE)
 
@@ -205,7 +230,9 @@ class QuicPacketRecoveryTest(TestCase):
             packet=ack_eliciting_packet(sent_time=1.0),
             space=self.ONE_RTT_SPACE,
         )
-        self.assertIsNone(self.recovery.get_loss_detection_time())
+        self.assertIsNone(
+            self.recovery.get_loss_detection_time(amplification_limited=False)
+        )
 
         # The PTO is armed once the handshake is confirmed, including max_ack_delay.
         self.recovery.handshake_confirmed = True
@@ -213,7 +240,9 @@ class QuicPacketRecoveryTest(TestCase):
             packet=ack_eliciting_packet(sent_time=2.0),
             space=self.ONE_RTT_SPACE,
         )
-        self.assertAlmostEqual(self.recovery.get_loss_detection_time(), 2.325)
+        self.assertAlmostEqual(
+            self.recovery.get_loss_detection_time(amplification_limited=False), 2.325
+        )
 
     def test_get_loss_detection_time_handshake(self):
         take_rtt_sample(self.recovery, self.INITIAL_SPACE)
@@ -227,10 +256,14 @@ class QuicPacketRecoveryTest(TestCase):
             ),
             space=self.HANDSHAKE_SPACE,
         )
-        self.assertAlmostEqual(self.recovery.get_loss_detection_time(), 1.3)
+        self.assertAlmostEqual(
+            self.recovery.get_loss_detection_time(amplification_limited=False), 1.3
+        )
 
     def test_get_loss_detection_time_nothing_in_flight(self):
-        self.assertIsNone(self.recovery.get_loss_detection_time())
+        self.assertIsNone(
+            self.recovery.get_loss_detection_time(amplification_limited=False)
+        )
 
     def test_get_loss_detection_time_without_address_validation(self):
         self.recovery.peer_completed_address_validation = False
@@ -245,7 +278,9 @@ class QuicPacketRecoveryTest(TestCase):
         self.recovery.discard_space(self.INITIAL_SPACE)
 
         # The client keeps the PTO armed with nothing in flight.
-        self.assertAlmostEqual(self.recovery.get_loss_detection_time(), 0.2)
+        self.assertAlmostEqual(
+            self.recovery.get_loss_detection_time(amplification_limited=False), 0.2
+        )
 
     def test_on_ack_received_ack_eliciting(self):
         packet = QuicSentPacket(
