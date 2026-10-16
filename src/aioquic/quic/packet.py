@@ -624,6 +624,10 @@ def pull_ack_frame(buf: Buffer) -> tuple[RangeSet, int]:
         ack_count = buf.pull_uint_var()
         rangeset.add(end - ack_count, end + 1)
         end -= ack_count
+
+    # Packet numbers decrease, so checking the smallest one covers them all.
+    if end < 0:
+        raise ValueError("ACK range contains a negative packet number")
     return rangeset, delay
 
 
