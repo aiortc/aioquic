@@ -53,7 +53,12 @@ from .packet import (
     push_ack_frame,
     push_quic_transport_parameters,
 )
-from .packet_builder import QuicDeliveryState, QuicPacketBuilder, QuicPacketBuilderStop
+from .packet_builder import (
+    PACKET_NUMBER_SEND_SIZE,
+    QuicDeliveryState,
+    QuicPacketBuilder,
+    QuicPacketBuilderStop,
+)
 from .recovery import MAX_ACK_RANGES, QuicPacketRecovery, QuicPacketSpace
 from .stream import FinalSizeError, QuicStream, StreamFinishedError
 
@@ -668,13 +673,21 @@ class QuicConnection:
         """
         timer_at = self._close_at
         if self._state not in END_STATES:
+            if self._network_paths and not self._network_paths[0].is_validated:
+                ack_blocked, probe_blocked = self._amplification_blocked_timers()
+            else:
+                ack_blocked = probe_blocked = False
+
             # ack timer
-            for space in self._loss.spaces:
-                if space.ack_at is not None and space.ack_at < timer_at:
-                    timer_at = space.ack_at
+            if not ack_blocked:
+                for space in self._loss.spaces:
+                    if space.ack_at is not None and space.ack_at < timer_at:
+                        timer_at = space.ack_at
 
             # loss detection timer
-            self._loss_at = self._loss.get_loss_detection_time()
+            self._loss_at = self._loss.get_loss_detection_time(
+                amplification_limited=probe_blocked
+            )
             if self._loss_at is not None and self._loss_at < timer_at:
                 timer_at = self._loss_at
 
@@ -1357,6 +1370,42 @@ class QuicConnection:
 
         # Notify the application.
         self._events.append(events.ProtocolNegotiated(alpn_protocol=alpn_protocol))
+
+    def _amplification_blocked_timers(self) -> tuple[bool, bool]:
+        """
+        Return whether the anti-amplification limit leaves no room for an ACK,
+        and whether it leaves no room for a probe, so that their timers are not
+        armed until a datagram is received (RFC 9002 section 6.2.2.1).
+
+        The ACK is sized as a 1-RTT one, as INITIAL and HANDSHAKE ACKs never wait
+        for room: INITIAL packets arrive in datagrams of at least 1200 bytes, which
+        leave room for their ACK, and HANDSHAKE packets validate the client's
+        address.
+        """
+        packet_overhead = (
+            1
+            + len(self._peer_cid.cid)
+            + PACKET_NUMBER_SEND_SIZE
+            + self._cryptos[tls.Epoch.ONE_RTT].aead_tag_size
+        )
+
+        if self._handshake_complete:
+            # Only a path the client migrated to is not validated. A probe on it may
+            # carry a new PATH_CHALLENGE, or older data after any due ACK.
+            probe_size = packet_overhead + PATH_CHALLENGE_FRAME_CAPACITY
+            if self._spaces[tls.Epoch.ONE_RTT].ack_at is not None:
+                probe_size += ACK_FRAME_CAPACITY
+        else:
+            # A probe may carry INITIAL data, which needs a full datagram (RFC 9000
+            # section 14.1), and the client keeps sending until its address is
+            # validated (RFC 9002 section 6.2.2.1).
+            probe_size = SMALLEST_MAX_DATAGRAM_SIZE
+
+        network_path = self._network_paths[0]
+        return (
+            not network_path.can_send(packet_overhead + ACK_FRAME_CAPACITY),
+            not network_path.can_send(probe_size),
+        )
 
     def _assert_stream_can_receive(self, frame_type: int, stream_id: int) -> None:
         """
@@ -2673,7 +2722,7 @@ class QuicConnection:
             not self._handshake_confirmed
             and self._cryptos[tls.Epoch.HANDSHAKE].send.is_valid()
             and not self._crypto_streams[tls.Epoch.HANDSHAKE].sender.buffer_is_empty
-            and self._loss.get_loss_detection_time() is None
+            and self._loss.get_loss_detection_time(amplification_limited=False) is None
         )
 
     def _log_key_retired(self, key_type: str, trigger: str) -> None:

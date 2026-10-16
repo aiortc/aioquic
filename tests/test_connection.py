@@ -455,6 +455,68 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
         client._packet_number = builder.packet_number
         return datagrams[0]
 
+    def test_connect_with_0rtt_and_amplification_limited_response(self):
+        """
+        Check a server whose anti-amplification limit leaves no room for an ACK
+        or a probe does not arm its ACK timer or its PTO until it receives a
+        datagram (RFC 9000 section 8.1 and RFC 9002 section 6.2.2.1).
+
+        The server answers a 0-RTT request with 0.5-RTT data until it has sent
+        three times the data it received, before its ACK delay expires. The ACK
+        remains pending, and is sent once a datagram raises the limit, even
+        though its packets are discarded (RFC 9002 appendix A.6).
+        """
+        client_ticket, ticket_store = self.create_session_ticket()
+
+        def patch(server):
+            server._ack_delay = K_GRANULARITY
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            handshake=False,
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+            server_patch=patch,
+        ) as (client, server):
+            self.watch_timers(client, server)
+
+            # Client sends INITIAL + 0-RTT request.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, b"GET /", end_stream=True)
+            client_items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(client_items), [1200])
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 1])
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL + 0-RTT request, sends INITIAL + HANDSHAKE
+            # and 0.5-RTT data until the anti-amplification limit, which leaves no
+            # room for the ACK or a probe, so only the idle timeout remains.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(client_items[0][0], CLIENT_ADDR, now=now)
+            server.send_stream_data(stream_id, bytes(100000), end_stream=True)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200, 1200, 1200])
+            self.assertAlmostEqual(server.get_timer(), 60.05)
+            self.assertSentPackets(server, [1, 1, 3])
+            self.assertEvents(
+                server, [events.ProtocolNegotiated, events.StreamDataReceived]
+            )
+            self.assertEqual(self.acked_ranges(server), [[[0, 0]]])
+
+            # Server receives a duplicate of the client's datagram, whose packets
+            # it discards, but which raises its anti-amplification limit, so it
+            # sends the pending ACK and more 0.5-RTT data up to the limit again.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(client_items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200, 1200, 1200])
+            self.assertAlmostEqual(server.get_timer(), 60.05)
+            self.assertSentPackets(server, [1, 1, 6])
+            self.assertEvents(server, [])
+            self.assertEqual(self.acked_ranges(server), [[[0, 0]], [[1, 1]]])
+
     def test_connect_with_0rtt_and_lost_client_first_flight(self):
         """
         Check the client pads datagrams carrying INITIAL packets to 1200 bytes
@@ -995,7 +1057,8 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
 
             # Server's PTO fires, it retransmits INITIAL + HANDSHAKE but its
             # anti-amplification budget only allows one datagram, which mostly
-            # carries data the client already has.
+            # carries data the client already has. Its PTO is not armed again, so
+            # only the idle timeout remains.
             now = self.advance_to_timer(now, server)
             with self.assertLogs("quic", level="DEBUG") as cm:
                 server.handle_timer(now=now)
@@ -1005,7 +1068,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             )
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200])
-            self.assertAlmostEqual(server.get_timer(), 0.65)
+            self.assertAlmostEqual(server.get_timer(), 60.05)
             self.assertSentPackets(server, [1, 1, 0])
             self.assertEvents(server, [])
 
@@ -1093,13 +1156,14 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertEvents(client, [])
 
             # Server receives INITIAL, sends INITIAL + HANDSHAKE and 1-RTT data, up
-            # to the anti-amplification limit.
+            # to the anti-amplification limit, which leaves no room for a probe, so
+            # its PTO is not armed.
             now = self.advance_by_tick(now)
             server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
             server.send_stream_data(3, bytes(20000))
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200, 1200, 1155, 45])
-            self.assertAlmostEqual(server.get_timer(), 0.25)
+            self.assertAlmostEqual(server.get_timer(), 60.05)  # idle timeout
             self.assertSentPackets(server, [1, 3, 1])
             self.assertEvents(server, [events.ProtocolNegotiated])
 
@@ -1417,9 +1481,11 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
         9000 section 8.1).
 
         The server's datagrams and the client's retransmitted INITIALs are lost,
-        so the server's PTO fires twice having only received the client's first
-        INITIAL. The second time, there is no room left for even a PING. The
-        handshake completes once the client's next INITIAL gets through.
+        so the server's PTO fires having only received the client's first
+        INITIAL. Less than a full datagram of budget is then left, so the server
+        does not arm its PTO until it receives a datagram (RFC 9002 section
+        6.2.2.1). The handshake completes once the client's next INITIAL gets
+        through.
         """
         with client_and_server(handshake=False) as (client, server):
             self.watch_timers(client, server)
@@ -1449,12 +1515,13 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertAlmostEqual(client.get_timer(), 0.6)
 
             # Server's PTO fires, it only has enough anti-amplification budget left
-            # to retransmit one datagram, which is lost.
+            # to retransmit one datagram, which is lost. Its PTO is not armed
+            # again, so only the idle timeout remains.
             now = self.advance_to_timer(now, server)
             server.handle_timer(now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200])
-            self.assertAlmostEqual(server.get_timer(), 0.65)
+            self.assertAlmostEqual(server.get_timer(), 60.05)
             self.assertSentPackets(server, [1, 1, 0])
             self.assertEqual(network_path.bytes_received, 1200)
             self.assertEqual(network_path.bytes_sent, 3562)
@@ -1465,16 +1532,6 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             items = client.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200])
             self.assertAlmostEqual(client.get_timer(), 1.4)
-
-            # Server's PTO fires, but its anti-amplification budget does not even
-            # allow a PING, so it sends nothing and only the idle timeout remains.
-            now = self.advance_to_timer(now, server)
-            server.handle_timer(now=now)
-            items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [])
-            self.assertAlmostEqual(server.get_timer(), 60.05)
-            self.assertSentPackets(server, [0, 0, 0])
-            self.assertEqual(network_path.bytes_sent, 3562)
 
             # Client's PTO fires, it retransmits INITIAL.
             now = self.advance_to_timer(now, client)
@@ -1489,7 +1546,7 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200, 1164])
-            self.assertAlmostEqual(server.get_timer(), 2.25)
+            self.assertAlmostEqual(server.get_timer(), 1.85)
             self.assertSentPackets(server, [1, 2, 0])
             self.assertEqual(network_path.bytes_received, 2400)
 
@@ -1862,6 +1919,112 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertTrue(server._network_paths[0].is_validated)
             self.assertIsNone(server._path_validation_deadline())
 
+    def test_migrate_amplification_limit_ack_size(self):
+        """
+        Check the server only arms its ACK timer on a path the client migrated to
+        if the anti-amplification limit leaves room for an ACK: 1 byte of header,
+        an 8-byte connection ID, a 2-byte packet number, 33 bytes reserved for
+        the ACK frame and a 16-byte AEAD tag. A probe would carry the ACK and a
+        new PATH_CHALLENGE, so it does not arm the PTO either.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Client changes address and sends some data.
+            client.send_stream_data(0, b"01234567")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [39])
+
+            # Server receives the data, sends a PATH_CHALLENGE and an ACK padded up
+            # to the anti-amplification limit.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * 39])
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
+
+            # Client sends a PING.
+            client.send_ping(1)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [29])
+
+            # Server receives the PING without the budget it brings, so it cannot
+            # send its ACK.
+            network_path = server._network_paths[0]
+            network_path.bytes_sent += 3 * 29
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [])
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
+
+            # 59 bytes of budget still leave no room for the ACK or a probe.
+            network_path.bytes_sent -= 59
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
+
+            # 60 bytes do for the ACK, so the ACK timer is armed.
+            network_path.bytes_sent -= 1
+            self.assertAlmostEqual(server.get_timer(), 0.45)
+
+            # Server's ACK timer fires, it sends the ACK.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertEqual(items[0][1], NEW_CLIENT_ADDR)
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
+            self.assertEqual(self.acked_ranges(server)[-1], [[4, 6]])
+
+    def test_migrate_amplification_limit_probe_size(self):
+        """
+        Check the server only arms its PTO on a path the client migrated to if
+        the anti-amplification limit leaves room for a probe (RFC 9002 section
+        6.2.2.1), which starts with a new PATH_CHALLENGE: 1 byte of header, an
+        8-byte connection ID, a 2-byte packet number, a 9-byte PATH_CHALLENGE
+        frame and a 16-byte AEAD tag.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Client changes address and sends some data.
+            client.send_stream_data(0, b"01234567")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [39])
+
+            # Server receives the data, sends a PATH_CHALLENGE padded up to the
+            # anti-amplification limit, which leaves no room for a probe.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [3 * 39])
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
+
+            # Client receives PATH_CHALLENGE, sends PATH_RESPONSE which is lost.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.6875)
+
+            # 35 bytes of budget still leave no room for a probe.
+            network_path = server._network_paths[0]
+            network_path.bytes_sent -= 35
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
+
+            # 36 bytes do, so the PTO is armed.
+            network_path.bytes_sent -= 1
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+
+            # Server's PTO fires, it sends a new PATH_CHALLENGE which fits exactly.
+            now = self.advance_to_timer(now, server)
+            server.handle_timer(now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [36])
+            self.assertEqual(items[0][1], NEW_CLIENT_ADDR)
+            self.assertEqual(len(self.path_challenges(server)), 2)
+
     def test_migrate_to_spoofed_address(self):
         """
         Check the server sends no more than three times the data received from
@@ -1869,10 +2032,10 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
 
         An attacker rewrites the source address of a client packet and drops the
         client's subsequent packets. The server's PATH_CHALLENGE exhausts the
-        anti-amplification limit of the spoofed address, so its PTO cannot send
-        another one. Validation is abandoned after three times the PTO (RFC 9000
-        section 8.2.4), and the server reverts to the last validated address
-        (RFC 9000 section 9.3.2).
+        anti-amplification limit of the spoofed address, so its PTO is not armed
+        (RFC 9002 section 6.2.2.1). Validation is abandoned after three times the
+        PTO (RFC 9000 section 8.2.4), and the server reverts to the last validated
+        address (RFC 9000 section 9.3.2), where its expired PTO fires.
         """
         with client_and_server(handshake=False) as (client, server):
             self.watch_timers(client, server)
@@ -1885,35 +2048,34 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertEqual(datagram_sizes(items), [39])
 
             # Server receives the data from the spoofed address, sends a
-            # PATH_CHALLENGE padded up to the anti-amplification limit.
+            # PATH_CHALLENGE padded up to the anti-amplification limit, which
+            # leaves no room for a probe, so its PTO is not armed.
             now = self.advance_by_tick(now)
             server.receive_datagram(items[0][0], SPOOFED_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [3 * 39])
             self.assertEqual(items[0][1], SPOOFED_ADDR)
-            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
             self.assertAlmostEqual(server._path_validation_deadline(), 1.1125)
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [events.StreamDataReceived])
             self.assertEqual(len(self.path_challenges(server)), 1)
 
-            # Server's PTO fires, it cannot send anything to the spoofed address.
-            now = self.advance_to_timer(now, server)
-            server.handle_timer(now=now)
-            items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [])
-            self.assertAlmostEqual(server.get_timer(), 1.1125)
-            self.assertSentPackets(server, [0, 0, 0])
-            self.assertEvents(server, [])
-            self.assertEqual(len(self.path_challenges(server)), 1)
-
             # Server abandons path validation and reverts to the client's
-            # address, where it sends its probe.
+            # address, where its PTO has expired.
             now = self.advance_to_timer(now, server)
             server.handle_timer(now=now)
             self.assertEqual(
                 [path.addr for path in server._network_paths], [CLIENT_ADDR]
             )
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [])
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [])
+
+            # Server's PTO fires, it sends its probe to the client's address.
+            server.handle_timer(now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [29])
             self.assertEqual(items[0][1], CLIENT_ADDR)
@@ -1951,14 +2113,15 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertEqual(datagram_sizes(items), [39])
 
             # Server receives the data from the spoofed address as its ACK timer
-            # fires, sends an ACK which omits the oldest ranges and a
-            # PATH_CHALLENGE, within the anti-amplification limit.
+            # fires, sends a PATH_CHALLENGE and an ACK which omits the oldest
+            # ranges, up to the anti-amplification limit, which leaves no room for
+            # a probe, so its PTO is not armed.
             now = self.advance_to_timer(now, server)
             server.receive_datagram(items[0][0], SPOOFED_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [3 * 39])
             self.assertEqual(items[0][1], SPOOFED_ADDR)
-            self.assertAlmostEqual(server.get_timer(), 0.5875)
+            self.assertAlmostEqual(server.get_timer(), 1.0625)
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [events.StreamDataReceived])
             acked_ranges = self.acked_ranges(server)[-1]
@@ -1984,12 +2147,13 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             items = client.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [39])
 
-            # Server receives the data, sends a PATH_CHALLENGE which is lost.
+            # Server receives the data, sends a PATH_CHALLENGE which is lost. It
+            # exhausts the anti-amplification limit, so the PTO is not armed.
             now = self.advance_by_tick(now)
             server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [3 * 39])
-            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
             self.assertAlmostEqual(server._path_validation_deadline(), 1.1125)
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [events.StreamDataReceived])
@@ -2076,13 +2240,14 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertEqual(datagram_sizes(items), [29])
 
             # Server receives the PING from a new address as its ACK timer fires,
-            # sends an ACK and a PATH_CHALLENGE.
+            # sends a PATH_CHALLENGE and an ACK, up to the anti-amplification
+            # limit, which leaves no room for a probe, so its PTO is not armed.
             now = self.advance_to_timer(now, server)
             server.receive_datagram(items[0][0], SPOOFED_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [3 * 29])
             self.assertEqual(items[0][1], SPOOFED_ADDR)
-            self.assertAlmostEqual(server.get_timer(), 0.5875)
+            self.assertAlmostEqual(server.get_timer(), 1.0625)
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [])
             self.assertEqual(self.acked_ranges(server)[-1], [[4, 6]])
@@ -2122,13 +2287,14 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
 
             # Server receives the PING as its ACK timer fires, sends a
             # PATH_CHALLENGE and an ACK which omits the oldest range, padded up to
-            # the anti-amplification limit.
+            # the anti-amplification limit, which leaves no room for a probe, so its
+            # PTO is not armed.
             now = self.advance_to_timer(now, server)
             server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [3 * 29])
             self.assertEqual(items[0][1], NEW_CLIENT_ADDR)
-            self.assertAlmostEqual(server.get_timer(), 0.5875)
+            self.assertAlmostEqual(server.get_timer(), 1.0625)
             self.assertAlmostEqual(server._path_validation_deadline(), 1.0625)
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [])
@@ -2155,14 +2321,15 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertEqual(datagram_sizes(items), [39])
 
             # Server receives the data, sends a PATH_CHALLENGE padded up to the
-            # anti-amplification limit.
+            # anti-amplification limit, which leaves no room for a probe, so its
+            # PTO is not armed.
             now = self.advance_by_tick(now)
             server.receive_datagram(items[0][0], NEW_CLIENT_ADDR, now=now)
             self.assertEqual(server.get_peer_address(), NEW_CLIENT_ADDR)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [3 * 39])
             self.assertEqual(items[0][1], NEW_CLIENT_ADDR)
-            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertAlmostEqual(server.get_timer(), 1.1125)
             self.assertAlmostEqual(server._path_validation_deadline(), 1.1125)
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [events.StreamDataReceived])
@@ -2219,13 +2386,6 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
 
             # Server has no state about its previous address.
             server._network_paths.pop(1)
-
-            # Server's PTO fires, it cannot send anything to the new address.
-            now = self.advance_to_timer(now, server)
-            server.handle_timer(now=now)
-            items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [])
-            self.assertAlmostEqual(server.get_timer(), 1.1125)
 
             # Server abandons path validation and closes the connection without
             # sending anything.
