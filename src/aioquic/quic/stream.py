@@ -60,8 +60,11 @@ class QuicStreamReceiver:
             and not self.is_finished
             and self._buffer_start >= self._reliable_size
         ):
-            # We are done receiving.
+            # We are done receiving, and data past the reliable size will never
+            # be delivered.
             self.is_finished = True
+            self._buffer = bytearray()
+            self._ranges = RangeSet()
             assert self._reset_error_code is not None
             return events.StreamReset(
                 error_code=self._reset_error_code, stream_id=self._stream_id
@@ -507,6 +510,7 @@ class QuicStream:
         self.is_blocked = False
         self.max_stream_data_local = max_stream_data_local
         self.max_stream_data_local_sent = max_stream_data_local
+        self.max_stream_data_local_window = max_stream_data_local
         self.max_stream_data_remote = max_stream_data_remote
         self.receiver = QuicStreamReceiver(stream_id=stream_id, readable=readable)
         self.sender = QuicStreamSender(stream_id=stream_id, writable=writable)

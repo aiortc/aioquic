@@ -79,6 +79,8 @@ MAX_EARLY_DATA = 0xFFFFFFFF
 MAX_REMOTE_CHALLENGES = 32
 MAX_LOCAL_CHALLENGES = 5
 MAX_NETWORK_PATHS = 8
+# Flow control windows grow up to this multiple of their configured size.
+MAX_WINDOW_GROWTH = 16
 SECRETS_LABELS = [
     [
         None,
@@ -404,6 +406,8 @@ class QuicConnection:
             name="max_data",
             value=configuration.max_data,
         )
+        self._local_max_data_consumed = 0
+        self._local_max_data_window = configuration.max_data
         self._local_max_stream_data_bidi_local = configuration.max_stream_data
         self._local_max_stream_data_bidi_remote = configuration.max_stream_data
         self._local_max_stream_data_uni = configuration.max_stream_data
@@ -2790,7 +2794,7 @@ class QuicConnection:
                 reason_phrase=str(exc),
             )
         if event is not None:
-            self._events.append(event)
+            self._report_stream_reset(event, stream)
         self._local_max_data.used += newly_received
 
     def _handle_retire_connection_id_frame(
@@ -2928,10 +2932,11 @@ class QuicConnection:
             )
         if event is not None:
             self._events.append(event)
+            self._local_max_data_consumed += len(event.data)
 
         pending_reset_event = stream.receiver.get_pending_reset_event()
         if pending_reset_event is not None:
-            self._events.append(pending_reset_event)
+            self._report_stream_reset(pending_reset_event, stream)
 
         self._local_max_data.used += newly_received
 
@@ -3388,6 +3393,19 @@ class QuicConnection:
                 )
             )
             self._host_cid_seq += 1
+
+    def _report_stream_reset(
+        self, event: events.StreamReset, stream: QuicStream
+    ) -> None:
+        """
+        Report a reset which finished the receiving part of a stream.
+        """
+        self._events.append(event)
+        # Data between the delivered offset and the final size will never be
+        # delivered, so it counts as consumed (RFC 9000 section 4.5).
+        self._local_max_data_consumed += (
+            stream.receiver.highest_offset - stream.receiver.starting_offset()
+        )
 
     def _retire_peer_cid(self, connection_id: QuicConnectionId) -> None:
         """
@@ -4211,9 +4229,16 @@ class QuicConnection:
         """
         Raise MAX_DATA or MAX_STREAMS if needed.
         """
+        # Credit follows the data delivered to the application, not the highest
+        # offset received (RFC 9000 section 4.1).
         max_data = self._local_max_data
-        if max_data.used * 2 > max_data.value:
-            max_data.value *= 2
+        consumed = self._local_max_data_consumed
+        if (max_data.value - consumed) * 2 < self._local_max_data_window:
+            self._local_max_data_window = min(
+                self._local_max_data_window * 2,
+                self._configuration.max_data * MAX_WINDOW_GROWTH,
+            )
+            max_data.value = consumed + self._local_max_data_window
             self._logger.debug("Local %s raised to %d", max_data.name, max_data.value)
 
         for limit in (
@@ -4543,11 +4568,21 @@ class QuicConnection:
         locally created unidirectional streams. We skip such streams to avoid
         spurious logging.
         """
+        # Credit follows the data delivered to the application, not the highest
+        # offset received (RFC 9000 section 4.1).
+        consumed = stream.receiver.starting_offset()
         if (
             stream.max_stream_data_local
-            and stream.receiver.highest_offset * 2 > stream.max_stream_data_local
+            and (stream.max_stream_data_local - consumed) * 2
+            < stream.max_stream_data_local_window
         ):
-            stream.max_stream_data_local *= 2
+            stream.max_stream_data_local_window = min(
+                stream.max_stream_data_local_window * 2,
+                self._configuration.max_stream_data * MAX_WINDOW_GROWTH,
+            )
+            stream.max_stream_data_local = (
+                consumed + stream.max_stream_data_local_window
+            )
             self._logger.debug(
                 "Stream %d local max_stream_data raised to %d",
                 stream.stream_id,
