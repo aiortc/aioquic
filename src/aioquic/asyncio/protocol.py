@@ -255,8 +255,8 @@ class QuicStreamAdapter(asyncio.Transport):
         if name == "stream_id":
             return self.stream_id
 
-    def write(self, data):
-        self.protocol._quic.send_stream_data(self.stream_id, data)
+    def write(self, data: bytes | bytearray | memoryview) -> None:
+        self.protocol._quic.send_stream_data(self.stream_id, bytes(data))
         self.protocol._transmit_soon()
 
     def write_eof(self):

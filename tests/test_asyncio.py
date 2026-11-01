@@ -4,6 +4,7 @@ import contextlib
 import random
 import socket
 import weakref
+from array import array
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, Optional
 from unittest import TestCase, skipIf
@@ -252,6 +253,16 @@ class HighLevelTest(TestCase):
         async with self.run_server() as server_port:
             response = await self.run_client(port=server_port, request=data)
             self.assertEqual(response, data)
+
+    @asynctest
+    async def test_connect_and_serve_memoryview(self) -> None:
+        """
+        Write a memoryview whose items are wider than one byte.
+        """
+        data = array("H", [1, 2, 3])
+        async with self.run_server() as server_port:
+            response = await self.run_client(port=server_port, request=memoryview(data))
+            self.assertEqual(response, bytes(reversed(data.tobytes())))
 
     @asynctest
     async def test_connect_and_serve_without_client_configuration(self) -> None:
