@@ -4,8 +4,9 @@ import importlib
 import logging
 import time
 from collections import deque
+from collections.abc import Callable
 from email.utils import formatdate
-from typing import Callable, Deque, Optional, Union, cast
+from typing import Any, Optional, Union, cast
 
 import aioquic
 import wsproto
@@ -135,7 +136,7 @@ class WebSocketHandler:
     ) -> None:
         self.closed = False
         self.connection = connection
-        self.http_event_queue: Deque[DataReceived] = deque()
+        self.http_event_queue: deque[DataReceived] = deque()
         self.queue: asyncio.Queue[dict] = asyncio.Queue()
         self.scope = scope
         self.stream_id = stream_id
@@ -236,7 +237,7 @@ class WebTransportHandler:
         self.accepted = False
         self.closed = False
         self.connection = connection
-        self.http_event_queue: Deque[H3Event] = deque()
+        self.http_event_queue: deque[H3Event] = deque()
         self.queue: asyncio.Queue[dict] = asyncio.Queue()
         self.scope = scope
         self.stream_id = stream_id
@@ -323,7 +324,7 @@ Handler = Union[HttpRequestHandler, WebSocketHandler, WebTransportHandler]
 
 
 class HttpServerProtocol(QuicConnectionProtocol):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._handlers: dict[int, Handler] = {}
         self._http: Optional[HttpConnection] = None

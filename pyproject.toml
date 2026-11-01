@@ -45,17 +45,14 @@ source = ["aioquic"]
 [tool.mypy]
 disallow_untyped_calls = true
 disallow_untyped_decorators = true
+disallow_untyped_defs = true
 files = ["examples", "src", "tests"]
 strict_optional = false
 warn_redundant_casts = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["aioquic.*", "tests.*"]
-disallow_untyped_defs = true
-
-[[tool.mypy.overrides]]
-module = ["dnslib.*", "httpx.*", "starlette.*", "uvloop.*", "wsproto.*"]
+module = ["dnslib.*", "uvloop.*"]
 ignore_missing_imports = true
 
 [tool.ruff.lint]

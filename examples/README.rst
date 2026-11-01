@@ -5,7 +5,7 @@ After checking out the code using git you can run:
 
 .. code-block:: console
 
-   pip install . dnslib jinja2 starlette wsproto
+   pip install . -r requirements/examples.txt
 
 The examples need a TLS certificate. For testing purposes, you can generate a
 self-signed certificate for ``localhost`` using:
