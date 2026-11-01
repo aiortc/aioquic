@@ -115,6 +115,41 @@ class WebTransportTest(TestCase):
                 ],
             )
 
+    def test_bidirectional_stream_client_receives(self):
+        """
+        Data the server sends on a client-initiated WebTransport stream is
+        payload, not HTTP/3 frames (draft-ietf-webtrans-http3 section 4.3).
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # Create session.
+            session_id = self._make_session(h3_client, h3_server)
+
+            # Client opens a bidirectional stream, server receives it.
+            stream_id = h3_client.create_webtransport_stream(session_id)
+            quic_client.send_stream_data(stream_id, b"foo", end_stream=True)
+            h3_transfer(quic_client, h3_server)
+
+            # Server replies on the same stream, client receives the payload.
+            quic_server.send_stream_data(stream_id, b"bar", end_stream=True)
+            events = h3_transfer(quic_server, h3_client)
+            self.assertEqual(
+                events,
+                [
+                    WebTransportStreamDataReceived(
+                        data=b"bar",
+                        session_id=session_id,
+                        stream_ended=True,
+                        stream_id=stream_id,
+                    )
+                ],
+            )
+
     def test_bidirectional_stream_fragmented_frame(self):
         with h3_fake_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,

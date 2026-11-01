@@ -504,6 +504,12 @@ class H3Connection:
                 encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
                 + encode_uint_var(session_id),
             )
+
+            # The peer's half of the stream carries no signal value of its own,
+            # it is WebTransport payload too (draft-ietf-webtrans-http3 section 4.3).
+            with self._get_or_create_stream(stream_id) as stream:
+                stream.frame_type = FrameType.WEBTRANSPORT_STREAM
+                stream.session_id = session_id
         return stream_id
 
     def handle_event(self, event: QuicEvent) -> list[H3Event]:
