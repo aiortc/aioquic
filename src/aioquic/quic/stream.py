@@ -68,6 +68,9 @@ class QuicStreamReceiver:
             elif frame.fin and frame_end != self._final_size:
                 raise FinalSizeError("Cannot change final size")
         if frame.fin:
+            # Data at or beyond this final size already arrived (RFC 9000 section 4.5).
+            if frame_end < self.highest_offset:
+                raise FinalSizeError("Data received beyond final size")
             self._final_size = frame_end
         if frame_end > self.highest_offset:
             self.highest_offset = frame_end
@@ -125,6 +128,9 @@ class QuicStreamReceiver:
         """
         if self._final_size is not None and final_size != self._final_size:
             raise FinalSizeError("Cannot change final size")
+        # Data at or beyond this final size already arrived (RFC 9000 section 4.5).
+        if final_size < self.highest_offset:
+            raise FinalSizeError("Data received beyond final size")
         if final_size > self.highest_offset:
             self.highest_offset = final_size
 
