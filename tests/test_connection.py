@@ -3,6 +3,7 @@ import contextlib
 import io
 import os
 import time
+from collections.abc import Iterator
 from typing import Optional
 from unittest import TestCase, skipIf
 
@@ -320,14 +321,30 @@ class QuicConnectionTestCase(TestCase):
                 break
         self.assertEqual(types, expected)
 
-    def assertPacketDropped(self, connection: QuicConnection, trigger: str):
-        log = connection.configuration.quic_logger.to_dict()
-        found_trigger = None
-        for event in log["traces"][0]["events"]:
-            if event["name"] == "transport:packet_dropped":
-                found_trigger = event["data"]["trigger"]
-                break
-        self.assertEqual(found_trigger, trigger)
+    @contextlib.contextmanager
+    def assertPacketsDropped(
+        self, connection: QuicConnection, triggers: list[str]
+    ) -> Iterator[None]:
+        """
+        Check the packets `connection` drops while the block runs.
+
+        `triggers` lists the reason ("trigger") of every `transport:packet_dropped`
+        event that `connection` logs inside the block, in order. Packets dropped
+        before the block, for instance during the handshake, are ignored. An empty
+        list checks that no packet is dropped.
+        """
+
+        def dropped() -> list[str]:
+            log = connection.configuration.quic_logger.to_dict()
+            return [
+                event["data"]["trigger"]
+                for event in log["traces"][0]["events"]
+                if event["name"] == "transport:packet_dropped"
+            ]
+
+        before = len(dropped())
+        yield
+        self.assertEqual(dropped()[before:], triggers)
 
     def assertSentPackets(self, connection: QuicConnection, expected: list[int]):
         counts = [len(space.sent_packets) for space in connection._loss.spaces]
@@ -1430,14 +1447,13 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             # Client only receives the second datagram, which it cannot decrypt,
             # and retransmits INITIAL.
             now = self.advance_by_tick(now)
-            client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+            with self.assertPacketsDropped(client, ["key_unavailable"]):
+                client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
             items = client.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200])
             self.assertAlmostEqual(client.get_timer(), 0.3)
             self.assertSentPackets(client, [1, 0, 0])
             self.assertEvents(client, [])
-
-            self.assertPacketDropped(client, "key_unavailable")
 
             # Server receives duplicate INITIAL, retransmits INITIAL + HANDSHAKE.
             now = self.advance_by_tick(now)
@@ -2977,11 +2993,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
         buf = builder.start_frame(QuicFrameType.PADDING)
         buf.push_bytes(bytes(builder.remaining_flight_space))
 
-        for datagram in builder.flush()[0]:
-            server.receive_datagram(datagram, SERVER_ADDR, now=time.time())
-
-        # Look for the drop event.
-        self.assertPacketDropped(server, "initial_packet_datagram_too_small")
+        with self.assertPacketsDropped(server, ["initial_packet_datagram_too_small"]):
+            for datagram in builder.flush()[0]:
+                server.receive_datagram(datagram, SERVER_ADDR, now=time.time())
 
     def test_connect_with_no_crypto_frame(self):
         def patch(client):
@@ -3428,8 +3442,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self.assertEqual(client._remote_initial_source_connection_id, bytes(8))
 
         # A packet with a different Source Connection ID is discarded.
-        send_initial(source_cid=bytes([1] * 8), packet_number=1)
-        self.assertPacketDropped(client, "unexpected_source_connection_id")
+        with self.assertPacketsDropped(client, ["unexpected_source_connection_id"]):
+            send_initial(source_cid=bytes([1] * 8), packet_number=1)
         self.assertNotIn(1, client._spaces[tls.Epoch.INITIAL].received_packets)
 
     def test_receive_datagram_duplicate(self):
@@ -3448,34 +3462,20 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertIsNone(server.next_event())
 
             # the same datagrams are replayed
-            for data in datagrams:
-                server.receive_datagram(data, CLIENT_ADDR, now=time.time())
+            with self.assertPacketsDropped(server, ["duplicate"] * len(datagrams)):
+                for data in datagrams:
+                    server.receive_datagram(data, CLIENT_ADDR, now=time.time())
 
             # the duplicates are discarded
             self.assertIsNone(server.next_event())
-            log = server.configuration.quic_logger.to_dict()
-            triggers = [
-                event["data"]["trigger"]
-                for event in log["traces"][0]["events"]
-                if event["name"] == "transport:packet_dropped"
-            ]
-            self.assertEqual(triggers.count("duplicate"), len(datagrams))
 
     def test_receive_datagram_first_not_initial(self):
         server = create_standalone_server(self)
 
         # Server receives a 1-RTT packet before any INITIAL packet.
         datagram = bytes([0x40]) + server.host_cid + bytes(40)
-        server.receive_datagram(datagram, CLIENT_ADDR, now=time.time())
-
-        # The packet is dropped.
-        log = server.configuration.quic_logger.to_dict()
-        triggers = [
-            event["data"]["trigger"]
-            for event in log["traces"][0]["events"]
-            if event["name"] == "transport:packet_dropped"
-        ]
-        self.assertEqual(triggers, ["key_unavailable"])
+        with self.assertPacketsDropped(server, ["key_unavailable"]):
+            server.receive_datagram(datagram, CLIENT_ADDR, now=time.time())
 
     def test_receive_datagram_garbage(self):
         client = create_standalone_client(self)
@@ -3547,17 +3547,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(transfer(server, client), 1)
 
             # The delayed PING arrives on the retired connection ID and is dropped.
-            server.receive_datagram(delayed[0], CLIENT_ADDR, now=time.time())
+            with self.assertPacketsDropped(server, ["unknown_connection_id"]):
+                server.receive_datagram(delayed[0], CLIENT_ADDR, now=time.time())
             self.assertEqual(server.host_cid, current_cid)
             self.assertEqual(drop(server), 0)
-
-            log = server.configuration.quic_logger.to_dict()
-            triggers = [
-                event["data"]["trigger"]
-                for event in log["traces"][0]["events"]
-                if event["name"] == "transport:packet_dropped"
-            ]
-            self.assertEqual(triggers[-1:], ["unknown_connection_id"])
 
     def test_receive_datagram_unknown_server_address(self):
         with client_and_server() as (client, server):
@@ -3571,21 +3564,17 @@ class QuicConnectionTest(QuicConnectionTestCase):
             ]
 
             # The datagrams are received from an unknown server address.
-            for data in datagrams:
-                client.receive_datagram(data, ("6.7.8.9", 4433), now=time.time())
+            with self.assertPacketsDropped(
+                client, ["unknown_server_address"] * len(datagrams)
+            ):
+                for data in datagrams:
+                    client.receive_datagram(data, ("6.7.8.9", 4433), now=time.time())
 
             # The datagrams are discarded.
             self.assertIsNone(client.next_event())
             self.assertEqual(
                 [path.addr for path in client._network_paths], [SERVER_ADDR]
             )
-            log = client.configuration.quic_logger.to_dict()
-            triggers = [
-                event["data"]["trigger"]
-                for event in log["traces"][0]["events"]
-                if event["name"] == "transport:packet_dropped"
-            ]
-            self.assertEqual(triggers.count("unknown_server_address"), len(datagrams))
 
             # The same datagrams are received from the known server address.
             for data in datagrams:
@@ -3610,11 +3599,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
         buf = builder.start_frame(QuicFrameType.PADDING)
         buf.push_bytes(bytes(builder.remaining_flight_space))
 
-        for datagram in builder.flush()[0]:
-            client.receive_datagram(datagram, SERVER_ADDR, now=time.time())
+        with self.assertPacketsDropped(client, ["unsupported_version"]):
+            for datagram in builder.flush()[0]:
+                client.receive_datagram(datagram, SERVER_ADDR, now=time.time())
         self.assertEqual(drop(client), 0)
-
-        self.assertPacketDropped(client, "unsupported_version")
 
     def test_receive_datagram_retry(self):
         """
@@ -3649,18 +3637,18 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertFalse(client._handshake_confirmed)
             peer_cid = client._peer_cid.cid
 
-            client.receive_datagram(
-                encode_quic_retry(
-                    version=client._version,
-                    source_cid=binascii.unhexlify("85abb547bf28be97"),
-                    destination_cid=client.host_cid,
-                    original_destination_cid=peer_cid,
-                    retry_token=bytes(16),
-                ),
-                SERVER_ADDR,
-                now=time.time(),
-            )
-            self.assertPacketDropped(client, "unexpected_packet")
+            with self.assertPacketsDropped(client, ["unexpected_packet"]):
+                client.receive_datagram(
+                    encode_quic_retry(
+                        version=client._version,
+                        source_cid=binascii.unhexlify("85abb547bf28be97"),
+                        destination_cid=client.host_cid,
+                        original_destination_cid=peer_cid,
+                        retry_token=bytes(16),
+                    ),
+                    SERVER_ADDR,
+                    now=time.time(),
+                )
             self.assertEqual(client._peer_cid.cid, peer_cid)
             self.assertEqual(client._retry_count, 0)
 
@@ -3675,20 +3663,19 @@ class QuicConnectionTest(QuicConnectionTestCase):
         """
         client = create_standalone_client(self)
 
-        client.receive_datagram(
-            encode_quic_retry(
-                version=client._version,
-                source_cid=binascii.unhexlify("85abb547bf28be97"),
-                destination_cid=client.host_cid,
-                original_destination_cid=client._peer_cid.cid,
-                retry_token=b"",
-            ),
-            SERVER_ADDR,
-            now=time.time(),
-        )
+        with self.assertPacketsDropped(client, ["unexpected_packet"]):
+            client.receive_datagram(
+                encode_quic_retry(
+                    version=client._version,
+                    source_cid=binascii.unhexlify("85abb547bf28be97"),
+                    destination_cid=client.host_cid,
+                    original_destination_cid=client._peer_cid.cid,
+                    retry_token=b"",
+                ),
+                SERVER_ADDR,
+                now=time.time(),
+            )
         self.assertEqual(drop(client), 0)
-
-        self.assertPacketDropped(client, "unexpected_packet")
 
     def test_receive_datagram_retry_same_source_cid(self):
         """
@@ -3697,20 +3684,19 @@ class QuicConnectionTest(QuicConnectionTestCase):
         """
         client = create_standalone_client(self)
 
-        client.receive_datagram(
-            encode_quic_retry(
-                version=client._version,
-                source_cid=client._peer_cid.cid,
-                destination_cid=client.host_cid,
-                original_destination_cid=client._peer_cid.cid,
-                retry_token=bytes(16),
-            ),
-            SERVER_ADDR,
-            now=time.time(),
-        )
+        with self.assertPacketsDropped(client, ["unexpected_packet"]):
+            client.receive_datagram(
+                encode_quic_retry(
+                    version=client._version,
+                    source_cid=client._peer_cid.cid,
+                    destination_cid=client.host_cid,
+                    original_destination_cid=client._peer_cid.cid,
+                    retry_token=bytes(16),
+                ),
+                SERVER_ADDR,
+                now=time.time(),
+            )
         self.assertEqual(drop(client), 0)
-
-        self.assertPacketDropped(client, "unexpected_packet")
 
     def test_receive_datagram_retry_wrong_destination_cid(self):
         """
@@ -3719,20 +3705,19 @@ class QuicConnectionTest(QuicConnectionTestCase):
         """
         client = create_standalone_client(self)
 
-        client.receive_datagram(
-            encode_quic_retry(
-                version=client._version,
-                source_cid=binascii.unhexlify("85abb547bf28be97"),
-                destination_cid=binascii.unhexlify("c98343fe8f5f0ff4"),
-                original_destination_cid=client._peer_cid.cid,
-                retry_token=bytes(16),
-            ),
-            SERVER_ADDR,
-            now=time.time(),
-        )
+        with self.assertPacketsDropped(client, ["unknown_connection_id"]):
+            client.receive_datagram(
+                encode_quic_retry(
+                    version=client._version,
+                    source_cid=binascii.unhexlify("85abb547bf28be97"),
+                    destination_cid=binascii.unhexlify("c98343fe8f5f0ff4"),
+                    original_destination_cid=client._peer_cid.cid,
+                    retry_token=bytes(16),
+                ),
+                SERVER_ADDR,
+                now=time.time(),
+            )
         self.assertEqual(drop(client), 0)
-
-        self.assertPacketDropped(client, "unknown_connection_id")
 
     def test_receive_datagram_retry_wrong_integrity_tag(self):
         """
@@ -3741,21 +3726,20 @@ class QuicConnectionTest(QuicConnectionTestCase):
         """
         client = create_standalone_client(self)
 
-        client.receive_datagram(
-            encode_quic_retry(
-                version=client._version,
-                source_cid=binascii.unhexlify("85abb547bf28be97"),
-                destination_cid=client.host_cid,
-                original_destination_cid=client._peer_cid.cid,
-                retry_token=bytes(16),
-            )[0:-16]
-            + bytes(16),
-            SERVER_ADDR,
-            now=time.time(),
-        )
+        with self.assertPacketsDropped(client, ["unexpected_packet"]):
+            client.receive_datagram(
+                encode_quic_retry(
+                    version=client._version,
+                    source_cid=binascii.unhexlify("85abb547bf28be97"),
+                    destination_cid=client.host_cid,
+                    original_destination_cid=client._peer_cid.cid,
+                    retry_token=bytes(16),
+                )[0:-16]
+                + bytes(16),
+                SERVER_ADDR,
+                now=time.time(),
+            )
         self.assertEqual(drop(client), 0)
-
-        self.assertPacketDropped(client, "unexpected_packet")
 
     def test_request_key_update_before_handshake(self):
         with client_and_server(handshake=False) as (client, server):
@@ -6459,16 +6443,16 @@ class QuicConnectionTest(QuicConnectionTestCase):
         server = create_standalone_server(self)
 
         # Servers do not expect version negotiation packets.
-        server.receive_datagram(
-            encode_quic_version_negotiation(
-                source_cid=server._peer_cid.cid,
-                destination_cid=server.host_cid,
-                supported_versions=[QuicProtocolVersion.VERSION_1],
-            ),
-            CLIENT_ADDR,
-            now=time.time(),
-        )
-        self.assertPacketDropped(server, "unexpected_packet")
+        with self.assertPacketsDropped(server, ["unexpected_packet"]):
+            server.receive_datagram(
+                encode_quic_version_negotiation(
+                    source_cid=server._peer_cid.cid,
+                    destination_cid=server.host_cid,
+                    supported_versions=[QuicProtocolVersion.VERSION_1],
+                ),
+                CLIENT_ADDR,
+                now=time.time(),
+            )
 
     def test_version_negotiation_ok(self):
         client = create_standalone_client(
