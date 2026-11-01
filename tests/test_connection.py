@@ -4800,6 +4800,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             # client creates bidirectional stream
             client.send_stream_data(stream_id=stream_id, data=b"hello")
             consume_events(client)
+            consumed = client._local_max_data_consumed
             used = client._local_max_data.used
 
             # client receives RESET_STREAM at offset 8
@@ -4808,6 +4809,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 QuicFrameType.RESET_STREAM,
                 Buffer(data=reset_stream_data),
             )
+            self.assertEqual(client._local_max_data_consumed, consumed + 8)
             self.assertEqual(client._local_max_data.used, used + 8)
 
             # client receives the same RESET_STREAM again
@@ -4816,6 +4818,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 QuicFrameType.RESET_STREAM,
                 Buffer(data=reset_stream_data),
             )
+            self.assertEqual(client._local_max_data_consumed, consumed + 8)
             self.assertEqual(client._local_max_data.used, used + 8)
 
             # client receives data which was sent before the reset
@@ -4829,6 +4832,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
                     + b"01234567"
                 ),
             )
+            self.assertEqual(client._local_max_data_consumed, consumed + 8)
             self.assertEqual(client._local_max_data.used, used + 8)
 
     def test_handle_reset_stream_frame_over_max_data(self):
@@ -6135,20 +6139,65 @@ class QuicConnectionTest(QuicConnectionTestCase):
             # MAX_DATA is not sent due to congestion control
             self.assertEqual(drop(client), 0)
 
+    def test_send_max_data_out_of_order(self):
+        """
+        Data received beyond a gap does not raise MAX_DATA or MAX_STREAM_DATA:
+        credit follows the data delivered to the application (RFC 9000 section 4.1).
+        """
+        frame_type = QuicFrameType.STREAM_BASE | 6
+        stream_id = 1
+        with client_and_server() as (client, server):
+            # Client receives one byte at the end of the stream's credit.
+            client._handle_stream_frame(
+                client_receive_context(client),
+                frame_type,
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(1048575)
+                    + encode_uint_var(1)
+                    + b"Z"
+                ),
+            )
+            stream = client._streams[stream_id]
+            self.assertEqual(client._local_max_data.used, 1048576)
+            self.assertEqual(client._local_max_data_consumed, 0)
+
+            # Client does not raise its limits.
+            drop(client)
+            self.assertEqual(client._local_max_data.value, 1048576)
+            self.assertEqual(stream.max_stream_data_local, 1048576)
+
+            # Client receives the data before the gap, and delivers it all.
+            client._handle_stream_frame(
+                client_receive_context(client),
+                frame_type,
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(0)
+                    + encode_uint_var(1048575)
+                    + b"Z" * 1048575
+                ),
+            )
+            self.assertEqual(client._local_max_data.used, 1048576)
+            self.assertEqual(client._local_max_data_consumed, 1048576)
+
+            # Client raises its limits from the delivered data.
+            drop(client)
+            self.assertEqual(client._local_max_data.value, 3145728)
+            self.assertEqual(stream.max_stream_data_local, 3145728)
+
     def test_send_max_data_retransmit(self):
         with client_and_server() as (client, server):
-            # artificially raise received data counter
-            client._local_max_data.used = client._local_max_data.value
+            # artificially raise consumed data counter
+            client._local_max_data_consumed = client._local_max_data.value
             self.assertEqual(client._local_max_data.sent, 1048576)
-            self.assertEqual(client._local_max_data.used, 1048576)
             self.assertEqual(client._local_max_data.value, 1048576)
             self.assertEqual(server._remote_max_data, 1048576)
 
             # MAX_DATA is sent and lost
             self.assertEqual(drop(client), 1)
-            self.assertEqual(client._local_max_data.sent, 2097152)
-            self.assertEqual(client._local_max_data.used, 1048576)
-            self.assertEqual(client._local_max_data.value, 2097152)
+            self.assertEqual(client._local_max_data.sent, 3145728)
+            self.assertEqual(client._local_max_data.value, 3145728)
             self.assertEqual(server._remote_max_data, 1048576)
 
             # MAX_DATA loss is detected
@@ -6156,15 +6205,29 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 QuicDeliveryState.LOST, client._local_max_data
             )
             self.assertEqual(client._local_max_data.sent, 0)
-            self.assertEqual(client._local_max_data.used, 1048576)
-            self.assertEqual(client._local_max_data.value, 2097152)
+            self.assertEqual(client._local_max_data.value, 3145728)
 
             # MAX_DATA is retransmitted and acked
             roundtrip_until_done(client, server)
-            self.assertEqual(client._local_max_data.sent, 2097152)
-            self.assertEqual(client._local_max_data.used, 1048576)
-            self.assertEqual(client._local_max_data.value, 2097152)
-            self.assertEqual(server._remote_max_data, 2097152)
+            self.assertEqual(client._local_max_data.sent, 3145728)
+            self.assertEqual(client._local_max_data.value, 3145728)
+            self.assertEqual(server._remote_max_data, 3145728)
+
+    def test_send_max_data_window_limit(self):
+        """
+        The connection flow control window doubles each time MAX_DATA is raised,
+        up to MAX_WINDOW_GROWTH times its configured size.
+        """
+        with client_and_server() as (client, server):
+            for window in (2097152, 4194304, 8388608, 16777216, 16777216):
+                # artificially raise consumed data counter
+                client._local_max_data_consumed = client._local_max_data.value
+                drop(client)
+                self.assertEqual(client._local_max_data_window, window)
+                self.assertEqual(
+                    client._local_max_data.value,
+                    client._local_max_data_consumed + window,
+                )
 
     def test_send_max_stream_data_retransmit(self):
         with client_and_server() as (client, server):
@@ -6188,16 +6251,35 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
             # MAX_STREAM_DATA is sent and lost
             self.assertEqual(drop(client), 1)
-            self.assertEqual(stream.max_stream_data_local, 2097152)
-            self.assertEqual(stream.max_stream_data_local_sent, 2097152)
+            self.assertEqual(stream.max_stream_data_local, 2621441)
+            self.assertEqual(stream.max_stream_data_local_sent, 2621441)
             client._on_max_stream_data_delivery(QuicDeliveryState.LOST, stream)
-            self.assertEqual(stream.max_stream_data_local, 2097152)
+            self.assertEqual(stream.max_stream_data_local, 2621441)
             self.assertEqual(stream.max_stream_data_local_sent, 0)
 
             # MAX_STREAM_DATA is retransmitted and acked
             roundtrip_until_done(client, server)
-            self.assertEqual(stream.max_stream_data_local, 2097152)
-            self.assertEqual(stream.max_stream_data_local_sent, 2097152)
+            self.assertEqual(stream.max_stream_data_local, 2621441)
+            self.assertEqual(stream.max_stream_data_local_sent, 2621441)
+
+    def test_send_max_stream_data_window_limit(self):
+        """
+        A stream's flow control window doubles each time MAX_STREAM_DATA is raised,
+        up to MAX_WINDOW_GROWTH times its configured size.
+        """
+        with client_and_server() as (client, server):
+            # client creates bidirectional stream 0
+            stream = client._get_or_create_stream_for_send(stream_id=0)
+
+            for window in (2097152, 4194304, 8388608, 16777216, 16777216):
+                # artificially raise delivered data offset
+                stream.receiver._buffer_start = stream.max_stream_data_local
+                drop(client)
+                self.assertEqual(stream.max_stream_data_local_window, window)
+                self.assertEqual(
+                    stream.max_stream_data_local,
+                    stream.receiver.starting_offset() + window,
+                )
 
     def test_send_max_streams_retransmit(self):
         with client_and_server() as (client, server):
