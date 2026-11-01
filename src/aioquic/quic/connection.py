@@ -4570,6 +4570,10 @@ class QuicConnection:
         locally created unidirectional streams. We skip such streams to avoid
         spurious logging.
         """
+        # The peer needs no more credit (RFC 9000 section 13.3).
+        if stream.receiver.final_size is not None:
+            return
+
         # Credit follows the data delivered to the application, not the highest
         # offset received (RFC 9000 section 4.1).
         consumed = stream.receiver.starting_offset()

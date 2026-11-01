@@ -2878,6 +2878,110 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             self.assertAlmostEqual(client.get_timer(), 60.55)  # idle timeout
             self.assertSentPackets(client, [0, 0, 0])
 
+    def test_send_max_stream_data_lost_after_fin(self) -> None:
+        """
+        Check a lost MAX_STREAM_DATA is not retransmitted once the stream's
+        final size is known, as the peer needs no more credit (RFC 9000 section
+        13.3).
+        """
+        with client_and_server(
+            client_options={"max_stream_data": 1000}, handshake=False
+        ) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Client sends stream data.
+            client.send_stream_data(0, b"hello")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [36])
+            self.assertAlmostEqual(client.get_timer(), 0.625)
+            self.assertSentPackets(client, [0, 0, 2])
+
+            # Server receives stream data, sends data past half the client's
+            # limit.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertEventsEqual(
+                server,
+                [
+                    events.StreamDataReceived(
+                        data=b"hello", end_stream=False, stream_id=0
+                    )
+                ],
+            )
+            server.send_stream_data(0, b"Z" * 501)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [537])
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertSentPackets(server, [0, 0, 1])
+
+            # Client receives stream data, sends MAX_STREAM_DATA, which is lost.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEventsEqual(
+                client,
+                [
+                    events.StreamDataReceived(
+                        data=b"Z" * 501, end_stream=False, stream_id=0
+                    )
+                ],
+            )
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [36])
+            self.assertAlmostEqual(client.get_timer(), 0.6875)
+            self.assertSentPackets(client, [0, 0, 1])
+            self.assertEqual(client._streams[0].max_stream_data_local, 2501)
+
+            # Server sends FIN.
+            server.send_stream_data(0, b"", end_stream=True)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [33])
+            self.assertAlmostEqual(server.get_timer(), 0.6875)
+            self.assertSentPackets(server, [0, 0, 2])
+
+            # Client receives FIN, sends ACK.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEventsEqual(
+                client,
+                [events.StreamDataReceived(data=b"", end_stream=True, stream_id=0)],
+            )
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(client.get_timer(), 0.6875)
+            self.assertSentPackets(client, [0, 0, 2])
+
+            # Server receives ACK, nothing remains in flight.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertEqual(server.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(server.get_timer(), 60.55)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 0])
+
+            # Client's PTO fires, it sends a PING rather than MAX_STREAM_DATA.
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [29])
+            self.assertAlmostEqual(client.get_timer(), 1.1625)
+            self.assertSentPackets(client, [0, 0, 2])
+
+            # Server receives PING, sends ACK. Its limit is unchanged.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(server.get_timer(), 60.7375)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEqual(server._streams[0].max_stream_data_remote, 1000)
+
+            # Client receives ACK, nothing remains in flight.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(client.get_timer(), 60.7875)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 0])
+
     def test_send_reset_stream_at_lost(self) -> None:
         """
         Check lost stream data is only retransmitted up to the reliable size, and
@@ -6933,6 +7037,76 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 self.assertEqual(client._local_max_data_window, window)
                 self.assertEqual(client._local_max_data.value, max_data)
                 self.assertEqual(stream.max_stream_data_local, 1048576)
+
+    def test_send_max_stream_data_after_fin(self) -> None:
+        with client_and_server(client_options={"max_stream_data": 1000}) as (
+            client,
+            server,
+        ):
+            # The client opens bidirectional stream 0.
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(roundtrip(client, server), (1, 1))
+
+            # The server sends data and FIN past half the client's limit.
+            server.send_stream_data(0, b"Z" * 501, end_stream=True)
+            self.assertEqual(roundtrip(server, client), (1, 1))
+
+            # The client does not raise its limit.
+            self.assertEqual(client._streams[0].max_stream_data_local, 1000)
+            self.assertEqual(server._streams[0].max_stream_data_remote, 1000)
+
+    def test_send_max_stream_data_after_reset(self) -> None:
+        with client_and_server(client_options={"max_stream_data": 1000}) as (
+            client,
+            server,
+        ):
+            # The client opens bidirectional stream 0.
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(roundtrip(client, server), (1, 1))
+
+            # The server sends data past half the client's limit, then resets the
+            # stream before the client replies.
+            server.send_stream_data(0, b"Z" * 501)
+            self.assertEqual(transfer(server, client), 1)
+            server.reset_stream(0, QuicErrorCode.NO_ERROR)
+            self.assertEqual(roundtrip(server, client), (1, 1))
+
+            # The client does not raise its limit.
+            self.assertEqual(client._streams[0].max_stream_data_local, 1000)
+            self.assertEqual(server._streams[0].max_stream_data_remote, 1000)
+
+    def test_send_max_stream_data_after_reset_stream_at(self) -> None:
+        with client_and_server(
+            client_options={"max_stream_data": 1000, "reliable_stream_reset": True}
+        ) as (client, server):
+            # The client opens bidirectional stream 0.
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(roundtrip(client, server), (1, 1))
+
+            # The server sends data in two datagrams, which are delayed, then
+            # resets the stream with a reliable size covering all of it.
+            server.send_stream_data(0, b"Z" * 600)
+            first = server.datagrams_to_send(now=time.time())
+            self.assertEqual(len(first), 1)
+            server.send_stream_data(0, b"Z" * 200)
+            second = server.datagrams_to_send(now=time.time())
+            self.assertEqual(len(second), 1)
+            server.reset_stream_at(0, QuicErrorCode.NO_ERROR, reliable_size=800)
+            self.assertEqual(transfer(server, client), 1)
+
+            # The client receives the first datagram, delivering data past half
+            # its limit while reliable data is still missing.
+            client.receive_datagram(first[0][0], SERVER_ADDR, now=time.time())
+            self.assertEqual(transfer(client, server), 1)
+
+            # The client does not raise its limit.
+            self.assertEqual(client._streams[0].max_stream_data_local, 1000)
+            self.assertEqual(server._streams[0].max_stream_data_remote, 1000)
+
+            # The client receives the second datagram, completing the reliable data.
+            client.receive_datagram(second[0][0], SERVER_ADDR, now=time.time())
+            self.assertEqual(transfer(client, server), 1)
+            self.assertEqual(client._streams[0].max_stream_data_local, 1000)
 
     def test_send_max_stream_data_retransmit(self) -> None:
         with client_and_server() as (client, server):

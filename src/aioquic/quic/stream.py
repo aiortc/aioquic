@@ -50,6 +50,13 @@ class QuicStreamReceiver:
         self._stream_id = stream_id
         self._stop_error_code: int | None = None
 
+    @property
+    def final_size(self) -> int | None:
+        """
+        The final size of the stream, or `None` if it is not known yet.
+        """
+        return self._final_size
+
     def get_pending_reset_event(self) -> events.StreamReset | None:
         """
         Return the reset event once data up to the reliable size has been
