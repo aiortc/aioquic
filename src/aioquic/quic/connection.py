@@ -1067,6 +1067,15 @@ class QuicConnection:
             if not self._is_client and epoch == tls.Epoch.HANDSHAKE:
                 self._discard_epoch(tls.Epoch.INITIAL)
 
+            # Servers must discard 0-RTT keys shortly after receiving a 1-RTT
+            # packet, and may do so straight away (RFC 9001 section 4.9.3).
+            if (
+                not self._is_client
+                and epoch == tls.Epoch.ONE_RTT
+                and self._cryptos[tls.Epoch.ZERO_RTT].recv.is_valid()
+            ):
+                self._cryptos[tls.Epoch.ZERO_RTT].recv.teardown()
+
             # update state
             if self._peer_cid.sequence_number is None:
                 self._peer_cid.cid = header.source_cid
@@ -3568,6 +3577,15 @@ class QuicConnection:
             crypto.send.setup(
                 cipher_suite=cipher_suite, secret=secret, version=self._version
             )
+
+            # Clients should discard 0-RTT keys once they install 1-RTT keys
+            # (RFC 9001 section 4.9.3).
+            if (
+                self._is_client
+                and epoch == tls.Epoch.ONE_RTT
+                and self._cryptos[tls.Epoch.ZERO_RTT].send.is_valid()
+            ):
+                self._cryptos[tls.Epoch.ZERO_RTT].send.teardown()
         else:
             crypto.recv.setup(
                 cipher_suite=cipher_suite, secret=secret, version=self._version
