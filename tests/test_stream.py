@@ -393,6 +393,40 @@ class QuicStreamTest(TestCase):
         ):
             stream.receiver.handle_reset(final_size=4)
 
+    def test_receiver_reset_releases_buffer(self) -> None:
+        # A RESET_STREAM releases data buffered beyond a gap.
+        stream = QuicStream(stream_id=0)
+        self.assertIsNone(
+            stream.receiver.handle_frame(QuicStreamFrame(offset=1000, data=b"Z"))
+        )
+        self.assertEqual(len(stream.receiver._buffer), 1001)
+        self.assertEqual(
+            stream.receiver.handle_reset(final_size=1001, error_code=7),
+            StreamReset(error_code=7, stream_id=0),
+        )
+        self.assertEqual(bytes(stream.receiver._buffer), b"")
+        self.assertEqual(list(stream.receiver._ranges), [])
+
+        # A RESET_STREAM_AT releases it once the reliable size is delivered.
+        stream = QuicStream(stream_id=0)
+        self.assertIsNone(
+            stream.receiver.handle_frame(QuicStreamFrame(offset=1000, data=b"Z"))
+        )
+        self.assertIsNone(
+            stream.receiver.handle_reset(final_size=1001, error_code=7, reliable_size=4)
+        )
+        self.assertEqual(len(stream.receiver._buffer), 1001)
+        self.assertEqual(
+            stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"abcd")),
+            StreamDataReceived(data=b"abcd", end_stream=False, stream_id=0),
+        )
+        self.assertEqual(
+            stream.receiver.get_pending_reset_event(),
+            StreamReset(error_code=7, stream_id=0),
+        )
+        self.assertEqual(bytes(stream.receiver._buffer), b"")
+        self.assertEqual(list(stream.receiver._ranges), [])
+
     def test_receiver_reset_then_data(self) -> None:
         stream = QuicStream(stream_id=0)
         self.assertEqual(

@@ -52,7 +52,9 @@ class QuicConfiguration:
 
     max_data: int = 1048576
     """
-    Connection-wide flow control limit.
+    Connection-wide flow control window.
+
+    The window grows as received data is delivered, up to 16 times this value.
     """
 
     max_datagram_size: int = SMALLEST_MAX_DATAGRAM_SIZE
@@ -62,7 +64,9 @@ class QuicConfiguration:
 
     max_stream_data: int = 1048576
     """
-    Per-stream flow control limit.
+    Per-stream flow control window.
+
+    The window grows as received data is delivered, up to 16 times this value.
     """
 
     migrate_to_preferred_address: bool = True
