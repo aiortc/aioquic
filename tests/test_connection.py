@@ -3465,7 +3465,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         server = create_standalone_server(self)
 
         # Server receives a 1-RTT packet before any INITIAL packet.
-        datagram = bytes([0x40]) + bytes(8) + bytes(40)
+        datagram = bytes([0x40]) + server.host_cid + bytes(40)
         server.receive_datagram(datagram, CLIENT_ADDR, now=time.time())
 
         # The packet is dropped.
@@ -3523,6 +3523,41 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 reason_phrase="Reserved bits must be zero",
             ),
         )
+
+    def test_receive_datagram_retired_connection_id(self):
+        """
+        A server drops 1-RTT packets sent to a connection ID the client retired
+        (RFC 9000 section 5.1.2).
+        """
+        with client_and_server() as (client, server):
+            retired_cid = server.host_cid
+
+            # The client sends a PING, which is delayed.
+            client.send_ping(1)
+            delayed = [data for data, addr in client.datagrams_to_send(now=time.time())]
+            self.assertEqual(len(delayed), 1)
+
+            # The client changes connection ID and retires the old one.
+            client.change_connection_id()
+            client.send_ping(2)
+            self.assertEqual(transfer(client, server), 1)
+            self.assertNotEqual(server.host_cid, retired_cid)
+            self.assertNotIn(retired_cid, [c.cid for c in server._host_cids])
+            current_cid = server.host_cid
+            self.assertEqual(transfer(server, client), 1)
+
+            # The delayed PING arrives on the retired connection ID and is dropped.
+            server.receive_datagram(delayed[0], CLIENT_ADDR, now=time.time())
+            self.assertEqual(server.host_cid, current_cid)
+            self.assertEqual(drop(server), 0)
+
+            log = server.configuration.quic_logger.to_dict()
+            triggers = [
+                event["data"]["trigger"]
+                for event in log["traces"][0]["events"]
+                if event["name"] == "transport:packet_dropped"
+            ]
+            self.assertEqual(triggers[-1:], ["unknown_connection_id"])
 
     def test_receive_datagram_unknown_server_address(self):
         with client_and_server() as (client, server):
