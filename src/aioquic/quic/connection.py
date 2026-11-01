@@ -859,15 +859,18 @@ class QuicConnection:
                     )
                 return
 
-            # Check destination CID matches.
+            # Check destination CID matches, except on a client's INITIAL and 0-RTT
+            # packets, which can use the CID it chose (RFC 9000 section 7.2).
             destination_cid_seq: Optional[int] = None
             for connection_id in self._host_cids:
                 if header.destination_cid == connection_id.cid:
                     destination_cid_seq = connection_id.sequence_number
                     break
-            if (
-                self._is_client or header.packet_type == QuicPacketType.HANDSHAKE
-            ) and destination_cid_seq is None:
+            if destination_cid_seq is None and (
+                self._is_client
+                or header.packet_type
+                not in (QuicPacketType.INITIAL, QuicPacketType.ZERO_RTT)
+            ):
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
                         category="transport",
