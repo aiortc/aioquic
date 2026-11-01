@@ -4526,6 +4526,38 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(event.error_code, QuicErrorCode.INTERNAL_ERROR)
             self.assertEqual(event.stream_id, stream_id)
 
+    def test_handle_reset_stream_frame_below_received_data(self):
+        stream_id = 1
+        with client_and_server() as (client, server):
+            # The client receives 8 bytes of data.
+            client._handle_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.STREAM_BASE | 6,
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(0)
+                    + encode_uint_var(8)
+                    + b"01234567"
+                ),
+            )
+
+            # The client receives RESET_STREAM at offset 5.
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM,
+                    Buffer(
+                        data=encode_uint_var(stream_id)
+                        + encode_uint_var(QuicErrorCode.NO_ERROR)
+                        + encode_uint_var(5)
+                    ),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.FINAL_SIZE_ERROR)
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.RESET_STREAM)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Data received beyond final size"
+            )
+
     def test_handle_reset_stream_frame_final_size_error(self):
         stream_id = 0
         with client_and_server() as (client, server):
@@ -4675,7 +4707,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             encode_uint_var(QuicFrameType.RESET_STREAM)
             + encode_uint_var(stream_id)
             + encode_uint_var(QuicErrorCode.INTERNAL_ERROR)
-            + encode_uint_var(0)
+            + encode_uint_var(5)
         )
         with client_and_server() as (client, server):
             # server creates unidirectional stream
@@ -4818,6 +4850,39 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(cm.exception.error_code, QuicErrorCode.STREAM_STATE_ERROR)
             self.assertEqual(cm.exception.frame_type, QuicFrameType.STOP_SENDING)
             self.assertEqual(cm.exception.reason_phrase, "Stream is receive-only")
+
+    def test_handle_stream_frame_fin_below_received_data(self):
+        stream_id = 1
+        with client_and_server() as (client, server):
+            # The client receives 8 bytes of data.
+            client._handle_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.STREAM_BASE | 6,
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(0)
+                    + encode_uint_var(8)
+                    + b"01234567"
+                ),
+            )
+
+            # The client receives FIN at offset 5.
+            frame_type = QuicFrameType.STREAM_BASE | 7
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_stream_frame(
+                    client_receive_context(client),
+                    frame_type,
+                    Buffer(
+                        data=encode_uint_var(stream_id)
+                        + encode_uint_var(5)
+                        + encode_uint_var(0)
+                    ),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.FINAL_SIZE_ERROR)
+            self.assertEqual(cm.exception.frame_type, frame_type)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Data received beyond final size"
+            )
 
     def test_handle_stream_frame_fin_only(self):
         frame_type = QuicFrameType.STREAM_BASE | 1

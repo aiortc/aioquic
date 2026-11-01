@@ -191,6 +191,17 @@ class QuicStreamTest(TestCase):
             StreamDataReceived(data=b"89012345", end_stream=True, stream_id=0),
         )
 
+    def test_receiver_fin_below_received_data(self):
+        stream = QuicStream(stream_id=0)
+        stream.receiver.handle_frame(QuicStreamFrame(offset=4, data=b"4567"))
+
+        # The final size is below data already received.
+        with self.assertRaises(FinalSizeError) as cm:
+            stream.receiver.handle_frame(
+                QuicStreamFrame(offset=0, data=b"01", fin=True)
+            )
+        self.assertEqual(str(cm.exception), "Data received beyond final size")
+
     def test_receiver_fin_out_of_order(self):
         stream = QuicStream(stream_id=0)
 
@@ -281,6 +292,15 @@ class QuicStreamTest(TestCase):
             stream.receiver.handle_reset(final_size=4),
             StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
         )
+
+    def test_receiver_reset_below_received_data(self):
+        stream = QuicStream(stream_id=0)
+        stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"01234567"))
+
+        # The final size is below data already received.
+        with self.assertRaises(FinalSizeError) as cm:
+            stream.receiver.handle_reset(final_size=4)
+        self.assertEqual(str(cm.exception), "Data received beyond final size")
 
     def test_receiver_reset_then_data(self):
         stream = QuicStream(stream_id=0)
