@@ -28,7 +28,7 @@ async def homepage(request):
     Simple homepage.
     """
     await request.send_push_promise("/style.css")
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 async def echo(request):
@@ -64,11 +64,9 @@ async def logs(request):
                 }
             )
     return templates.TemplateResponse(
+        request,
         "logs.html",
-        {
-            "logs": sorted(logs, key=lambda x: x["date"], reverse=True),
-            "request": request,
-        },
+        {"logs": sorted(logs, key=lambda x: x["date"], reverse=True)},
     )
 
 
