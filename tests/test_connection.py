@@ -2561,6 +2561,72 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertEqual(len(server._network_paths[1].remote_challenges), 1)
             self.assertEqual(self.path_challenges(server), [])
 
+    def test_send_fin_without_data_after_full_packet(self):
+        """
+        Check a FIN without data which finds the packet full is sent in the
+        next packet.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Client opens stream 0 so it is served before stream 4, sends data
+            # on stream 4.
+            client.send_stream_data(0, b"")
+            client.send_stream_data(4, b"hello")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [36])
+            self.assertAlmostEqual(client.get_timer(), 0.625)
+            self.assertSentPackets(client, [0, 0, 2])
+
+            # Server receives stream data, sends ACK.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertEvents(server, [events.StreamDataReceived])
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(server.get_timer(), 60.4)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+
+            # Client receives ACK, nothing remains in flight.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(client.get_timer(), 60.45)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 0])
+
+            # Client fills a packet with data on stream 0, then ends stream 4.
+            # The FIN does not fit, it goes in the second packet.
+            client.send_stream_data(0, bytes(1200))
+            client.send_stream_data(4, b"", end_stream=True)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200, 69])
+            self.assertAlmostEqual(client.get_timer(), 0.6875)
+            self.assertSentPackets(client, [0, 0, 2])
+
+            # Server receives both packets, stream 4 ends, sends ACK.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            server.receive_datagram(items[1][0], CLIENT_ADDR, now=now)
+            self.assertEqual(
+                [
+                    (event.stream_id, len(event.data), event.end_stream)
+                    for event in iter(server.next_event, None)
+                ],
+                [(0, 1169, False), (4, 0, True), (0, 31, False)],
+            )
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(server.get_timer(), 60.5)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 2])
+
+            # Client receives ACK, nothing remains in flight.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(client.get_timer(), 60.55)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 0])
+
     def watch_timers(self, *connections: QuicConnection) -> None:
         """
         Register the connections whose timers the advance_* helpers check.
