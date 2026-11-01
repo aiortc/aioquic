@@ -78,7 +78,7 @@ purpose of the change.
 
 Keep comments short, typically one or two lines. State the non-obvious
 reason and cite the RFC section in parentheses (e.g. "(RFC 9000 section
-9.3)"); a full quote of the RFC text belongs in the commit message. Do not
+9.3)"); longer RFC quotes belong in the commit message. Do not
 describe behaviour that is generic in aioquic, such as lost frames being
 resent by their delivery handler, or point to related code elsewhere.
 
@@ -120,6 +120,11 @@ constraint that forced the approach, the non-obvious insight behind the
 change. Skip anything a reader can trivially deduce from the diff: do not
 enumerate the modified files, restate renamed symbols, or narrate the
 changes function by function.
+
+Quote the RFC only where its wording matters, such as the MUST or SHOULD
+that justifies a behaviour change, and keep the quote to the relevant
+sentence. When the fix is obvious from the RFC, citing the section is
+enough.
 
 Reference GitHub issues in a trailer at the end of the message, not inline
 in the body. Use `Fixes: #N` only when the commit fully resolves the
