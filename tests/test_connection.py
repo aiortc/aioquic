@@ -3617,6 +3617,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self.assertPacketDropped(client, "unsupported_version")
 
     def test_receive_datagram_retry(self):
+        """
+        A client acts upon a Retry packet by sending a new Initial packet (RFC 9000
+        section 17.2.5.2).
+        """
         client = create_standalone_client(self)
 
         client.receive_datagram(
@@ -3632,10 +3636,67 @@ class QuicConnectionTest(QuicConnectionTestCase):
         )
         self.assertEqual(drop(client), 1)
 
-    def test_receive_datagram_retry_same_source_cid(self):
+    def test_receive_datagram_retry_after_server_initial(self):
+        """
+        A client discards a Retry packet once it has processed a packet from the
+        server (RFC 9000 section 17.2.5.2).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            # Client sends INITIAL, server sends INITIAL and HANDSHAKE.
+            client.connect(SERVER_ADDR, now=time.time())
+            self.assertEqual(roundtrip(client, server), (1, 2))
+            self.assertEqual(client._state, QuicConnectionState.CONNECTED)
+            self.assertFalse(client._handshake_confirmed)
+            peer_cid = client._peer_cid.cid
+
+            client.receive_datagram(
+                encode_quic_retry(
+                    version=client._version,
+                    source_cid=binascii.unhexlify("85abb547bf28be97"),
+                    destination_cid=client.host_cid,
+                    original_destination_cid=peer_cid,
+                    retry_token=bytes(16),
+                ),
+                SERVER_ADDR,
+                now=time.time(),
+            )
+            self.assertPacketDropped(client, "unexpected_packet")
+            self.assertEqual(client._peer_cid.cid, peer_cid)
+            self.assertEqual(client._retry_count, 0)
+
+            # The handshake completes.
+            roundtrip_until_done(client, server)
+            self.assertTrue(client._handshake_confirmed)
+
+    def test_receive_datagram_retry_empty_token(self):
+        """
+        A client discards a Retry packet with an empty Retry Token field (RFC 9000
+        section 17.2.5.2).
+        """
         client = create_standalone_client(self)
 
-        # The client discards a retry whose source CID is its original destination CID.
+        client.receive_datagram(
+            encode_quic_retry(
+                version=client._version,
+                source_cid=binascii.unhexlify("85abb547bf28be97"),
+                destination_cid=client.host_cid,
+                original_destination_cid=client._peer_cid.cid,
+                retry_token=b"",
+            ),
+            SERVER_ADDR,
+            now=time.time(),
+        )
+        self.assertEqual(drop(client), 0)
+
+        self.assertPacketDropped(client, "unexpected_packet")
+
+    def test_receive_datagram_retry_same_source_cid(self):
+        """
+        A client discards a Retry packet whose Source Connection ID is the Destination
+        Connection ID of its Initial packet (RFC 9000 section 17.2.5.1).
+        """
+        client = create_standalone_client(self)
+
         client.receive_datagram(
             encode_quic_retry(
                 version=client._version,
@@ -3652,9 +3713,12 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self.assertPacketDropped(client, "unexpected_packet")
 
     def test_receive_datagram_retry_wrong_destination_cid(self):
+        """
+        A client discards a Retry packet whose Destination Connection ID is not one
+        it selected (RFC 9000 section 5.2.1).
+        """
         client = create_standalone_client(self)
 
-        # The client does not reply to a retry packet with a wrong destination CID.
         client.receive_datagram(
             encode_quic_retry(
                 version=client._version,
@@ -3671,6 +3735,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self.assertPacketDropped(client, "unknown_connection_id")
 
     def test_receive_datagram_retry_wrong_integrity_tag(self):
+        """
+        A client discards a Retry packet whose integrity tag cannot be validated
+        (RFC 9000 section 17.2.5.2).
+        """
         client = create_standalone_client(self)
 
         client.receive_datagram(
@@ -3686,6 +3754,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
             now=time.time(),
         )
         self.assertEqual(drop(client), 0)
+
+        self.assertPacketDropped(client, "unexpected_packet")
 
     def test_request_key_update_before_handshake(self):
         with client_and_server(handshake=False) as (client, server):

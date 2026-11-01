@@ -2960,19 +2960,20 @@ class QuicConnection:
         """
         Handle a retry packet.
 
-        A client acts upon at most one Retry packet. The packet is discarded if its
-        Destination Connection ID is not ours, if its Source Connection ID is the
-        same as the Destination Connection ID of our Initial packet, or if its
-        integrity tag cannot be verified.
+        A client acts upon at most one Retry packet, and only before it has processed
+        a packet from the server. The packet is discarded if its Source Connection ID
+        is the same as the Destination Connection ID of our Initial packet, if its
+        Retry Token is empty, or if its integrity tag cannot be verified.
 
         See:
         https://datatracker.ietf.org/doc/html/rfc9000#section-17.2.5
         """
         if (
             self._is_client
+            and self._state == QuicConnectionState.FIRSTFLIGHT
             and not self._retry_count
-            and header.destination_cid == self.host_cid
             and header.source_cid != self._peer_cid.cid
+            and header.token
             and header.integrity_tag
             == get_retry_integrity_tag(
                 packet_without_tag,
