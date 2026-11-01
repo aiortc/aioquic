@@ -5,9 +5,11 @@ from aioquic._crypto import AEAD, HeaderProtection
 from aioquic.buffer import Buffer
 from aioquic.quic.crypto import (
     INITIAL_CIPHER_SUITE,
+    CryptoContext,
     CryptoError,
     CryptoPair,
     derive_key_iv_hp,
+    next_key_phase,
 )
 from aioquic.quic.packet import PACKET_FIXED_BIT, QuicProtocolVersion
 from aioquic.tls import CipherSuite
@@ -411,3 +413,24 @@ class CryptoTest(TestCase):
         send(pair1, pair2, 3)
         self.assertEqual(pair1.key_phase, 1)
         self.assertEqual(pair2.key_phase, 1)
+
+    @skipIf("chacha20" in SKIP_TESTS, "Skipping chacha20 tests")
+    def test_next_key_phase_chacha20(self):
+        # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.5
+        crypto = CryptoContext()
+        crypto.setup(
+            cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
+            secret=binascii.unhexlify(
+                "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
+            ),
+            version=PROTOCOL_VERSION,
+        )
+
+        next_crypto = next_key_phase(crypto)
+        self.assertEqual(next_crypto.key_phase, 1)
+        self.assertEqual(
+            next_crypto.secret,
+            binascii.unhexlify(
+                "1223504755036d556342ee9361d253421a826c9ecdf3c7148684b36b714881f9"
+            ),
+        )
