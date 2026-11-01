@@ -1,6 +1,29 @@
 Changelog
 =========
 
+1.7.1
+-----
+
+* Fix streams which never ended when their FIN, written after all their data
+  had been sent, did not fit in the packet being built: the FIN was never
+  sent, so the peer kept waiting for it.
+* Derive the keys for QUIC version 2 key updates with the ``quicv2 ku``
+  label, as :rfc:`9369` requires. After its first key update, a QUIC version
+  2 connection could no longer exchange packets with a conforming peer.
+* Reject a FIN or RESET_STREAM whose final size is below the data already
+  received with ``FINAL_SIZE_ERROR``, as :rfc:`9000` recommends, instead of
+  silently discarding the data beyond it.
+* Drop 1-RTT packets which a server receives on a connection ID it never
+  issued or which the client retired, as :rfc:`9000` requires, instead of
+  switching to that connection ID.
+* Discard Retry packets which a client receives after processing a packet
+  from the server, or whose Retry Token is empty, as :rfc:`9000` requires.
+  Such a Retry restarted the connection attempt, and broke an established
+  connection.
+* Discard 0-RTT keys once 1-RTT keys are in use, as :rfc:`9001` requires:
+  on servers when the first 1-RTT packet arrives, on clients when they
+  install 1-RTT keys.
+
 1.7.0
 -----
 
