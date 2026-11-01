@@ -384,6 +384,7 @@ class QuicStream:
         self.is_blocked = False
         self.max_stream_data_local = max_stream_data_local
         self.max_stream_data_local_sent = max_stream_data_local
+        self.max_stream_data_local_window = max_stream_data_local
         self.max_stream_data_remote = max_stream_data_remote
         self.receiver = QuicStreamReceiver(stream_id=stream_id, readable=readable)
         self.sender = QuicStreamSender(stream_id=stream_id, writable=writable)
