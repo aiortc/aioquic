@@ -693,6 +693,24 @@ class QuicStreamTest(TestCase):
         self.assertIsNone(frame)
         self.assertTrue(stream.sender.buffer_is_empty)
 
+    def test_sender_fin_only_without_room(self):
+        """
+        A FIN without data waits for a packet with room for the frame header.
+        """
+        stream = QuicStream()
+        stream.sender.write(b"", end_stream=True)
+
+        # No room for the frame header.
+        frame = stream.sender.get_frame(-1)
+        self.assertIsNone(frame)
+        self.assertFalse(stream.sender.buffer_is_empty)
+
+        # Just enough room for the frame header.
+        frame = stream.sender.get_frame(0)
+        self.assertEqual(frame.data, b"")
+        self.assertTrue(frame.fin)
+        self.assertEqual(frame.offset, 0)
+
     def test_sender_fin_then_ack(self):
         stream = QuicStream()
 
