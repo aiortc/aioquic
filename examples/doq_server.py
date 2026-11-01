@@ -13,7 +13,7 @@ from dnslib.dns import DNSRecord
 
 
 class DnsServerProtocol(QuicConnectionProtocol):
-    def quic_event_received(self, event: QuicEvent):
+    def quic_event_received(self, event: QuicEvent) -> None:
         if isinstance(event, StreamDataReceived):
             # parse query
             length = struct.unpack("!H", bytes(event.data[:2]))[0]

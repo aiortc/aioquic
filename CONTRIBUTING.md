@@ -11,10 +11,10 @@ Please report security vulnerabilities privately, as described in
 
 Building aioquic from source requires a C compiler and the Python
 development headers. Install it in editable mode, together with the tools
-used by continuous integration:
+and libraries used by continuous integration:
 
 ```
-pip install -e . -r requirements/lint.txt -r requirements/test.txt
+pip install -e . -r requirements/examples.txt -r requirements/lint.txt -r requirements/test.txt
 ```
 
 Work on a branch and open a pull request against `main`.

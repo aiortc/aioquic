@@ -1,0 +1,5 @@
+dnslib
+httpx
+jinja2
+starlette
+wsproto

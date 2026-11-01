@@ -6,7 +6,8 @@ import pickle
 import ssl
 import time
 from collections import deque
-from typing import BinaryIO, Callable, Deque, Optional, Union, cast
+from collections.abc import Callable
+from typing import Any, BinaryIO, Optional, Union, cast
 from urllib.parse import urlparse
 
 import aioquic
@@ -133,14 +134,14 @@ class WebSocket:
 
 
 class HttpClient(QuicConnectionProtocol):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
         self.key_update = False
-        self.pushes: dict[int, Deque[H3Event]] = {}
+        self.pushes: dict[int, deque[H3Event]] = {}
         self._http: Optional[HttpConnection] = None
-        self._request_events: dict[int, Deque[H3Event]] = {}
-        self._request_waiter: dict[int, asyncio.Future[Deque[H3Event]]] = {}
+        self._request_events: dict[int, deque[H3Event]] = {}
+        self._request_waiter: dict[int, asyncio.Future[deque[H3Event]]] = {}
         self._websockets: dict[int, WebSocket] = {}
 
         if self._quic.configuration.alpn_protocols[0].startswith("hq-"):
@@ -148,7 +149,7 @@ class HttpClient(QuicConnectionProtocol):
         else:
             self._http = H3Connection(self._quic)
 
-    async def get(self, url: str, headers: Optional[dict] = None) -> Deque[H3Event]:
+    async def get(self, url: str, headers: Optional[dict] = None) -> deque[H3Event]:
         """
         Perform a GET request.
         """
@@ -158,7 +159,7 @@ class HttpClient(QuicConnectionProtocol):
 
     async def post(
         self, url: str, data: bytes, headers: Optional[dict] = None
-    ) -> Deque[H3Event]:
+    ) -> deque[H3Event]:
         """
         Perform a POST request.
         """
@@ -245,7 +246,7 @@ class HttpClient(QuicConnectionProtocol):
                 websocket.connection_terminated()
             self._websockets.clear()
 
-    async def _request(self, request: HttpRequest) -> Deque[H3Event]:
+    async def _request(self, request: HttpRequest) -> deque[H3Event]:
         stream_id = self._quic.get_next_available_stream_id()
         self._http.send_headers(
             stream_id=stream_id,
@@ -350,7 +351,7 @@ def process_http_pushes(
 
 
 def write_response(
-    http_events: Deque[H3Event], output_file: BinaryIO, include: bool
+    http_events: deque[H3Event], output_file: BinaryIO, include: bool
 ) -> None:
     for http_event in http_events:
         if isinstance(http_event, HeadersReceived) and include:
