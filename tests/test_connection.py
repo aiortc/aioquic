@@ -351,9 +351,10 @@ class QuicConnectionTestCase(TestCase):
         self.assertEqual(counts, expected)
 
 
-class QuicConnectionLossTest(QuicConnectionTestCase):
+class QuicConnectionTimelineTest(QuicConnectionTestCase):
     """
-    Check how connections recover when packets are lost or delayed.
+    Step connections through simulated time one network hop at a time, checking
+    datagrams, timers and sent packets after each step.
     """
 
     def acked_ranges(self, connection: QuicConnection) -> list[list[list[int]]]:
@@ -617,6 +618,109 @@ class QuicConnectionLossTest(QuicConnectionTestCase):
             self.assertSentPackets(server, [1, 1, 6])
             self.assertEvents(server, [])
             self.assertEqual(self.acked_ranges(server), [[[0, 0]], [[1, 1]]])
+
+    def test_connect_with_0rtt_and_late_0rtt_packet(self):
+        """
+        Check clients discard 0-RTT keys once they install 1-RTT keys, and servers
+        once they receive a 1-RTT packet (RFC 9001 section 4.9.3).
+
+        A 0-RTT packet which arrives after that is dropped, and the client resends
+        its data in a 1-RTT packet once it detects the loss.
+        """
+        client_ticket, ticket_store = self.create_session_ticket()
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            handshake=False,
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+        ) as (client, server):
+            self.watch_timers(client, server)
+
+            # Client sends INITIAL + 0-RTT data.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, b"hello", end_stream=True)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 1])
+            self.assertEvents(client, [])
+
+            # Client sends more 0-RTT data, which is delayed.
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, b"world", end_stream=True)
+            late_items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(late_items), [52])
+            header = pull_quic_header(Buffer(data=late_items[0][0]), host_cid_length=8)
+            self.assertEqual(header.packet_type, QuicPacketType.ZERO_RTT)
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 2])
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL + 0-RTT data, sends INITIAL + HANDSHAKE and
+            # an ACK for the 0-RTT data.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(server.get_timer(), 0.25)
+            self.assertSentPackets(server, [1, 1, 1])
+            self.assertEvents(
+                server, [events.ProtocolNegotiated, events.StreamDataReceived]
+            )
+            self.assertTrue(server._cryptos[tls.Epoch.ZERO_RTT].recv.is_valid())
+
+            # Client receives INITIAL + HANDSHAKE and the ACK, installs 1-RTT keys
+            # and discards its 0-RTT keys, sends FINISHED and 1-RTT data.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.35)
+            self.assertSentPackets(client, [0, 1, 2])
+            self.assertEvents(
+                client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
+            )
+            self.assertFalse(client._cryptos[tls.Epoch.ZERO_RTT].send.is_valid())
+
+            # Server receives FINISHED and 1-RTT data, discards its 0-RTT keys,
+            # sends HANDSHAKE_DONE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [231])
+            self.assertAlmostEqual(server.get_timer(), 0.425)
+            self.assertSentPackets(server, [0, 0, 2])
+            self.assertEvents(server, HANDSHAKE_COMPLETED_EVENTS)
+            self.assertFalse(server._cryptos[tls.Epoch.ZERO_RTT].recv.is_valid())
+
+            # Server then receives the delayed 0-RTT data, which it drops.
+            with self.assertPacketsDropped(server, ["key_unavailable"]):
+                server.receive_datagram(late_items[0][0], CLIENT_ADDR, now=now)
+            self.assertEqual(datagram_sizes(server.datagrams_to_send(now=now)), [])
+            self.assertAlmostEqual(server.get_timer(), 0.425)
+            self.assertSentPackets(server, [0, 0, 2])
+            self.assertEvents(server, [])
+
+            # Client receives HANDSHAKE_DONE, detects the loss of the delayed 0-RTT
+            # data and resends it in 1-RTT.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [41])
+            self.assertAlmostEqual(client.get_timer(), 0.4375)
+            self.assertSentPackets(client, [0, 0, 1])
+            self.assertEvents(client, [])
+
+            # Server receives the 1-RTT data, sends ACK.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(server.get_timer(), 60.25)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [events.StreamDataReceived])
 
     def test_connect_with_0rtt_and_lost_client_first_flight(self):
         """

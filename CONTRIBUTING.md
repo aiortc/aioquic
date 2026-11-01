@@ -85,7 +85,7 @@ resent by their delivery handler, or point to related code elsewhere.
 ## Tests
 
 Test anything involving timers, loss, PTO or retransmission in
-`QuicConnectionLossTest` (`tests/test_connection.py`), following its
+`QuicConnectionTimelineTest` (`tests/test_connection.py`), following its
 conventions:
 
 - simulated time starting at `now = 0.0`, moved with `advance_by_tick()`
