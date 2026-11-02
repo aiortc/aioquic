@@ -2134,7 +2134,7 @@ class VerifyCertificateTest(TestCase):
     def test_verify_subject_with_malformed_extension(self) -> None:
         key = ec.generate_private_key(ec.SECP256R1())
         name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "example.com")])
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         certificate = (
             x509.CertificateBuilder()
             .subject_name(name)

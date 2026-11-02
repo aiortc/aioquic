@@ -90,7 +90,7 @@ def generate_certificate(
     # The certificate's start date is truncated to the second, and OpenSSL checks
     # it against a coarse clock which can lag behind by a few milliseconds, so a
     # certificate starting now may not be valid yet. Start it a second earlier.
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -122,7 +122,7 @@ def generate_default_certificates() -> None:
     numbers and the same names and extensions.
     """
     # The certificates start a second earlier, see generate_certificate().
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
 
     ca_key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
     ca_name = x509.Name(

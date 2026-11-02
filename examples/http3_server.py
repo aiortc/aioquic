@@ -436,7 +436,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     transmit=self.transmit,
                 )
             self._handlers[event.stream_id] = handler
-            asyncio.ensure_future(handler.run_asgi(application))
+            asyncio.create_task(handler.run_asgi(application))
         elif (
             isinstance(event, (DataReceived, HeadersReceived))
             and event.stream_id in self._handlers

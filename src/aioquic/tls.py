@@ -51,7 +51,7 @@ T = TypeVar("T")
 
 # facilitate mocking for the test suite
 def utcnow() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 class AlertDescription(IntEnum):
