@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from os import PathLike
 from re import split
-from typing import Any, Optional, TextIO, Union
+from typing import Any, TextIO
 
 from ..tls import (
     CipherSuite,
@@ -21,7 +21,7 @@ class QuicConfiguration:
     A QUIC configuration.
     """
 
-    alpn_protocols: Optional[list[str]] = None
+    alpn_protocols: list[str] | None = None
     """
     A list of supported ALPN protocols.
     """
@@ -65,19 +65,19 @@ class QuicConfiguration:
     Per-stream flow control limit.
     """
 
-    quic_logger: Optional[QuicLogger] = None
+    quic_logger: QuicLogger | None = None
     """
     The :class:`~aioquic.quic.logger.QuicLogger` instance to log events to.
     """
 
-    secrets_log_file: Optional[TextIO] = None
+    secrets_log_file: TextIO | None = None
     """
     A file-like object in which to log traffic secrets.
 
     This is useful to analyze traffic captures with Wireshark.
     """
 
-    server_name: Optional[str] = None
+    server_name: str | None = None
     """
     The server name to use when verifying the server's TLS certificate, which
     can either be a DNS name or an IP address.
@@ -88,7 +88,7 @@ class QuicConfiguration:
     .. note:: This is only used by clients.
     """
 
-    session_ticket: Optional[SessionTicket] = None
+    session_ticket: SessionTicket | None = None
     """
     The TLS session ticket which should be used for session resumption.
     """
@@ -101,15 +101,15 @@ class QuicConfiguration:
     """
 
     # For internal purposes, not guaranteed to be stable.
-    cadata: Optional[bytes] = None
-    cafile: Optional[str] = None
-    capath: Optional[str] = None
+    cadata: bytes | None = None
+    cafile: str | None = None
+    capath: str | None = None
     certificate: Any = None
     certificate_chain: list[Any] = field(default_factory=list)
-    cipher_suites: Optional[list[CipherSuite]] = None
+    cipher_suites: list[CipherSuite] | None = None
     initial_rtt: float = 0.1
-    max_datagram_frame_size: Optional[int] = None
-    original_version: Optional[int] = None
+    max_datagram_frame_size: int | None = None
+    original_version: int | None = None
     private_key: Any = None
     quantum_readiness_test: bool = False
     supported_versions: list[int] = field(
@@ -118,13 +118,13 @@ class QuicConfiguration:
             QuicProtocolVersion.VERSION_2,
         ]
     )
-    verify_mode: Optional[int] = None
+    verify_mode: int | None = None
 
     def load_cert_chain(
         self,
-        certfile: Union[str, PathLike],
-        keyfile: Optional[Union[str, PathLike]] = None,
-        password: Optional[Union[bytes, str]] = None,
+        certfile: str | PathLike,
+        keyfile: str | PathLike | None = None,
+        password: bytes | str | None = None,
     ) -> None:
         """
         Load a private key and the corresponding certificate.
@@ -150,9 +150,9 @@ class QuicConfiguration:
 
     def load_verify_locations(
         self,
-        cafile: Optional[str] = None,
-        capath: Optional[str] = None,
-        cadata: Optional[bytes] = None,
+        cafile: str | None = None,
+        capath: str | None = None,
+        cadata: bytes | None = None,
     ) -> None:
         """
         Load a set of "certification authority" (CA) certificates used to

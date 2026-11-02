@@ -3,18 +3,11 @@ import ipaddress
 import logging
 import os
 from collections import deque
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
-from typing import (
-    Any,
-    Callable,
-    Deque,
-    FrozenSet,
-    Optional,
-    Sequence,
-    Set,
-)
+from typing import Any
 
 from .. import tls
 from ..buffer import (
@@ -116,7 +109,7 @@ STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 TRANSPORT_CLOSE_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE  # + reason length
 
 
-def EPOCHS(shortcut: str) -> FrozenSet[tls.Epoch]:
+def EPOCHS(shortcut: str) -> frozenset[tls.Epoch]:
     return frozenset(EPOCH_SHORTCUTS[i] for i in shortcut)
 
 
@@ -211,10 +204,10 @@ class QuicNetworkPath:
         self.bytes_sent: int = 0
         self.is_validated: bool = is_validated
         self.local_challenge_sent: bool = False
-        self.local_challenges: Deque[bytes] = deque(maxlen=MAX_LOCAL_CHALLENGES)
-        self.peer_cid: Optional[QuicConnectionId] = None
-        self.remote_challenges: Deque[bytes] = deque()
-        self.validation_deadline: Optional[float] = None
+        self.local_challenges: deque[bytes] = deque(maxlen=MAX_LOCAL_CHALLENGES)
+        self.peer_cid: QuicConnectionId | None = None
+        self.remote_challenges: deque[bytes] = deque()
+        self.validation_deadline: float | None = None
 
     def can_send(self, size: int) -> bool:
         return self.is_validated or (self.bytes_sent + size) <= 3 * self.bytes_received
@@ -225,9 +218,9 @@ class QuicReceiveContext:
     epoch: tls.Epoch
     host_cid: bytes
     network_path: QuicNetworkPath
-    quic_logger_frames: Optional[list[Any]]
+    quic_logger_frames: list[Any] | None
     time: float
-    version: Optional[int]
+    version: int | None
 
 
 QuicTokenHandler = Callable[[bytes], None]
@@ -260,11 +253,11 @@ class QuicConnection:
         self,
         *,
         configuration: QuicConfiguration,
-        original_destination_connection_id: Optional[bytes] = None,
-        retry_source_connection_id: Optional[bytes] = None,
-        session_ticket_fetcher: Optional[tls.SessionTicketFetcher] = None,
-        session_ticket_handler: Optional[tls.SessionTicketHandler] = None,
-        token_handler: Optional[QuicTokenHandler] = None,
+        original_destination_connection_id: bytes | None = None,
+        retry_source_connection_id: bytes | None = None,
+        session_ticket_fetcher: tls.SessionTicketFetcher | None = None,
+        session_ticket_handler: tls.SessionTicketHandler | None = None,
+        token_handler: QuicTokenHandler | None = None,
     ) -> None:
         if configuration.max_datagram_size < SMALLEST_MAX_DATAGRAM_SIZE:
             raise ValueError(
@@ -298,17 +291,17 @@ class QuicConnection:
 
         self._ack_delay = K_GRANULARITY
         self._ack_eliciting_sent_since_receipt = False
-        self._close_at: Optional[float] = None
-        self._close_event: Optional[events.ConnectionTerminated] = None
+        self._close_at: float | None = None
+        self._close_event: events.ConnectionTerminated | None = None
         self._connect_called = False
         self._cryptos: dict[tls.Epoch, CryptoPair] = {}
         self._cryptos_initial: dict[int, CryptoPair] = {}
         self._crypto_buffers: dict[tls.Epoch, Buffer] = {}
-        self._crypto_frame_type: Optional[int] = None
-        self._crypto_packet_version: Optional[int] = None
+        self._crypto_frame_type: int | None = None
+        self._crypto_packet_version: int | None = None
         self._crypto_retransmitted = False
         self._crypto_streams: dict[tls.Epoch, QuicStream] = {}
-        self._events: Deque[events.QuicEvent] = deque()
+        self._events: deque[events.QuicEvent] = deque()
         self._handshake_complete = False
         self._handshake_confirmed = False
         self._host_cids = [
@@ -343,33 +336,33 @@ class QuicConnection:
         )
         self._local_next_stream_id_bidi = 0 if self._is_client else 1
         self._local_next_stream_id_uni = 2 if self._is_client else 3
-        self._loss_at: Optional[float] = None
+        self._loss_at: float | None = None
         self._max_datagram_size = configuration.max_datagram_size
         self._network_paths: list[QuicNetworkPath] = []
-        self._pacing_at: Optional[float] = None
+        self._pacing_at: float | None = None
         self._packet_number = 0
         self._peer_cid = QuicConnectionId(
             cid=os.urandom(configuration.connection_id_length), sequence_number=None
         )
         self._peer_cid_available: list[QuicConnectionId] = []
-        self._peer_cid_sequence_numbers: Set[int] = set([0])
+        self._peer_cid_sequence_numbers: set[int] = set([0])
         self._peer_retire_prior_to = 0
         self._peer_token = configuration.token
-        self._quic_logger: Optional[QuicLoggerTrace] = None
+        self._quic_logger: QuicLoggerTrace | None = None
         self._remote_ack_delay_exponent = 3
         self._remote_active_connection_id_limit = 2
-        self._remote_initial_source_connection_id: Optional[bytes] = None
-        self._remote_max_idle_timeout: Optional[float] = None  # seconds
+        self._remote_initial_source_connection_id: bytes | None = None
+        self._remote_max_idle_timeout: float | None = None  # seconds
         self._remote_max_data = 0
         self._remote_max_data_used = 0
-        self._remote_max_datagram_frame_size: Optional[int] = None
+        self._remote_max_datagram_frame_size: int | None = None
         self._remote_max_stream_data_bidi_local = 0
         self._remote_max_stream_data_bidi_remote = 0
         self._remote_max_stream_data_uni = 0
         self._remote_max_streams_bidi = 0
         self._remote_max_streams_uni = 0
-        self._remote_preferred_address: Optional[QuicPreferredAddress] = None
-        self._remote_version_information: Optional[QuicVersionInformation] = None
+        self._remote_preferred_address: QuicPreferredAddress | None = None
+        self._remote_version_information: QuicVersionInformation | None = None
         self._retry_count = 0
         self._retry_source_connection_id = retry_source_connection_id
         self._spaces: dict[tls.Epoch, QuicPacketSpace] = {}
@@ -380,7 +373,7 @@ class QuicConnection:
         self._streams_queue: list[QuicStream] = []
         self._streams_blocked_bidi: list[QuicStream] = []
         self._streams_blocked_uni: list[QuicStream] = []
-        self._version: Optional[int] = None
+        self._version: int | None = None
         self._version_negotiated_compatible = False
         self._version_negotiated_incompatible = False
 
@@ -414,7 +407,7 @@ class QuicConnection:
 
         # things to send
         self._close_pending = False
-        self._datagrams_pending: Deque[bytes] = deque()
+        self._datagrams_pending: deque[bytes] = deque()
         self._handshake_done_pending = False
         self._ping_pending: list[int] = []
         self._probe_pending = False
@@ -488,7 +481,7 @@ class QuicConnection:
     def close(
         self,
         error_code: int = QuicErrorCode.NO_ERROR,
-        frame_type: Optional[int] = None,
+        frame_type: int | None = None,
         reason_phrase: str = "",
     ) -> None:
         """
@@ -660,7 +653,7 @@ class QuicConnection:
         else:
             return self._local_next_stream_id_bidi
 
-    def get_peer_address(self) -> Optional[NetworkAddress]:
+    def get_peer_address(self) -> NetworkAddress | None:
         """
         Return the peer address to which datagrams are currently sent, or `None`
         if none is known yet.
@@ -672,7 +665,7 @@ class QuicConnection:
             return self._network_paths[0].addr
         return None
 
-    def get_timer(self) -> Optional[float]:
+    def get_timer(self) -> float | None:
         """
         Return the time at which the timer should fire or None if no timer is needed.
         """
@@ -736,7 +729,7 @@ class QuicConnection:
         if deadline is not None and now >= deadline:
             self._abandon_path_validation()
 
-    def next_event(self) -> Optional[events.QuicEvent]:
+    def next_event(self) -> events.QuicEvent | None:
         """
         Retrieve the next event from the event buffer.
 
@@ -861,7 +854,7 @@ class QuicConnection:
 
             # Check destination CID matches, except on a client's INITIAL and 0-RTT
             # packets, which can use the CID it chose (RFC 9000 section 7.2).
-            destination_cid_seq: Optional[int] = None
+            destination_cid_seq: int | None = None
             for connection_id in self._host_cids:
                 if header.destination_cid == connection_id.cid:
                     destination_cid_seq = connection_id.sequence_number
@@ -1039,7 +1032,7 @@ class QuicConnection:
                 return
 
             # log packet
-            quic_logger_frames: Optional[list[dict]] = None
+            quic_logger_frames: list[dict] | None = None
             if self._quic_logger is not None:
                 quic_logger_frames = []
                 self._quic_logger.log_event(
@@ -1556,7 +1549,7 @@ class QuicConnection:
         self._logger.debug("Network path %s discovered", network_path.addr)
         return network_path
 
-    def _find_preferred_address(self) -> Optional[NetworkAddress]:
+    def _find_preferred_address(self) -> NetworkAddress | None:
         """
         Return the server's preferred address in the same address family and
         format as the current server address, or `None` if there is none.
@@ -2844,7 +2837,7 @@ class QuicConnection:
         if delivery != QuicDeliveryState.ACKED:
             self._retire_connection_ids.append(sequence_number)
 
-    def _path_validation_deadline(self) -> Optional[float]:
+    def _path_validation_deadline(self) -> float | None:
         """
         Return the time at which the validation of the active network path is
         abandoned, or `None` if it is not being validated.
@@ -3623,7 +3616,7 @@ class QuicConnection:
     def _write_application(
         self, builder: QuicPacketBuilder, network_path: QuicNetworkPath, now: float
     ) -> None:
-        crypto_stream: Optional[QuicStream] = None
+        crypto_stream: QuicStream | None = None
         if self._cryptos[tls.Epoch.ONE_RTT].send.is_valid():
             crypto = self._cryptos[tls.Epoch.ONE_RTT]
             crypto_stream = self._crypto_streams[tls.Epoch.ONE_RTT]
@@ -3746,8 +3739,8 @@ class QuicConnection:
                 except QuicPacketBuilderStop:
                     break
 
-            sent: Set[QuicStream] = set()
-            discarded: Set[QuicStream] = set()
+            sent: set[QuicStream] = set()
+            discarded: set[QuicStream] = set()
             try:
                 for stream in self._streams_queue:
                     # if the stream is finished, discard it
@@ -3887,7 +3880,7 @@ class QuicConnection:
         builder: QuicPacketBuilder,
         epoch: tls.Epoch,
         error_code: int,
-        frame_type: Optional[int],
+        frame_type: int | None,
         reason_phrase: str,
     ) -> None:
         # convert application-level close to transport-level close in early stages

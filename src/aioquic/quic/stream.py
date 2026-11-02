@@ -1,5 +1,3 @@
-from typing import Optional
-
 from . import events
 from .packet import (
     QuicErrorCode,
@@ -29,17 +27,17 @@ class QuicStreamReceiver:
     - upon reception of a data frame with the FIN bit set
     """
 
-    def __init__(self, stream_id: Optional[int], readable: bool) -> None:
+    def __init__(self, stream_id: int | None, readable: bool) -> None:
         self.highest_offset = 0  # the highest offset ever seen
         self.is_finished = not readable
         self.stop_pending = False
 
         self._buffer = bytearray()
         self._buffer_start = 0  # the offset for the start of the buffer
-        self._final_size: Optional[int] = None
+        self._final_size: int | None = None
         self._ranges = RangeSet()
         self._stream_id = stream_id
-        self._stop_error_code: Optional[int] = None
+        self._stop_error_code: int | None = None
 
     def get_stop_frame(self) -> QuicStopSendingFrame:
         self.stop_pending = False
@@ -51,9 +49,7 @@ class QuicStreamReceiver:
     def starting_offset(self) -> int:
         return self._buffer_start
 
-    def handle_frame(
-        self, frame: QuicStreamFrame
-    ) -> Optional[events.StreamDataReceived]:
+    def handle_frame(self, frame: QuicStreamFrame) -> events.StreamDataReceived | None:
         """
         Handle a frame of received data.
         """
@@ -122,7 +118,7 @@ class QuicStreamReceiver:
 
     def handle_reset(
         self, *, final_size: int, error_code: int = QuicErrorCode.NO_ERROR
-    ) -> Optional[events.StreamReset]:
+    ) -> events.StreamReset | None:
         """
         Handle an abrupt termination of the receiving part of the QUIC stream.
         """
@@ -186,7 +182,7 @@ class QuicStreamSender:
     - upon acknowledgement of a data frame with the FIN bit set
     """
 
-    def __init__(self, stream_id: Optional[int], writable: bool) -> None:
+    def __init__(self, stream_id: int | None, writable: bool) -> None:
         self.buffer_is_empty = True
         self.highest_offset = 0
         self.is_finished = not writable
@@ -195,12 +191,12 @@ class QuicStreamSender:
         self._acked = RangeSet()
         self._acked_fin = False
         self._buffer = bytearray()
-        self._buffer_fin: Optional[int] = None
+        self._buffer_fin: int | None = None
         self._buffer_start = 0  # the offset for the start of the buffer
         self._buffer_stop = 0  # the offset for the stop of the buffer
         self._pending = RangeSet()
         self._pending_eof = False
-        self._reset_error_code: Optional[int] = None
+        self._reset_error_code: int | None = None
         self._stream_id = stream_id
 
     @property
@@ -216,8 +212,8 @@ class QuicStreamSender:
             return self._buffer_stop
 
     def get_frame(
-        self, max_size: int, max_offset: Optional[int] = None
-    ) -> Optional[QuicStreamFrame]:
+        self, max_size: int, max_offset: int | None = None
+    ) -> QuicStreamFrame | None:
         """
         Get a frame of data to send.
 
@@ -375,7 +371,7 @@ class QuicStreamSender:
 class QuicStream:
     def __init__(
         self,
-        stream_id: Optional[int] = None,
+        stream_id: int | None = None,
         max_stream_data_local: int = 0,
         max_stream_data_remote: int = 0,
         readable: bool = True,

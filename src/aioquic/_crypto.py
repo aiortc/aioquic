@@ -1,5 +1,3 @@
-from typing import Union
-
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers import (
     Cipher,
@@ -22,7 +20,7 @@ class CryptoError(ValueError):
 
 
 class AEAD:
-    _aead: Union[aead.AESGCM, aead.ChaCha20Poly1305]
+    _aead: aead.AESGCM | aead.ChaCha20Poly1305
 
     def __init__(self, cipher_name: bytes, key: bytes, iv: bytes) -> None:
         if cipher_name not in (b"aes-128-gcm", b"aes-256-gcm", b"chacha20-poly1305"):

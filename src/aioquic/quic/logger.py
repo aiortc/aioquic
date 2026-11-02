@@ -4,7 +4,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Iterable
-from typing import Any, Optional
+from typing import Any
 
 from ..h3.events import Headers
 from .packet import (
@@ -59,7 +59,7 @@ class QuicLoggerTrace:
         }
 
     def encode_connection_close_frame(
-        self, error_code: int, frame_type: Optional[int], reason_phrase: str
+        self, error_code: int, frame_type: int | None, reason_phrase: str
     ) -> dict:
         attrs = {
             "error_code": error_code,

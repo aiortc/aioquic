@@ -2,7 +2,7 @@ import logging
 import math
 from bisect import bisect_left
 from collections.abc import Callable, Iterable
-from typing import Any, Optional
+from typing import Any
 
 from .congestion import cubic, reno  # noqa
 from .congestion.base import K_GRANULARITY, create_congestion_control
@@ -59,19 +59,19 @@ class QuicPacketNumberWindow:
 
 class QuicPacketSpace:
     def __init__(self, *, is_application_data: bool = False) -> None:
-        self.ack_at: Optional[float] = None
+        self.ack_at: float | None = None
         self.ack_queue = RangeSet()
         self.discarded = False
         self.expected_packet_number = 0
         self.is_application_data = is_application_data
         self.largest_received_packet = -1
-        self.largest_received_time: Optional[float] = None
+        self.largest_received_time: float | None = None
         self.received_packets = QuicPacketNumberWindow()
 
         # sent packets and loss
         self.ack_eliciting_in_flight = 0
         self.largest_acked_packet = 0
-        self.loss_time: Optional[float] = None
+        self.loss_time: float | None = None
         self.sent_packets: dict[int, QuicSentPacket] = {}
 
 
@@ -81,7 +81,7 @@ class QuicPacketPacer:
         self.bucket_max: float = 0.0
         self.bucket_time: float = 0.0
         self.evaluation_time: float = 0.0
-        self.packet_time: Optional[float] = None
+        self.packet_time: float | None = None
 
     def next_send_time(self, now: float) -> float:
         if self.packet_time is not None:
@@ -135,8 +135,8 @@ class QuicPacketRecovery:
         max_datagram_size: int,
         peer_completed_address_validation: bool,
         send_probe: Callable[[], None],
-        logger: Optional[logging.LoggerAdapter] = None,
-        quic_logger: Optional[QuicLoggerTrace] = None,
+        logger: logging.LoggerAdapter | None = None,
+        quic_logger: QuicLoggerTrace | None = None,
     ) -> None:
         self.handshake_confirmed = False
         self.max_ack_delay = 0.025
@@ -191,9 +191,7 @@ class QuicPacketRecovery:
         if self._quic_logger is not None:
             self._log_metrics_updated()
 
-    def get_loss_detection_time(
-        self, *, amplification_limited: bool
-    ) -> Optional[float]:
+    def get_loss_detection_time(self, *, amplification_limited: bool) -> float | None:
         """
         Return the time at which the loss detection timer should fire, or None
         if no timer is needed.
@@ -408,7 +406,7 @@ class QuicPacketRecovery:
         # does not arm the PTO before the handshake is confirmed, so it is not
         # retransmitted early either.
         if not crypto_scheduled and not speed_up_handshake:
-            oldest: Optional[tuple[QuicSentPacket, QuicPacketSpace]] = None
+            oldest: tuple[QuicSentPacket, QuicPacketSpace] | None = None
             for space in self.spaces:
                 if space.is_application_data and not self.handshake_confirmed:
                     continue
@@ -464,7 +462,7 @@ class QuicPacketRecovery:
             space=space,
         )
 
-    def _get_loss_space(self) -> Optional[QuicPacketSpace]:
+    def _get_loss_space(self) -> QuicPacketSpace | None:
         loss_space = None
         for space in self.spaces:
             if space.loss_time is not None and (

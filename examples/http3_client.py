@@ -7,7 +7,7 @@ import ssl
 import time
 from collections import deque
 from collections.abc import Callable
-from typing import Any, BinaryIO, Optional, Union, cast
+from typing import Any, BinaryIO, cast
 from urllib.parse import urlparse
 
 import aioquic
@@ -36,7 +36,7 @@ except ImportError:
 
 logger = logging.getLogger("client")
 
-HttpConnection = Union[H0Connection, H3Connection]
+HttpConnection = H0Connection | H3Connection
 
 USER_AGENT = "aioquic/" + aioquic.__version__
 
@@ -58,7 +58,7 @@ class HttpRequest:
         method: str,
         url: URL,
         content: bytes = b"",
-        headers: Optional[dict] = None,
+        headers: dict | None = None,
     ) -> None:
         if headers is None:
             headers = {}
@@ -74,9 +74,9 @@ class WebSocket:
         self, http: HttpConnection, stream_id: int, transmit: Callable[[], None]
     ) -> None:
         self.http = http
-        self.queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        self.queue: asyncio.Queue[str | None] = asyncio.Queue()
         self.stream_id = stream_id
-        self.subprotocol: Optional[str] = None
+        self.subprotocol: str | None = None
         self.transmit = transmit
         self.websocket = wsproto.Connection(wsproto.ConnectionType.CLIENT)
 
@@ -139,7 +139,7 @@ class HttpClient(QuicConnectionProtocol):
 
         self.key_update = False
         self.pushes: dict[int, deque[H3Event]] = {}
-        self._http: Optional[HttpConnection] = None
+        self._http: HttpConnection | None = None
         self._request_events: dict[int, deque[H3Event]] = {}
         self._request_waiter: dict[int, asyncio.Future[deque[H3Event]]] = {}
         self._websockets: dict[int, WebSocket] = {}
@@ -149,7 +149,7 @@ class HttpClient(QuicConnectionProtocol):
         else:
             self._http = H3Connection(self._quic)
 
-    async def get(self, url: str, headers: Optional[dict] = None) -> deque[H3Event]:
+    async def get(self, url: str, headers: dict | None = None) -> deque[H3Event]:
         """
         Perform a GET request.
         """
@@ -158,7 +158,7 @@ class HttpClient(QuicConnectionProtocol):
         )
 
     async def post(
-        self, url: str, data: bytes, headers: Optional[dict] = None
+        self, url: str, data: bytes, headers: dict | None = None
     ) -> deque[H3Event]:
         """
         Perform a POST request.
@@ -168,7 +168,7 @@ class HttpClient(QuicConnectionProtocol):
         )
 
     async def websocket(
-        self, url: str, subprotocols: Optional[list[str]] = None
+        self, url: str, subprotocols: list[str] | None = None
     ) -> WebSocket:
         """
         Open a WebSocket.
@@ -276,9 +276,9 @@ class HttpClient(QuicConnectionProtocol):
 async def perform_http_request(
     client: HttpClient,
     url: str,
-    data: Optional[str],
+    data: str | None,
     include: bool,
-    output_dir: Optional[str],
+    output_dir: str | None,
 ) -> None:
     # perform request
     start = time.time()
@@ -322,7 +322,7 @@ async def perform_http_request(
 def process_http_pushes(
     client: HttpClient,
     include: bool,
-    output_dir: Optional[str],
+    output_dir: str | None,
 ) -> None:
     for _, http_events in client.pushes.items():
         method = ""
@@ -378,9 +378,9 @@ def save_session_ticket(ticket: SessionTicket) -> None:
 async def main(
     configuration: QuicConfiguration,
     urls: list[str],
-    data: Optional[str],
+    data: str | None,
     include: bool,
-    output_dir: Optional[str],
+    output_dir: str | None,
     local_port: int,
     key_update: bool,
     zero_rtt: bool,

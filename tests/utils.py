@@ -6,7 +6,7 @@ import logging
 import os
 import tempfile
 from collections.abc import Callable, Coroutine
-from typing import Optional, ParamSpec, TypeVar, Union
+from typing import ParamSpec, TypeVar
 
 from aioquic import tls
 from aioquic.quic.packet import QuicPacketType
@@ -15,12 +15,12 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
 
-CertificatePrivateKey = Union[
-    ec.EllipticCurvePrivateKey,
-    ed448.Ed448PrivateKey,
-    ed25519.Ed25519PrivateKey,
-    rsa.RSAPrivateKey,
-]
+CertificatePrivateKey = (
+    ec.EllipticCurvePrivateKey
+    | ed448.Ed448PrivateKey
+    | ed25519.Ed25519PrivateKey
+    | rsa.RSAPrivateKey
+)
 K = TypeVar(
     "K",
     ec.EllipticCurvePrivateKey,
@@ -80,7 +80,7 @@ def generate_certificate(
     *,
     alternative_names: list[str],
     common_name: str,
-    hash_algorithm: Optional[hashes.SHA256],
+    hash_algorithm: hashes.SHA256 | None,
     key: K,
 ) -> tuple[x509.Certificate, K]:
     subject = issuer = x509.Name(

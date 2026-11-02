@@ -1,6 +1,7 @@
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Sequence
+from typing import Any
 
 from ..buffer import Buffer, size_uint_var
 from ..tls import Epoch
@@ -36,7 +37,7 @@ class QuicSentPacket:
     is_crypto_packet: bool
     packet_number: int
     packet_type: QuicPacketType
-    sent_time: Optional[float] = None
+    sent_time: float | None = None
     sent_bytes: int = 0
 
     delivery_handlers: list[tuple[QuicDeliveryHandler, Any]] = field(
@@ -64,12 +65,12 @@ class QuicPacketBuilder:
         max_datagram_size: int,
         packet_number: int = 0,
         peer_token: bytes = b"",
-        quic_logger: Optional[QuicLoggerTrace] = None,
+        quic_logger: QuicLoggerTrace | None = None,
         spin_bit: bool = False,
     ):
-        self.max_flight_bytes: Optional[int] = None
-        self.max_total_bytes: Optional[int] = None
-        self.quic_logger_frames: Optional[list[dict]] = None
+        self.max_flight_bytes: int | None = None
+        self.max_total_bytes: int | None = None
+        self.quic_logger_frames: list[dict] | None = None
 
         self._host_cid = host_cid
         self._is_client = is_client
@@ -90,11 +91,11 @@ class QuicPacketBuilder:
 
         # current packet
         self._header_size = 0
-        self._packet: Optional[QuicSentPacket] = None
-        self._packet_crypto: Optional[CryptoPair] = None
+        self._packet: QuicSentPacket | None = None
+        self._packet_crypto: CryptoPair | None = None
         self._packet_number = packet_number
         self._packet_start = 0
-        self._packet_type: Optional[QuicPacketType] = None
+        self._packet_type: QuicPacketType | None = None
 
         self._buffer = Buffer(max_datagram_size)
         self._buffer_capacity = max_datagram_size
@@ -158,7 +159,7 @@ class QuicPacketBuilder:
         self,
         frame_type: int,
         capacity: int = 1,
-        handler: Optional[QuicDeliveryHandler] = None,
+        handler: QuicDeliveryHandler | None = None,
         handler_args: Sequence[Any] = [],
     ) -> Buffer:
         """

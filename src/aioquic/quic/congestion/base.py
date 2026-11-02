@@ -1,5 +1,6 @@
 import abc
-from typing import Any, Iterable, Optional, Protocol
+from collections.abc import Iterable
+from typing import Any, Protocol
 
 from ..packet_builder import QuicSentPacket
 
@@ -15,7 +16,7 @@ class QuicCongestionControl(abc.ABC):
 
     bytes_in_flight: int = 0
     congestion_window: int = 0
-    ssthresh: Optional[int] = None
+    ssthresh: int | None = None
 
     def __init__(self, *, max_datagram_size: int) -> None:
         self.congestion_window = K_INITIAL_WINDOW * max_datagram_size
@@ -62,11 +63,11 @@ class QuicRttMonitor:
         self._ready = False
         self._size = 5
 
-        self._filtered_min: Optional[float] = None
+        self._filtered_min: float | None = None
 
         self._sample_idx = 0
-        self._sample_max: Optional[float] = None
-        self._sample_min: Optional[float] = None
+        self._sample_max: float | None = None
+        self._sample_min: float | None = None
         self._sample_time = 0.0
         self._samples = [0.0 for i in range(self._size)]
 

@@ -4,20 +4,12 @@ import logging
 import os
 import ssl
 import struct
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from functools import partial
-from typing import (
-    Any,
-    Callable,
-    Generator,
-    Optional,
-    Sequence,
-    TypeVar,
-    Union,
-    cast,
-)
+from typing import Any, TypeVar, cast
 
 import certifi
 import service_identity
@@ -205,9 +197,7 @@ def hkdf_extract(
     return h.finalize()
 
 
-def load_pem_private_key(
-    data: bytes, password: Optional[bytes] = None
-) -> PrivateKeyTypes:
+def load_pem_private_key(data: bytes, password: bytes | None = None) -> PrivateKeyTypes:
     """
     Load a PEM-encoded private key.
     """
@@ -229,10 +219,10 @@ def load_pem_x509_certificates(data: bytes) -> list[x509.Certificate]:
 def verify_certificate(
     certificate: x509.Certificate,
     chain: list[x509.Certificate] = [],
-    server_name: Optional[str] = None,
-    cadata: Optional[bytes] = None,
-    cafile: Optional[str] = None,
-    capath: Optional[str] = None,
+    server_name: str | None = None,
+    cadata: bytes | None = None,
+    cafile: str | None = None,
+    capath: str | None = None,
 ) -> None:
     # verify dates
     now = utcnow()
@@ -603,15 +593,15 @@ class ClientHello:
     legacy_compression_methods: list[int]
 
     # extensions
-    alpn_protocols: Optional[list[str]] = None
+    alpn_protocols: list[str] | None = None
     early_data: bool = False
-    key_share: Optional[list[KeyShareEntry]] = None
-    pre_shared_key: Optional[OfferedPsks] = None
-    psk_key_exchange_modes: Optional[list[int]] = None
-    server_name: Optional[str] = None
-    signature_algorithms: Optional[list[int]] = None
-    supported_groups: Optional[list[int]] = None
-    supported_versions: Optional[list[int]] = None
+    key_share: list[KeyShareEntry] | None = None
+    pre_shared_key: OfferedPsks | None = None
+    psk_key_exchange_modes: list[int] | None = None
+    server_name: str | None = None
+    signature_algorithms: list[int] | None = None
+    supported_groups: list[int] | None = None
+    supported_versions: list[int] | None = None
 
     other_extensions: list[Extension] = field(default_factory=list)
 
@@ -741,9 +731,9 @@ class ServerHello:
     compression_method: int
 
     # extensions
-    key_share: Optional[KeyShareEntry] = None
-    pre_shared_key: Optional[int] = None
-    supported_version: Optional[int] = None
+    key_share: KeyShareEntry | None = None
+    pre_shared_key: int | None = None
+    supported_version: int | None = None
     other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
 
@@ -817,7 +807,7 @@ class NewSessionTicket:
     ticket: bytes = b""
 
     # extensions
-    max_early_data_size: Optional[int] = None
+    max_early_data_size: int | None = None
     other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
 
@@ -866,7 +856,7 @@ def push_new_session_ticket(buf: Buffer, new_session_ticket: NewSessionTicket) -
 
 @dataclass
 class EncryptedExtensions:
-    alpn_protocol: Optional[str] = None
+    alpn_protocol: str | None = None
     early_data: bool = False
 
     other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
@@ -969,7 +959,7 @@ def push_certificate(buf: Buffer, certificate: Certificate) -> None:
 @dataclass
 class CertificateRequest:
     request_context: bytes = b""
-    signature_algorithms: Optional[list[int]] = None
+    signature_algorithms: list[int] | None = None
     other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
 
@@ -1093,7 +1083,7 @@ class KeySchedule:
             length=self.algorithm.digest_size,
         )
 
-    def extract(self, key_material: Optional[bytes] = None) -> None:
+    def extract(self, key_material: bytes | None = None) -> None:
         if key_material is None:
             key_material = bytes(self.algorithm.digest_size)
 
@@ -1119,7 +1109,7 @@ class KeyScheduleProxy:
     def __init__(self, cipher_suites: list[CipherSuite]):
         self.__schedules = dict(map(lambda c: (c, KeySchedule(c)), cipher_suites))
 
-    def extract(self, key_material: Optional[bytes] = None) -> None:
+    def extract(self, key_material: bytes | None = None) -> None:
         for k in self.__schedules.values():
             k.extract(key_material)
 
@@ -1169,7 +1159,7 @@ def cipher_suite_hash(cipher_suite: CipherSuite) -> hashes.HashAlgorithm:
 
 def decode_public_key(
     key_share: KeyShareEntry,
-) -> Union[ec.EllipticCurvePublicKey, x25519.X25519PublicKey, x448.X448PublicKey, None]:
+) -> ec.EllipticCurvePublicKey | x25519.X25519PublicKey | x448.X448PublicKey | None:
     if key_share[0] == Group.X25519:
         return x25519.X25519PublicKey.from_public_bytes(key_share[1])
     elif key_share[0] == Group.X448:
@@ -1183,9 +1173,7 @@ def decode_public_key(
 
 
 def encode_public_key(
-    public_key: Union[
-        ec.EllipticCurvePublicKey, x25519.X25519PublicKey, x448.X448PublicKey
-    ],
+    public_key: ec.EllipticCurvePublicKey | x25519.X25519PublicKey | x448.X448PublicKey,
 ) -> KeyShareEntry:
     if isinstance(public_key, x25519.X25519PublicKey):
         return (Group.X25519, public_key.public_bytes(Encoding.Raw, PublicFormat.Raw))
@@ -1198,7 +1186,7 @@ def encode_public_key(
 
 
 def negotiate(
-    supported: list[T], offered: Optional[list[Any]], exc: Optional[Alert] = None
+    supported: list[T], offered: list[Any] | None, exc: Alert | None = None
 ) -> T:
     if offered is not None:
         for c in supported:
@@ -1240,7 +1228,7 @@ def signature_algorithm_params(signature_algorithm: int) -> tuple:
 
 @contextmanager
 def push_message(
-    key_schedule: Union[KeySchedule, KeyScheduleProxy], buf: Buffer
+    key_schedule: KeySchedule | KeyScheduleProxy, buf: Buffer
 ) -> Generator:
     hash_start = buf.tell()
     yield
@@ -1264,7 +1252,7 @@ class SessionTicket:
     server_name: str
     ticket: bytes
 
-    max_early_data_size: Optional[int] = None
+    max_early_data_size: int | None = None
     other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
     @property
@@ -1279,7 +1267,7 @@ class SessionTicket:
 
 
 AlpnHandler = Callable[[str], None]
-SessionTicketFetcher = Callable[[bytes], Optional[SessionTicket]]
+SessionTicketFetcher = Callable[[bytes], SessionTicket | None]
 SessionTicketHandler = Callable[[SessionTicket], None]
 
 
@@ -1287,36 +1275,35 @@ class Context:
     def __init__(
         self,
         is_client: bool,
-        alpn_protocols: Optional[list[str]] = None,
-        cadata: Optional[bytes] = None,
-        cafile: Optional[str] = None,
-        capath: Optional[str] = None,
-        cipher_suites: Optional[list[CipherSuite]] = None,
-        logger: Optional[Union[logging.Logger, logging.LoggerAdapter]] = None,
-        max_early_data: Optional[int] = None,
-        server_name: Optional[str] = None,
-        verify_mode: Optional[int] = None,
+        alpn_protocols: list[str] | None = None,
+        cadata: bytes | None = None,
+        cafile: str | None = None,
+        capath: str | None = None,
+        cipher_suites: list[CipherSuite] | None = None,
+        logger: logging.Logger | logging.LoggerAdapter | None = None,
+        max_early_data: int | None = None,
+        server_name: str | None = None,
+        verify_mode: int | None = None,
     ):
         # configuration
         self._alpn_protocols = alpn_protocols
         self._cadata = cadata
         self._cafile = cafile
         self._capath = capath
-        self.certificate: Optional[x509.Certificate] = None
+        self.certificate: x509.Certificate | None = None
         self.certificate_chain: list[x509.Certificate] = []
-        self.certificate_private_key: Optional[
-            Union[
-                dsa.DSAPrivateKey,
-                ec.EllipticCurvePrivateKey,
-                ed25519.Ed25519PrivateKey,
-                ed448.Ed448PrivateKey,
-                rsa.RSAPrivateKey,
-            ]
-        ] = None
+        self.certificate_private_key: (
+            dsa.DSAPrivateKey
+            | ec.EllipticCurvePrivateKey
+            | ed25519.Ed25519PrivateKey
+            | ed448.Ed448PrivateKey
+            | rsa.RSAPrivateKey
+            | None
+        ) = None
         self.handshake_extensions: list[Extension] = []
         self._is_client = is_client
         self._max_early_data = max_early_data
-        self.session_ticket: Optional[SessionTicket] = None
+        self.session_ticket: SessionTicket | None = None
         self._request_client_certificate = False  # For test purposes only
         self._server_name = server_name
         if verify_mode is not None:
@@ -1325,9 +1312,9 @@ class Context:
             self._verify_mode = ssl.CERT_REQUIRED if is_client else ssl.CERT_NONE
 
         # callbacks
-        self.alpn_cb: Optional[AlpnHandler] = None
-        self.get_session_ticket_cb: Optional[SessionTicketFetcher] = None
-        self.new_session_ticket_cb: Optional[SessionTicketHandler] = None
+        self.alpn_cb: AlpnHandler | None = None
+        self.get_session_ticket_cb: SessionTicketFetcher | None = None
+        self.new_session_ticket_cb: SessionTicketHandler | None = None
         self.update_traffic_key_cb: Callable[
             [Direction, Epoch, CipherSuite, bytes], None
         ] = lambda d, e, c, s: None
@@ -1364,26 +1351,26 @@ class Context:
         self._supported_versions = [TLS_VERSION_1_3]
 
         # state
-        self.alpn_negotiated: Optional[str] = None
+        self.alpn_negotiated: str | None = None
         self.early_data_accepted = False
-        self.key_schedule: Optional[KeySchedule] = None
-        self.received_extensions: Optional[list[Extension]] = None
-        self._certificate_request: Optional[CertificateRequest] = None
-        self._key_schedule_psk: Optional[KeySchedule] = None
-        self._key_schedule_proxy: Optional[KeyScheduleProxy] = None
-        self._new_session_ticket: Optional[NewSessionTicket] = None
-        self._peer_certificate: Optional[x509.Certificate] = None
+        self.key_schedule: KeySchedule | None = None
+        self.received_extensions: list[Extension] | None = None
+        self._certificate_request: CertificateRequest | None = None
+        self._key_schedule_psk: KeySchedule | None = None
+        self._key_schedule_proxy: KeyScheduleProxy | None = None
+        self._new_session_ticket: NewSessionTicket | None = None
+        self._peer_certificate: x509.Certificate | None = None
         self._peer_certificate_chain: list[x509.Certificate] = []
-        self._psk_key_exchange_mode: Optional[int] = None
+        self._psk_key_exchange_mode: int | None = None
         self._receive_buffer = b""
         self._session_resumed = False
-        self._enc_key: Optional[bytes] = None
-        self._dec_key: Optional[bytes] = None
+        self._enc_key: bytes | None = None
+        self._dec_key: bytes | None = None
         self.__logger = logger
 
         self._ec_private_keys: list[ec.EllipticCurvePrivateKey] = []
-        self._x25519_private_key: Optional[x25519.X25519PrivateKey] = None
-        self._x448_private_key: Optional[x448.X448PrivateKey] = None
+        self._x25519_private_key: x25519.X25519PrivateKey | None = None
+        self._x448_private_key: x448.X448PrivateKey | None = None
 
         if is_client:
             self.client_random = os.urandom(32)
@@ -1725,7 +1712,7 @@ class Context:
         self._key_schedule_proxy = None
 
         # perform key exchange
-        shared_key: Optional[bytes] = None
+        shared_key: bytes | None = None
         try:
             peer_public_key = decode_public_key(peer_hello.key_share)
             if (
@@ -2051,10 +2038,10 @@ class Context:
             self.key_schedule.update_hash(input_buf.data)
 
         # perform key exchange
-        public_key: Union[
-            ec.EllipticCurvePublicKey, x25519.X25519PublicKey, x448.X448PublicKey
-        ]
-        shared_key: Optional[bytes] = None
+        public_key: (
+            ec.EllipticCurvePublicKey | x25519.X25519PublicKey | x448.X448PublicKey
+        )
+        shared_key: bytes | None = None
         try:
             for key_share in peer_hello.key_share:
                 if key_share[0] not in self._supported_groups:

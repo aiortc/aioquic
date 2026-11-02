@@ -7,7 +7,7 @@ import ssl
 import time
 from collections import deque
 from collections.abc import AsyncIterator
-from typing import Any, Optional, cast
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -155,9 +155,9 @@ def save_session_ticket(ticket: SessionTicket) -> None:
 async def main(
     configuration: QuicConfiguration,
     url: str,
-    data: Optional[str],
+    data: str | None,
     include: bool,
-    output_dir: Optional[str],
+    output_dir: str | None,
 ) -> None:
     # parse URL
     parsed = urlparse(url)
