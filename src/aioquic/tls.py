@@ -1305,7 +1305,13 @@ class Context:
         self.certificate: Optional[x509.Certificate] = None
         self.certificate_chain: list[x509.Certificate] = []
         self.certificate_private_key: Optional[
-            Union[dsa.DSAPrivateKey, ec.EllipticCurvePrivateKey, rsa.RSAPrivateKey]
+            Union[
+                dsa.DSAPrivateKey,
+                ec.EllipticCurvePrivateKey,
+                ed25519.Ed25519PrivateKey,
+                ed448.Ed448PrivateKey,
+                rsa.RSAPrivateKey,
+            ]
         ] = None
         self.handshake_extensions: list[Extension] = []
         self._is_client = is_client

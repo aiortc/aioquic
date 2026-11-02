@@ -7,10 +7,10 @@ from .utils import ack_eliciting_packet
 
 
 class RenoCongestionControlTest(TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.reno = RenoCongestionControl(max_datagram_size=1280)
 
-    def test_congestion_avoidance(self):
+    def test_congestion_avoidance(self) -> None:
         self.reno.ssthresh = self.reno.congestion_window
 
         # The window grows by one datagram once a full window is acknowledged.
@@ -23,7 +23,7 @@ class RenoCongestionControlTest(TestCase):
         self.reno.on_packet_acked(now=1.0, packet=ack_eliciting_packet(sent_time=0.5))
         self.assertEqual(self.reno.congestion_window, (K_INITIAL_WINDOW + 1) * 1280)
 
-    def test_log_data(self):
+    def test_log_data(self) -> None:
         self.assertEqual(
             self.reno.get_log_data(),
             {"cwnd": K_INITIAL_WINDOW * 1280, "bytes_in_flight": 0},
@@ -35,7 +35,7 @@ class RenoCongestionControlTest(TestCase):
             {"cwnd": K_INITIAL_WINDOW * 1280, "bytes_in_flight": 0, "ssthresh": 5000},
         )
 
-    def test_packet_acked_during_recovery(self):
+    def test_packet_acked_during_recovery(self) -> None:
         self.reno.on_packets_lost(
             now=1.0, packets=[ack_eliciting_packet(sent_time=0.5)]
         )
@@ -55,7 +55,7 @@ class RenoCongestionControlTest(TestCase):
             )
         self.assertEqual(self.reno.congestion_window, 6 * 1280)
 
-    def test_packet_expired(self):
+    def test_packet_expired(self) -> None:
         packet = ack_eliciting_packet(sent_time=0.0)
         self.reno.on_packet_sent(packet=packet)
         self.assertEqual(self.reno.bytes_in_flight, 1280)
@@ -63,7 +63,7 @@ class RenoCongestionControlTest(TestCase):
         self.reno.on_packets_expired(packets=[packet])
         self.assertEqual(self.reno.bytes_in_flight, 0)
 
-    def test_packet_lost(self):
+    def test_packet_lost(self) -> None:
         packet = ack_eliciting_packet(sent_time=0.5)
         self.reno.on_packet_sent(packet=packet)
 
@@ -85,14 +85,14 @@ class RenoCongestionControlTest(TestCase):
         )
         self.assertEqual(self.reno.congestion_window, K_INITIAL_WINDOW * 1280 // 4)
 
-    def test_packet_lost_minimum_window(self):
+    def test_packet_lost_minimum_window(self) -> None:
         for i in range(10):
             self.reno.on_packets_lost(
                 now=i + 1.0, packets=[ack_eliciting_packet(sent_time=i + 0.5)]
             )
         self.assertEqual(self.reno.congestion_window, K_MINIMUM_WINDOW * 1280)
 
-    def test_persistent_congestion(self):
+    def test_persistent_congestion(self) -> None:
         self.reno.on_packets_lost(
             now=1.0, packets=[ack_eliciting_packet(sent_time=0.5)]
         )
@@ -102,7 +102,7 @@ class RenoCongestionControlTest(TestCase):
         self.assertEqual(self.reno.congestion_window, K_MINIMUM_WINDOW * 1280)
         self.assertEqual(self.reno._congestion_recovery_start_time, 0.0)
 
-    def test_rtt_increasing_exits_slow_start(self):
+    def test_rtt_increasing_exits_slow_start(self) -> None:
         # Get some low RTT samples.
         for i in range(10):
             self.reno.on_rtt_measurement(now=i + 1, rtt=1)
@@ -113,7 +113,7 @@ class RenoCongestionControlTest(TestCase):
             self.reno.on_rtt_measurement(now=100 + i, rtt=1000)
         self.assertEqual(self.reno.ssthresh, self.reno.congestion_window)
 
-    def test_slow_start(self):
+    def test_slow_start(self) -> None:
         # The window grows by the size of each acknowledged packet.
         self.reno.on_packet_acked(now=1.0, packet=ack_eliciting_packet(sent_time=0.5))
         self.assertEqual(self.reno.congestion_window, (K_INITIAL_WINDOW + 1) * 1280)

@@ -4,7 +4,7 @@ from aioquic.quic.congestion.base import QuicRttMonitor, create_congestion_contr
 
 
 class QuicCongestionControlTest(TestCase):
-    def test_create_unknown_congestion_control(self):
+    def test_create_unknown_congestion_control(self) -> None:
         with self.assertRaises(Exception) as cm:
             create_congestion_control("bogus", max_datagram_size=1280)
         self.assertEqual(
@@ -13,7 +13,7 @@ class QuicCongestionControlTest(TestCase):
 
 
 class QuicRttMonitorTest(TestCase):
-    def test_monitor(self):
+    def test_monitor(self) -> None:
         monitor = QuicRttMonitor()
 
         self.assertFalse(monitor.is_rtt_increasing(rtt=10, now=1000))
@@ -69,7 +69,7 @@ class QuicRttMonitorTest(TestCase):
         self.assertTrue(monitor.is_rtt_increasing(rtt=100, now=1013))
         self.assertEqual(monitor._increases, 5)
 
-    def test_monitor_small_increase(self):
+    def test_monitor_small_increase(self) -> None:
         monitor = QuicRttMonitor()
 
         # The filtered minimum is set once the samples are ready.

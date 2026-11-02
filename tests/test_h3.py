@@ -1,6 +1,9 @@
 import binascii
 import contextlib
 import copy
+from collections import deque
+from collections.abc import Iterator
+from typing import Any, Optional
 from unittest import TestCase
 
 from aioquic.buffer import Buffer, encode_uint_var
@@ -23,15 +26,27 @@ from aioquic.h3.connection import (
     validate_response_headers,
     validate_trailers,
 )
-from aioquic.h3.events import DataReceived, HeadersReceived, PushPromiseReceived
+from aioquic.h3.events import (
+    DataReceived,
+    H3Event,
+    HeadersReceived,
+    PushPromiseReceived,
+)
 from aioquic.h3.exceptions import InvalidStreamTypeError, NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import StopSendingReceived, StreamDataReceived, StreamReset
+from aioquic.quic.connection import QuicConnection
+from aioquic.quic.events import (
+    QuicEvent,
+    StopSendingReceived,
+    StreamDataReceived,
+    StreamReset,
+)
 from aioquic.quic.logger import QuicLogger
+from aioquic.quic.packet import QuicErrorCode
 
 from .test_connection import client_and_server, transfer
 
-DUMMY_SETTINGS = {
+DUMMY_SETTINGS: dict[int, int] = {
     Setting.QPACK_MAX_TABLE_CAPACITY: 4096,
     Setting.QPACK_BLOCKED_STREAMS: 16,
     Setting.DUMMY: 1,
@@ -39,7 +54,9 @@ DUMMY_SETTINGS = {
 QUIC_CONFIGURATION_OPTIONS = {"alpn_protocols": H3_ALPN}
 
 
-def h3_client_and_server(options=QUIC_CONFIGURATION_OPTIONS):
+def h3_client_and_server(
+    options: dict[str, Any] = QUIC_CONFIGURATION_OPTIONS,
+) -> contextlib.AbstractContextManager[tuple[QuicConnection, QuicConnection]]:
     return client_and_server(
         client_options=options,
         server_options=options,
@@ -47,7 +64,9 @@ def h3_client_and_server(options=QUIC_CONFIGURATION_OPTIONS):
 
 
 @contextlib.contextmanager
-def h3_fake_client_and_server(options=QUIC_CONFIGURATION_OPTIONS):
+def h3_fake_client_and_server(
+    options: dict[str, Any] = QUIC_CONFIGURATION_OPTIONS,
+) -> Iterator[tuple["FakeQuicConnection", "FakeQuicConnection"]]:
     quic_client = FakeQuicConnection(
         configuration=QuicConfiguration(is_client=True, **options)
     )
@@ -66,9 +85,11 @@ def h3_fake_client_and_server(options=QUIC_CONFIGURATION_OPTIONS):
     yield quic_client, quic_server
 
 
-def h3_transfer(quic_sender, h3_receiver):
+def h3_transfer(
+    quic_sender: QuicConnection, h3_receiver: H3Connection
+) -> list[H3Event]:
     quic_receiver = h3_receiver._quic
-    if hasattr(quic_sender, "stream_queue"):
+    if isinstance(quic_sender, FakeQuicConnection):
         quic_receiver._events.extend(quic_sender.stream_queue)
         quic_sender.stream_queue.clear()
     else:
@@ -83,7 +104,7 @@ def h3_transfer(quic_sender, h3_receiver):
     return http_events
 
 
-def drain_events(quic):
+def drain_events(quic: QuicConnection) -> list[QuicEvent]:
     events = []
     event = quic.next_event()
     while event is not None:
@@ -92,13 +113,47 @@ def drain_events(quic):
     return events
 
 
-class FakeQuicConnection:
-    def __init__(self, configuration):
-        self.closed = None
-        self.configuration = configuration
-        self.stream_queue = []
-        self.stream_resets = []
-        self._events = []
+class FakeQuicConnection(QuicConnection):
+    """
+    A QUIC connection without a transport, for testing H3Connection.
+
+    It implements only what H3Connection uses: the `configuration`,
+    `_quic_logger` and `_remote_max_datagram_frame_size` attributes and the
+    close(), get_next_available_stream_id(), reset_stream() and
+    send_stream_data() methods, plus next_event() for h3_transfer().
+
+    send_stream_data() queues the data in `stream_queue` as one
+    StreamDataReceived event per byte, and h3_transfer() hands these events to
+    the peer. This exercises H3Connection with frames split at every possible
+    point. close() and reset_stream() only record their arguments in `closed`
+    and `stream_resets`, for tests to check. Nothing reaches the peer apart
+    from stream data: tests which need resets, STOP_SENDING or datagrams to
+    reach the peer use a real connection from h3_client_and_server().
+
+    It subclasses QuicConnection so that mypy checks these methods against the
+    real ones. Everything else is inherited too, without the state which
+    QuicConnection.__init__() would create, and mypy cannot tell that this
+    state is missing. When changing this class or H3Connection:
+
+    - If H3Connection starts using another QuicConnection method or
+      attribute, implement it here or override it to raise
+      NotImplementedError, as send_datagram_frame() does. An inherited method
+      fails with an AttributeError about QuicConnection's internals.
+    - Keep overridden methods' signatures the same as QuicConnection's, so
+      that H3Connection's calls work on both.
+    """
+
+    def __init__(self, configuration: QuicConfiguration) -> None:
+        # QuicConnection.__init__() is deliberately not called. A server would
+        # need a certificate and an original destination connection ID, and it
+        # would create transport state which nothing here uses. Without that
+        # state, an inherited method fails at once instead of acting on a
+        # connection which never sends anything.
+        self.closed: Optional[tuple[int, str]] = None
+        self.stream_queue: list[StreamDataReceived] = []
+        self.stream_resets: list[tuple[int, int]] = []
+        self._configuration = configuration
+        self._events = deque()
         self._next_stream_bidi = 0 if configuration.is_client else 1
         self._next_stream_uni = 2 if configuration.is_client else 3
         self._quic_logger = QuicLogger().start_trace(
@@ -106,10 +161,15 @@ class FakeQuicConnection:
         )
         self._remote_max_datagram_frame_size = None
 
-    def close(self, error_code, reason_phrase):
+    def close(
+        self,
+        error_code: int = QuicErrorCode.NO_ERROR,
+        frame_type: Optional[int] = None,
+        reason_phrase: str = "",
+    ) -> None:
         self.closed = (error_code, reason_phrase)
 
-    def get_next_available_stream_id(self, is_unidirectional=False):
+    def get_next_available_stream_id(self, is_unidirectional: bool = False) -> int:
         if is_unidirectional:
             stream_id = self._next_stream_uni
             self._next_stream_uni += 4
@@ -118,16 +178,23 @@ class FakeQuicConnection:
             self._next_stream_bidi += 4
         return stream_id
 
-    def next_event(self):
+    def next_event(self) -> Optional[QuicEvent]:
         try:
-            return self._events.pop(0)
+            return self._events.popleft()
         except IndexError:
             return None
 
-    def reset_stream(self, stream_id, error_code):
+    def reset_stream(self, stream_id: int, error_code: int) -> None:
         self.stream_resets.append((stream_id, error_code))
 
-    def send_stream_data(self, stream_id, data, end_stream=False):
+    def send_datagram_frame(self, data: bytes) -> None:
+        raise NotImplementedError(
+            "FakeQuicConnection cannot send datagrams, use h3_client_and_server()"
+        )
+
+    def send_stream_data(
+        self, stream_id: int, data: bytes, end_stream: bool = False
+    ) -> None:
         # chop up data into individual bytes
         for c in data:
             self.stream_queue.append(
@@ -144,7 +211,7 @@ class FakeQuicConnection:
 class H3ConnectionTest(TestCase):
     maxDiff = None
 
-    def _make_request(self, h3_client, h3_server):
+    def _make_request(self, h3_client: H3Connection, h3_server: H3Connection) -> None:
         quic_client = h3_client._quic
         quic_server = h3_server._quic
 
@@ -219,7 +286,9 @@ class H3ConnectionTest(TestCase):
             ],
         )
 
-    def _send_request_headers(self, h3_client, h3_server):
+    def _send_request_headers(
+        self, h3_client: H3Connection, h3_server: H3Connection
+    ) -> int:
         quic_client = h3_client._quic
 
         stream_id = quic_client.get_next_available_stream_id()
@@ -236,7 +305,7 @@ class H3ConnectionTest(TestCase):
         self.assertIn(stream_id, h3_server._stream)
         return stream_id
 
-    def test_handle_control_frame_headers(self):
+    def test_handle_control_frame_headers(self) -> None:
         """
         We should not receive HEADERS on the control stream.
         """
@@ -273,7 +342,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on control stream"),
         )
 
-    def test_handle_control_frame_reserved(self):
+    def test_handle_control_frame_reserved(self) -> None:
         """
         Frame types reserved from HTTP/2 must be rejected on the control stream,
         see RFC 9114 section 7.2.8.
@@ -304,7 +373,7 @@ class H3ConnectionTest(TestCase):
                     ),
                 )
 
-    def test_handle_control_frame_unknown(self):
+    def test_handle_control_frame_unknown(self) -> None:
         """
         Unknown frame types must be ignored on the control stream, including
         DUPLICATE_PUSH which only existed in drafts, see RFC 9114 section 9.
@@ -328,7 +397,7 @@ class H3ConnectionTest(TestCase):
         self.assertIsNone(quic_server.closed)
         self.assertEqual(h3_server._max_push_id, 5)
 
-    def test_handle_control_frame_settings_fragmented(self):
+    def test_handle_control_frame_settings_fragmented(self) -> None:
         """
         We should handle SETTINGS received one byte at a time.
         """
@@ -348,7 +417,7 @@ class H3ConnectionTest(TestCase):
         self.assertIsNone(quic_server.closed)
         self.assertEqual(h3_server.received_settings, DUMMY_SETTINGS)
 
-    def test_handle_control_frame_settings_truncated(self):
+    def test_handle_control_frame_settings_truncated(self) -> None:
         """
         We should reject a SETTINGS frame which ends in the middle of a setting.
         """
@@ -370,7 +439,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_ERROR, "Could not parse SETTINGS frame"),
         )
 
-    def test_handle_control_frame_unknown_before_settings(self):
+    def test_handle_control_frame_unknown_before_settings(self) -> None:
         """
         An unknown frame does not satisfy the requirement for SETTINGS to be
         the first frame on the control stream, see RFC 9114 section 9.
@@ -393,7 +462,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(quic_server.closed, (ErrorCode.H3_MISSING_SETTINGS, ""))
 
-    def test_handle_control_frame_unknown_fragmented(self):
+    def test_handle_control_frame_unknown_fragmented(self) -> None:
         """
         The payload of unknown frames must be discarded as it is received,
         see RFC 9114 section 7.2.8 and section 9.
@@ -444,7 +513,7 @@ class H3ConnectionTest(TestCase):
         self.assertIsNone(quic_server.closed)
         self.assertEqual(h3_server._max_push_id, 5)
 
-    def test_handle_control_frame_wrong_frame_type_header_only(self):
+    def test_handle_control_frame_wrong_frame_type_header_only(self) -> None:
         """
         Frames which are not allowed on the control stream must be rejected
         from the frame header alone, without buffering their payload.
@@ -490,7 +559,7 @@ class H3ConnectionTest(TestCase):
                 )
                 self.assertEqual(quic.closed, (ErrorCode.H3_FRAME_UNEXPECTED, reason))
 
-    def test_handle_control_frame_max_push_id_from_client_before_settings(self):
+    def test_handle_control_frame_max_push_id_from_client_before_settings(self) -> None:
         """
         A server should not receive MAX_PUSH_ID before SETTINGS.
         """
@@ -513,7 +582,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_MISSING_SETTINGS, ""),
         )
 
-    def test_handle_control_frame_max_push_id_from_server(self):
+    def test_handle_control_frame_max_push_id_from_server(self) -> None:
         """
         A client should not receive MAX_PUSH_ID on the control stream.
         """
@@ -546,7 +615,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "Servers must not send MAX_PUSH_ID"),
         )
 
-    def test_handle_control_frame_max_push_id_malformed(self):
+    def test_handle_control_frame_max_push_id_malformed(self) -> None:
         """
         A server should reject a MAX_PUSH_ID frame which is empty or has
         trailing data.
@@ -576,7 +645,7 @@ class H3ConnectionTest(TestCase):
                     quic_server.closed, (ErrorCode.H3_FRAME_ERROR, reason_phrase)
                 )
 
-    def test_handle_control_frame_max_push_id_reduced(self):
+    def test_handle_control_frame_max_push_id_reduced(self) -> None:
         """
         A server must reject a MAX_PUSH_ID frame which reduces the maximum
         push ID, see RFC 9114 section 7.2.7.
@@ -609,7 +678,7 @@ class H3ConnectionTest(TestCase):
                 self.assertEqual(quic_server.closed, expected_closed)
                 self.assertEqual(h3_server._max_push_id, expected_max_push_id)
 
-    def test_handle_control_settings_twice(self):
+    def test_handle_control_settings_twice(self) -> None:
         """
         We should not receive HEADERS on the control stream.
         """
@@ -642,7 +711,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "SETTINGS have already been received"),
         )
 
-    def test_handle_control_stream_close(self):
+    def test_handle_control_stream_close(self) -> None:
         """
         Closing the control stream is not allowed.
         """
@@ -678,7 +747,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_handle_control_stream_duplicate(self):
+    def test_handle_control_stream_duplicate(self) -> None:
         """
         We must only receive a single control stream.
         """
@@ -708,7 +777,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_handle_control_stream_reset(self):
+    def test_handle_control_stream_reset(self) -> None:
         """
         Resetting the control stream is not allowed.
         """
@@ -738,7 +807,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_handle_control_stream_stop_sending(self):
+    def test_handle_control_stream_stop_sending(self) -> None:
         """
         Asking us to stop sending on our control stream is not allowed.
         """
@@ -761,7 +830,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_handle_push_frame_wrong_frame_type(self):
+    def test_handle_push_frame_wrong_frame_type(self) -> None:
         """
         We should not received SETTINGS on a push stream.
         """
@@ -784,7 +853,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on push stream"),
         )
 
-    def test_handle_push_frame_reserved(self):
+    def test_handle_push_frame_reserved(self) -> None:
         """
         Frame types reserved from HTTP/2 must be rejected on a push stream,
         see RFC 9114 section 7.2.8.
@@ -813,7 +882,7 @@ class H3ConnectionTest(TestCase):
                     ),
                 )
 
-    def test_handle_push_frame_wrong_frame_type_header_only(self):
+    def test_handle_push_frame_wrong_frame_type_header_only(self) -> None:
         """
         Frames which are not allowed on a push stream must be rejected from
         the frame header alone, without buffering their payload.
@@ -853,7 +922,7 @@ class H3ConnectionTest(TestCase):
                     ),
                 )
 
-    def test_handle_push_stream_from_client(self):
+    def test_handle_push_stream_from_client(self) -> None:
         """
         A server must reject a push stream, see RFC 9114 section 6.2.2.
         """
@@ -874,7 +943,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_STREAM_CREATION_ERROR, "Clients must not open push streams"),
         )
 
-    def test_handle_push_stream_push_id_exceeds_max(self):
+    def test_handle_push_stream_push_id_exceeds_max(self) -> None:
         """
         A client must reject a push stream whose push ID exceeds the
         MAX_PUSH_ID it sent, see RFC 9114 section 4.6.
@@ -899,7 +968,7 @@ class H3ConnectionTest(TestCase):
                 )
                 self.assertEqual(quic_client.closed, expected_closed)
 
-    def test_handle_qpack_decoder_duplicate(self):
+    def test_handle_qpack_decoder_duplicate(self) -> None:
         """
         We must only receive a single QPACK decoder stream.
         """
@@ -933,7 +1002,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_handle_qpack_decoder_stream_error(self):
+    def test_handle_qpack_decoder_stream_error(self) -> None:
         """
         Receiving garbage on the QPACK decoder stream triggers an exception.
         """
@@ -951,7 +1020,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(quic_client.closed, (ErrorCode.QPACK_DECODER_STREAM_ERROR, ""))
 
-    def test_handle_qpack_encoder_duplicate(self):
+    def test_handle_qpack_encoder_duplicate(self) -> None:
         """
         We must only receive a single QPACK encoder stream.
         """
@@ -985,7 +1054,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_handle_qpack_encoder_stream_error(self):
+    def test_handle_qpack_encoder_stream_error(self) -> None:
         """
         Receiving garbage on the QPACK encoder stream triggers an exception.
         """
@@ -1003,7 +1072,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(quic_client.closed, (ErrorCode.QPACK_ENCODER_STREAM_ERROR, ""))
 
-    def test_handle_qpack_encoder_stream_reset(self):
+    def test_handle_qpack_encoder_stream_reset(self) -> None:
         """
         Resetting the QPACK encoder stream is not allowed.
         """
@@ -1031,7 +1100,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_handle_request_frame_bad_headers(self):
+    def test_handle_request_frame_bad_headers(self) -> None:
         """
         We should not receive HEADERS which cannot be decoded.
         """
@@ -1047,7 +1116,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertEqual(quic_server.closed, (ErrorCode.QPACK_DECOMPRESSION_FAILED, ""))
 
-    def test_handle_request_frame_data_before_headers(self):
+    def test_handle_request_frame_data_before_headers(self) -> None:
         """
         We should not receive DATA before receiving headers.
         """
@@ -1069,7 +1138,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_handle_request_frame_headers_after_trailers(self):
+    def test_handle_request_frame_headers_after_trailers(self) -> None:
         """
         We should not receive HEADERS after receiving trailers.
         """
@@ -1109,7 +1178,7 @@ class H3ConnectionTest(TestCase):
                 ),
             )
 
-    def test_handle_request_frame_interim_response_at_end(self):
+    def test_handle_request_frame_interim_response_at_end(self) -> None:
         """
         A response stream cannot end after an interim response, whether or not
         the end of stream comes with the HEADERS frame, see RFC 9114 section 4.1.
@@ -1161,7 +1230,7 @@ class H3ConnectionTest(TestCase):
                         ),
                     )
 
-    def test_handle_request_frame_interim_response_content_length(self):
+    def test_handle_request_frame_interim_response_content_length(self) -> None:
         """
         The content-length of an interim response does not apply to the final
         response, as interim responses have no content (RFC 9110 section 6.4.1).
@@ -1196,7 +1265,7 @@ class H3ConnectionTest(TestCase):
             h3_transfer(quic_server, h3_client)
             self.assertIsNone(quic_client.closed)
 
-    def test_handle_request_frame_push_promise_at_end(self):
+    def test_handle_request_frame_push_promise_at_end(self) -> None:
         """
         PUSH_PROMISE can be the last frame on a request stream, see
         RFC 9114 section 4.1.
@@ -1262,7 +1331,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-    def test_handle_request_frame_push_promise_from_client(self):
+    def test_handle_request_frame_push_promise_from_client(self) -> None:
         """
         A server should not receive PUSH_PROMISE on a request stream.
         """
@@ -1283,7 +1352,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "Clients must not send PUSH_PROMISE"),
         )
 
-    def test_handle_request_frame_push_promise_id_exceeds_max(self):
+    def test_handle_request_frame_push_promise_id_exceeds_max(self) -> None:
         """
         A client must reject a PUSH_PROMISE whose push ID exceeds the
         MAX_PUSH_ID it sent, see RFC 9114 section 7.2.5.
@@ -1328,7 +1397,7 @@ class H3ConnectionTest(TestCase):
                 self.assertEqual(events, expected_events)
                 self.assertEqual(quic_client.closed, expected_closed)
 
-    def test_handle_request_frame_push_promise_truncated(self):
+    def test_handle_request_frame_push_promise_truncated(self) -> None:
         """
         A client should reject a PUSH_PROMISE frame without a push ID.
         """
@@ -1349,7 +1418,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_ERROR, "Could not parse PUSH_PROMISE frame"),
         )
 
-    def test_handle_request_frame_wrong_frame_type(self):
+    def test_handle_request_frame_wrong_frame_type(self) -> None:
         quic_server = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=False)
         )
@@ -1367,7 +1436,7 @@ class H3ConnectionTest(TestCase):
             (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on request stream"),
         )
 
-    def test_handle_request_frame_reserved(self):
+    def test_handle_request_frame_reserved(self) -> None:
         """
         Frame types reserved from HTTP/2 must be rejected on a request stream,
         see RFC 9114 section 7.2.8.
@@ -1394,7 +1463,7 @@ class H3ConnectionTest(TestCase):
                     ),
                 )
 
-    def test_handle_request_frame_unknown_duplicate_push(self):
+    def test_handle_request_frame_unknown_duplicate_push(self) -> None:
         """
         DUPLICATE_PUSH only existed in drafts, it is now an unknown frame type
         which must be ignored, see RFC 9114 section 9.
@@ -1414,7 +1483,7 @@ class H3ConnectionTest(TestCase):
         self.assertEqual(events, [])
         self.assertIsNone(quic_server.closed)
 
-    def test_handle_request_frame_wrong_frame_type_header_only(self):
+    def test_handle_request_frame_wrong_frame_type_header_only(self) -> None:
         """
         Frames which are not allowed on a request stream must be rejected from
         the frame header alone, without buffering their payload.
@@ -1446,7 +1515,7 @@ class H3ConnectionTest(TestCase):
                 )
                 self.assertEqual(quic.closed, (ErrorCode.H3_FRAME_UNEXPECTED, reason))
 
-    def test_handle_request_frame_truncated(self):
+    def test_handle_request_frame_truncated(self) -> None:
         """
         A frame truncated by the end of the stream must be rejected, see
         RFC 9114 section 7.1.
@@ -1513,7 +1582,7 @@ class H3ConnectionTest(TestCase):
                         ),
                     )
 
-    def test_handle_request_frame_unknown(self):
+    def test_handle_request_frame_unknown(self) -> None:
         """
         Unknown frames must be ignored, see RFC 9114 section 7.2.8 and
         section 9.
@@ -1562,7 +1631,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-    def test_handle_request_frame_unknown_at_end(self):
+    def test_handle_request_frame_unknown_at_end(self) -> None:
         """
         Unknown frames can be the last frame on a request stream, see
         RFC 9114 section 4.1.
@@ -1641,7 +1710,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-    def test_handle_request_frame_unknown_at_end_content_length_mismatch(self):
+    def test_handle_request_frame_unknown_at_end_content_length_mismatch(self) -> None:
         """
         The content-length must be checked when a request stream ends with
         an unknown frame.
@@ -1683,7 +1752,7 @@ class H3ConnectionTest(TestCase):
                 ),
             )
 
-    def test_handle_request_frame_unknown_fragmented(self):
+    def test_handle_request_frame_unknown_fragmented(self) -> None:
         """
         The payload of unknown frames must be discarded as it is received,
         see RFC 9114 section 7.2.8 and section 9.
@@ -1743,7 +1812,7 @@ class H3ConnectionTest(TestCase):
                 [DataReceived(data=b"hello", stream_id=stream_id, stream_ended=True)],
             )
 
-    def test_request(self):
+    def test_request(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -1757,7 +1826,7 @@ class H3ConnectionTest(TestCase):
             # make third request -> dynamic table
             self._make_request(h3_client, h3_server)
 
-    def test_request_headers_only(self):
+    def test_request_headers_only(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -1823,7 +1892,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-    def test_request_fragmented_frame(self):
+    def test_request_fragmented_frame(self) -> None:
         with h3_fake_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -1951,7 +2020,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-    def test_request_with_server_push(self):
+    def test_request_with_server_push(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -2123,7 +2192,7 @@ class H3ConnectionTest(TestCase):
                 self.assertNotIn(push_stream_id, h3_client._stream)
                 self.assertNotIn(push_stream_id, h3_server._stream)
 
-    def test_request_with_server_push_max_push_id(self):
+    def test_request_with_server_push_max_push_id(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -2195,7 +2264,7 @@ class H3ConnectionTest(TestCase):
                     ],
                 )
 
-    def test_send_data_after_trailers(self):
+    def test_send_data_after_trailers(self) -> None:
         """
         We should not send DATA after trailers.
         """
@@ -2220,7 +2289,7 @@ class H3ConnectionTest(TestCase):
         with self.assertRaises(FrameUnexpected):
             h3_client.send_data(stream_id=stream_id, data=b"hello", end_stream=False)
 
-    def test_send_data_before_headers(self):
+    def test_send_data_before_headers(self) -> None:
         """
         We should not send DATA before headers.
         """
@@ -2233,7 +2302,7 @@ class H3ConnectionTest(TestCase):
         with self.assertRaises(FrameUnexpected):
             h3_client.send_data(stream_id=stream_id, data=b"hello", end_stream=False)
 
-    def test_send_headers_after_trailers(self):
+    def test_send_headers_after_trailers(self) -> None:
         """
         We should not send HEADERS after trailers.
         """
@@ -2262,7 +2331,7 @@ class H3ConnectionTest(TestCase):
                 end_stream=False,
             )
 
-    def test_send_headers_interim_end_stream(self):
+    def test_send_headers_interim_end_stream(self) -> None:
         """
         We should not end the stream with an interim response.
         """
@@ -2284,7 +2353,7 @@ class H3ConnectionTest(TestCase):
             stream_id=0, headers=[(b":status", b"200")], end_stream=True
         )
 
-    def test_send_push_promise_from_client(self):
+    def test_send_push_promise_from_client(self) -> None:
         """
         Clients cannot send a push promise.
         """
@@ -2297,7 +2366,7 @@ class H3ConnectionTest(TestCase):
             h3_client.send_push_promise(stream_id=0, headers=[])
         self.assertEqual(str(cm.exception), "Only servers may send a push promise.")
 
-    def test_blocked_stream(self):
+    def test_blocked_stream(self) -> None:
         quic_client = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=True)
         )
@@ -2382,7 +2451,7 @@ class H3ConnectionTest(TestCase):
         # The stream is no longer tracked.
         self.assertNotIn(0, h3_client._stream)
 
-    def test_blocked_stream_push_promise(self):
+    def test_blocked_stream_push_promise(self) -> None:
         """
         A PUSH_PROMISE whose header block is blocked must be resumed as a
         PUSH_PROMISE, see RFC 9204 section 2.1.2.
@@ -2451,7 +2520,7 @@ class H3ConnectionTest(TestCase):
         # The stream is no longer tracked.
         self.assertNotIn(0, h3_client._stream)
 
-    def test_blocked_stream_push_promise_then_data(self):
+    def test_blocked_stream_push_promise_then_data(self) -> None:
         """
         Frames following a blocked PUSH_PROMISE must be processed once it
         is resumed.
@@ -2522,7 +2591,7 @@ class H3ConnectionTest(TestCase):
         # The stream is no longer tracked.
         self.assertNotIn(0, h3_client._stream)
 
-    def test_blocked_stream_reset(self):
+    def test_blocked_stream_reset(self) -> None:
         quic_client = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=True)
         )
@@ -2595,7 +2664,7 @@ class H3ConnectionTest(TestCase):
         )
         self.assertNotIn(0, h3_client._stream)
 
-    def test_blocked_stream_reset_by_client(self):
+    def test_blocked_stream_reset_by_client(self) -> None:
         """
         A request whose HEADERS frame is still blocked when the client resets
         the stream was never processed, so the server aborts its response with
@@ -2648,7 +2717,7 @@ class H3ConnectionTest(TestCase):
         self.assertIsNone(quic_server.closed)
         self.assertNotIn(0, h3_server._stream)
 
-    def test_blocked_stream_trailer(self):
+    def test_blocked_stream_trailer(self) -> None:
         quic_client = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=True)
         )
@@ -2746,7 +2815,7 @@ class H3ConnectionTest(TestCase):
             ],
         )
 
-    def test_uni_stream_grease(self):
+    def test_uni_stream_grease(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_server = H3Connection(quic_server)
 
@@ -2760,7 +2829,7 @@ class H3ConnectionTest(TestCase):
             # the stream is no longer tracked
             self.assertNotIn(14, h3_server._stream)
 
-    def test_uni_stream_reset(self):
+    def test_uni_stream_reset(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_server = H3Connection(quic_server)
 
@@ -2780,7 +2849,7 @@ class H3ConnectionTest(TestCase):
             # No Stream Cancellation is sent for unidirectional streams.
             self.assertEqual(h3_server._decoder_bytes_sent, 0)
 
-    def test_request_with_interim_responses(self):
+    def test_request_with_interim_responses(self) -> None:
         """
         A server can send interim responses before the final response, see
         RFC 9114 section 4.1.
@@ -2843,7 +2912,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-    def test_request_with_trailers(self):
+    def test_request_with_trailers(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -2935,7 +3004,7 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-    def test_uni_stream_type(self):
+    def test_uni_stream_type(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_server = H3Connection(quic_server)
 
@@ -2968,7 +3037,7 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_server._stream[6].buffer, b"")
             self.assertEqual(h3_server._stream[6].stream_type, 64)
 
-    def test_validate_settings_h3_datagram_invalid_value(self):
+    def test_validate_settings_h3_datagram_invalid_value(self) -> None:
         quic_server = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=False)
         )
@@ -2993,7 +3062,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_validate_settings_h3_datagram_without_transport_parameter(self):
+    def test_validate_settings_h3_datagram_without_transport_parameter(self) -> None:
         quic_server = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=False)
         )
@@ -3018,7 +3087,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_validate_settings_enable_connect_protocol_invalid_value(self):
+    def test_validate_settings_enable_connect_protocol_invalid_value(self) -> None:
         quic_server = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=False)
         )
@@ -3043,7 +3112,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_validate_settings_enable_webtransport_invalid_value(self):
+    def test_validate_settings_enable_webtransport_invalid_value(self) -> None:
         quic_server = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=False)
         )
@@ -3068,7 +3137,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_validate_settings_enable_webtransport_without_h3_datagram(self):
+    def test_validate_settings_enable_webtransport_without_h3_datagram(self) -> None:
         quic_server = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=False)
         )
@@ -3093,7 +3162,13 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def _content_length_template(self, content_length, data, end_at, expected_closed):
+    def _content_length_template(
+        self,
+        content_length: Optional[bytes],
+        data: bytes,
+        end_at: str,
+        expected_closed: Optional[tuple[int, str]],
+    ) -> None:
         quic_client = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=True)
         )
@@ -3139,19 +3214,19 @@ class H3ConnectionTest(TestCase):
         h3_transfer(quic_client, h3_server)
         self.assertEqual(quic_server.closed, expected_closed)
 
-    def test_content_length_not_specified_is_ok(self):
+    def test_content_length_not_specified_is_ok(self) -> None:
         """
         If a content-length is specified and OK, all is good.
         """
         self._content_length_template(None, b"hello world", "data", None)
 
-    def test_content_length_is_ok(self):
+    def test_content_length_is_ok(self) -> None:
         """
         If a content-length is specified and OK, all is good.
         """
         self._content_length_template(b"11", b"hello world", "data", None)
 
-    def test_content_length_that_is_not_an_int_rejected(self):
+    def test_content_length_that_is_not_an_int_rejected(self) -> None:
         """
         A content-length that doesn't parse as an integer is bad.
         """
@@ -3165,7 +3240,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_content_length_that_is_negative_is_rejected(self):
+    def test_content_length_that_is_negative_is_rejected(self) -> None:
         """
         A content-length that doesn't parse as an integer is bad.
         """
@@ -3179,7 +3254,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_content_length_does_not_match_data_length(self):
+    def test_content_length_does_not_match_data_length(self) -> None:
         """
         If a content-length is specified and wrong when data ends the stream,
         we must close.
@@ -3194,7 +3269,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_content_length_does_not_match_when_headers_end_stream(self):
+    def test_content_length_does_not_match_when_headers_end_stream(self) -> None:
         """
         If a content-length is specified and wrong, we must reject it.
         """
@@ -3208,7 +3283,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_content_length_does_not_match_when_trailers_end_stream(self):
+    def test_content_length_does_not_match_when_trailers_end_stream(self) -> None:
         """
         If a content-length is specified and wrong, we must reject it.
         """
@@ -3222,7 +3297,7 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
-    def test_streams_are_closed_after_requests(self):
+    def test_streams_are_closed_after_requests(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -3234,7 +3309,7 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(len(h3_client._stream), 3)
             self.assertEqual(len(h3_server._stream), 3)
 
-    def test_streams_are_closed_after_end_without_headers(self):
+    def test_streams_are_closed_after_end_without_headers(self) -> None:
         """
         A request stream which ends before its HEADERS frame is received is
         aborted with H3_REQUEST_INCOMPLETE, see RFC 9114 section 4.1.
@@ -3281,7 +3356,7 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(transfer(quic_server, quic_client), 0)
             self.assertNotIn(stream_id, quic_server._streams)
 
-    def test_streams_are_closed_after_reset(self):
+    def test_streams_are_closed_after_reset(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -3302,7 +3377,7 @@ class H3ConnectionTest(TestCase):
             )
             self.assertNotIn(stream_id, h3_server._stream)
 
-    def test_streams_are_closed_after_reset_and_stop_sending(self):
+    def test_streams_are_closed_after_reset_and_stop_sending(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -3314,7 +3389,7 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
             self.assertNotIn(stream_id, h3_server._stream)
 
-    def test_streams_are_closed_after_reset_before_headers(self):
+    def test_streams_are_closed_after_reset_before_headers(self) -> None:
         """
         A request stream which is reset before its HEADERS frame is received is
         aborted with H3_REQUEST_INCOMPLETE, see RFC 9114 section 4.1.
@@ -3342,7 +3417,7 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(transfer(quic_server, quic_client), 0)
             self.assertNotIn(stream_id, quic_server._streams)
 
-    def test_streams_are_closed_after_stop_sending(self):
+    def test_streams_are_closed_after_stop_sending(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -3358,7 +3433,7 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
             self.assertNotIn(stream_id, h3_server._stream)
 
-    def test_streams_are_not_closed_prematurely(self):
+    def test_streams_are_not_closed_prematurely(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -3437,7 +3512,7 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(len(h3_client._stream), 3)
             self.assertEqual(len(h3_server._stream), 3)
 
-    def test_double_sending_stream_closing(self):
+    def test_double_sending_stream_closing(self) -> None:
         quic_client = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=True)
         )
@@ -3463,7 +3538,7 @@ class H3ConnectionTest(TestCase):
 
 
 class H3ParserTest(TestCase):
-    def test_is_interim_response(self):
+    def test_is_interim_response(self) -> None:
         self.assertTrue(is_interim_response([(b":status", b"100")]))
         self.assertTrue(is_interim_response([(b":status", b"103"), (b"link", b"")]))
         self.assertFalse(is_interim_response([(b":status", b"200")]))
@@ -3471,7 +3546,7 @@ class H3ParserTest(TestCase):
         # Headers without a status, such as trailers, are not a response.
         self.assertFalse(is_interim_response([(b"x-foo", b"bar")]))
 
-    def test_parse_settings_duplicate_identifier(self):
+    def test_parse_settings_duplicate_identifier(self) -> None:
         buf = Buffer(capacity=1024)
         buf.push_uint_var(1)
         buf.push_uint_var(123)
@@ -3484,7 +3559,7 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase, "Setting identifier 0x1 is included twice"
         )
 
-    def test_parse_settings_reserved_identifier(self):
+    def test_parse_settings_reserved_identifier(self) -> None:
         buf = Buffer(capacity=1024)
         buf.push_uint_var(0)
         buf.push_uint_var(123)
@@ -3495,7 +3570,7 @@ class H3ParserTest(TestCase):
             cm.exception.reason_phrase, "Setting identifier 0x0 is reserved"
         )
 
-    def test_validate_push_promise_headers(self):
+    def test_validate_push_promise_headers(self) -> None:
         # OK
         validate_push_promise_headers(
             [
@@ -3598,7 +3673,7 @@ class H3ParserTest(TestCase):
             "Pseudo-headers [b':authority'] are missing",
         )
 
-    def test_validate_request_headers(self):
+    def test_validate_request_headers(self) -> None:
         # OK
         validate_request_headers(
             [
@@ -3783,7 +3858,7 @@ class H3ParserTest(TestCase):
                 cm.exception.reason_phrase, "Pseudo-header b':path' cannot be empty"
             )
 
-    def test_validate_response_headers(self):
+    def test_validate_response_headers(self) -> None:
         # OK
         validate_response_headers([(b":status", b"103")])
         validate_response_headers([(b":status", b"200")])
@@ -3849,7 +3924,7 @@ class H3ParserTest(TestCase):
                     f"Header {name!r} is connection-specific",
                 )
 
-    def test_validate_trailers(self):
+    def test_validate_trailers(self) -> None:
         # OK
         validate_trailers([(b"x-foo", b"bar")])
 

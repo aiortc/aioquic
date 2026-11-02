@@ -11,7 +11,7 @@ from aioquic.quic.packet_builder import (
 from aioquic.tls import Epoch
 
 
-def create_builder(is_client=False):
+def create_builder(is_client: bool = False) -> QuicPacketBuilder:
     return QuicPacketBuilder(
         host_cid=bytes(8),
         is_client=is_client,
@@ -24,7 +24,7 @@ def create_builder(is_client=False):
     )
 
 
-def create_crypto():
+def create_crypto() -> CryptoPair:
     crypto = CryptoPair()
     crypto.setup_initial(
         bytes(8), is_client=True, version=QuicProtocolVersion.VERSION_1
@@ -37,7 +37,7 @@ def datagram_sizes(datagrams: list[bytes]) -> list[int]:
 
 
 class QuicPacketBuilderTest(TestCase):
-    def test_long_header_empty(self):
+    def test_long_header_empty(self) -> None:
         builder = create_builder()
         crypto = create_crypto()
 
@@ -53,7 +53,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 0)
 
-    def test_long_header_initial_client(self):
+    def test_long_header_initial_client(self) -> None:
         builder = create_builder(is_client=True)
         crypto = create_crypto()
 
@@ -89,7 +89,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 1)
 
-    def test_long_header_initial_client_2(self):
+    def test_long_header_initial_client_2(self) -> None:
         builder = create_builder(is_client=True)
         crypto = create_crypto()
 
@@ -141,7 +141,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 2)
 
-    def test_long_header_initial_client_ack_max_flight_bytes_zero(self):
+    def test_long_header_initial_client_ack_max_flight_bytes_zero(self) -> None:
         """
         A client pads datagrams carrying an ACK-only INITIAL packet even when the
         congestion window is full, as the padding is not in flight.
@@ -176,7 +176,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 1)
 
-    def test_long_header_initial_client_zero_rtt(self):
+    def test_long_header_initial_client_zero_rtt(self) -> None:
         builder = create_builder(is_client=True)
         crypto = create_crypto()
 
@@ -224,7 +224,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 2)
 
-    def test_long_header_initial_server(self):
+    def test_long_header_initial_server(self) -> None:
         builder = create_builder()
         crypto = create_crypto()
 
@@ -302,7 +302,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 3)
 
-    def test_long_header_initial_server_without_handshake(self):
+    def test_long_header_initial_server_without_handshake(self) -> None:
         builder = create_builder()
         crypto = create_crypto()
 
@@ -342,7 +342,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 1)
 
-    def test_long_header_ping_only(self):
+    def test_long_header_ping_only(self) -> None:
         """
         The payload is too short to provide enough data for header protection,
         so padding needs to be applied.
@@ -374,7 +374,7 @@ class QuicPacketBuilderTest(TestCase):
             ],
         )
 
-    def test_long_header_then_short_header(self):
+    def test_long_header_then_short_header(self) -> None:
         builder = create_builder()
         crypto = create_crypto()
 
@@ -432,7 +432,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 2)
 
-    def test_long_header_then_long_header_then_short_header(self):
+    def test_long_header_then_long_header_then_short_header(self) -> None:
         builder = create_builder()
         crypto = create_crypto()
 
@@ -506,7 +506,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 3)
 
-    def test_long_header_then_short_header_max_flight_bytes(self):
+    def test_long_header_then_short_header_max_flight_bytes(self) -> None:
         """
         A short header packet which would pad an INITIAL datagram beyond the
         congestion window is sent in a datagram of its own.
@@ -557,7 +557,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 2)
 
-    def test_short_header_empty(self):
+    def test_short_header_empty(self) -> None:
         builder = create_builder()
         crypto = create_crypto()
 
@@ -573,7 +573,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 0)
 
-    def test_short_header_full_length(self):
+    def test_short_header_full_length(self) -> None:
         builder = create_builder()
         crypto = create_crypto()
 
@@ -606,7 +606,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 1)
 
-    def test_short_header_max_flight_bytes(self):
+    def test_short_header_max_flight_bytes(self) -> None:
         """
         max_flight_bytes limits sent data.
         """
@@ -647,7 +647,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 1)
 
-    def test_short_header_max_flight_bytes_zero(self):
+    def test_short_header_max_flight_bytes_zero(self) -> None:
         """
         max_flight_bytes = 0 only allows ACKs and CONNECTION_CLOSE.
 
@@ -669,7 +669,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 0)
 
-    def test_short_header_max_flight_bytes_zero_ack(self):
+    def test_short_header_max_flight_bytes_zero_ack(self) -> None:
         """
         max_flight_bytes = 0 only allows ACKs and CONNECTION_CLOSE.
 
@@ -710,7 +710,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 1)
 
-    def test_short_header_max_total_bytes_1(self):
+    def test_short_header_max_total_bytes_1(self) -> None:
         """
         max_total_bytes doesn't allow any packets.
         """
@@ -730,7 +730,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 0)
 
-    def test_short_header_max_total_bytes_2(self):
+    def test_short_header_max_total_bytes_2(self) -> None:
         """
         max_total_bytes allows a short packet.
         """
@@ -770,7 +770,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 1)
 
-    def test_short_header_max_total_bytes_3(self):
+    def test_short_header_max_total_bytes_3(self) -> None:
         builder = create_builder()
         builder.max_total_bytes = 2000
 
@@ -823,7 +823,7 @@ class QuicPacketBuilderTest(TestCase):
         # check builder
         self.assertEqual(builder.packet_number, 2)
 
-    def test_short_header_path_challenge(self):
+    def test_short_header_path_challenge(self) -> None:
         """
         Datagrams containing a PATH_CHALLENGE are padded, but not the next one.
         """
@@ -841,7 +841,7 @@ class QuicPacketBuilderTest(TestCase):
         datagrams, packets = builder.flush()
         self.assertEqual(datagram_sizes(datagrams), [1200, 29])
 
-    def test_short_header_path_challenge_max_total_bytes(self):
+    def test_short_header_path_challenge_max_total_bytes(self) -> None:
         """
         Padding of datagrams containing a PATH_CHALLENGE is limited by
         max_total_bytes.
@@ -858,7 +858,7 @@ class QuicPacketBuilderTest(TestCase):
         datagrams, packets = builder.flush()
         self.assertEqual(datagram_sizes(datagrams), [800])
 
-    def test_short_header_path_response(self):
+    def test_short_header_path_response(self) -> None:
         """
         Datagrams containing a PATH_RESPONSE are padded.
         """
@@ -873,7 +873,7 @@ class QuicPacketBuilderTest(TestCase):
         datagrams, packets = builder.flush()
         self.assertEqual(datagram_sizes(datagrams), [1200])
 
-    def test_short_header_ping_only(self):
+    def test_short_header_ping_only(self) -> None:
         """
         The payload is too short to provide enough data for header protection,
         so padding needs to be applied.
@@ -905,7 +905,7 @@ class QuicPacketBuilderTest(TestCase):
             ],
         )
 
-    def test_short_header_ping_only_max_total_bytes(self):
+    def test_short_header_ping_only_max_total_bytes(self) -> None:
         """
         max_total_bytes must leave room for the padding which header protection
         needs, so a PING alone needs 29 bytes.

@@ -24,7 +24,7 @@ QUIC_CONFIGURATION_OPTIONS = {
 
 
 class WebTransportTest(TestCase):
-    def _make_session(self, h3_client, h3_server):
+    def _make_session(self, h3_client: H3Connection, h3_server: H3Connection) -> int:
         quic_client = h3_client._quic
         quic_server = h3_server._quic
 
@@ -86,7 +86,7 @@ class WebTransportTest(TestCase):
 
         return stream_id
 
-    def test_bidirectional_stream(self):
+    def test_bidirectional_stream(self) -> None:
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
@@ -115,7 +115,7 @@ class WebTransportTest(TestCase):
                 ],
             )
 
-    def test_bidirectional_stream_fragmented_frame(self):
+    def test_bidirectional_stream_fragmented_frame(self) -> None:
         with h3_fake_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
@@ -162,7 +162,7 @@ class WebTransportTest(TestCase):
                 ],
             )
 
-    def test_bidirectional_stream_reset(self):
+    def test_bidirectional_stream_reset(self) -> None:
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
@@ -184,7 +184,7 @@ class WebTransportTest(TestCase):
             self.assertIn(stream_id, h3_server._stream)
             self.assertFalse(quic_server._streams[stream_id].sender.reset_pending)
 
-    def test_bidirectional_stream_server_initiated(self):
+    def test_bidirectional_stream_server_initiated(self) -> None:
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
@@ -213,7 +213,7 @@ class WebTransportTest(TestCase):
                 ],
             )
 
-    def test_unidirectional_stream(self):
+    def test_unidirectional_stream(self) -> None:
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
@@ -247,7 +247,7 @@ class WebTransportTest(TestCase):
             # the stream is no longer tracked
             self.assertNotIn(stream_id, h3_server._stream)
 
-    def test_unidirectional_stream_fragmented_frame(self):
+    def test_unidirectional_stream_fragmented_frame(self) -> None:
         with h3_fake_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
@@ -299,7 +299,7 @@ class WebTransportTest(TestCase):
             # the stream is no longer tracked
             self.assertNotIn(stream_id, h3_server._stream)
 
-    def test_unidirectional_stream_reset(self):
+    def test_unidirectional_stream_reset(self) -> None:
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
@@ -324,7 +324,7 @@ class WebTransportTest(TestCase):
             # The stream is no longer tracked.
             self.assertNotIn(stream_id, h3_server._stream)
 
-    def test_datagram(self):
+    def test_datagram(self) -> None:
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
@@ -349,7 +349,7 @@ class WebTransportTest(TestCase):
                 [DatagramReceived(data=b"foo", stream_id=session_id)],
             )
 
-    def test_handle_datagram_truncated(self):
+    def test_handle_datagram_truncated(self) -> None:
         quic_server = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=False)
         )

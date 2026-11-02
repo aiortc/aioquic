@@ -7,23 +7,24 @@ from aioquic.quic.congestion.cubic import (
     CubicCongestionControl,
     better_cube_root,
 )
+from aioquic.quic.packet import QuicPacketType
 from aioquic.quic.packet_builder import QuicSentPacket
 
 from .utils import ack_eliciting_packet
 
 
-def W_cubic(t, K, W_max):
+def W_cubic(t: float, K: float, W_max: float) -> float:
     return K_CUBIC_C * (t - K) ** 3 + (W_max)
 
 
 class CubicCongestionControlTest(TestCase):
-    def test_better_cube_root(self):
+    def test_better_cube_root(self) -> None:
         self.assertAlmostEqual(better_cube_root(8), 2)
         self.assertAlmostEqual(better_cube_root(-8), -2)
         self.assertAlmostEqual(better_cube_root(0), 0)
         self.assertAlmostEqual(better_cube_root(27), 3)
 
-    def test_packet_expired(self):
+    def test_packet_expired(self) -> None:
         packet = ack_eliciting_packet(sent_time=0.0)
 
         cubic = CubicCongestionControl(1440)
@@ -33,7 +34,7 @@ class CubicCongestionControlTest(TestCase):
 
         self.assertEqual(cubic.bytes_in_flight, 0)
 
-    def test_log_data(self):
+    def test_log_data(self) -> None:
         cubic = CubicCongestionControl(1440)
 
         self.assertEqual(
@@ -58,7 +59,7 @@ class CubicCongestionControlTest(TestCase):
             },
         )
 
-    def test_congestion_avoidance(self):
+    def test_congestion_avoidance(self) -> None:
         """
         Check if the cubic implementation respects the mathematical
         formula defined in the rfc 9438
@@ -83,7 +84,7 @@ class CubicCongestionControlTest(TestCase):
         cubic.rtt = 0
         cubic._W_max = W_max * max_datagram_size
         cubic._starting_congestion_avoidance = True
-        cubic.congestion_window = cwnd * max_datagram_size
+        cubic.congestion_window = int(cwnd * max_datagram_size)
         cubic.ssthresh = cubic.congestion_window
         cubic._W_est = 0
 
@@ -93,7 +94,9 @@ class CubicCongestionControlTest(TestCase):
 
             # simulate the reception of cwnd packets (a full window of acks)
             for _ in range(int(cwnd)):
-                packet = QuicSentPacket(None, True, True, True, 0, 0)
+                packet = QuicSentPacket(
+                    None, True, True, True, 0, QuicPacketType.ONE_RTT
+                )
                 packet.sent_bytes = 0  # won't affect results
 
                 cubic.on_packet_acked(packet=packet, now=(i / 1000))
@@ -107,7 +110,7 @@ class CubicCongestionControlTest(TestCase):
                 f"Error at {i}ms, Result={results[i]}, Expected={correct[i]}",
             )
 
-    def test_reset_idle(self):
+    def test_reset_idle(self) -> None:
         packet = ack_eliciting_packet(sent_time=10.0)
 
         max_datagram_size = 1440
@@ -134,14 +137,14 @@ class CubicCongestionControlTest(TestCase):
 
         self.assertEqual(cubic._W_max, K_INITIAL_WINDOW * max_datagram_size)
 
-    def test_slow_start(self):
+    def test_slow_start(self) -> None:
         cubic = CubicCongestionControl(1440)
 
         # The window grows by the size of each acknowledged packet.
         cubic.on_packet_acked(now=1.0, packet=ack_eliciting_packet(sent_time=0.5))
         self.assertEqual(cubic.congestion_window, K_INITIAL_WINDOW * 1440 + 1280)
 
-    def test_reno_friendly_region(self):
+    def test_reno_friendly_region(self) -> None:
         cubic = CubicCongestionControl(1440)
         cubic._W_max = 5000  # set the target number of bytes to 5000
         cubic._cwnd_epoch = 2880  # a cwnd of 1440 bytes when we had congestion
@@ -172,7 +175,7 @@ class CubicCongestionControlTest(TestCase):
             + cubic.additive_increase_factor * (packet.sent_bytes / previous_cwnd),
         )
 
-    def test_convex_region(self):
+    def test_convex_region(self) -> None:
         cubic = CubicCongestionControl(1440)
         cubic._W_max = 5000  # set the target number of bytes to 5000
         cubic._cwnd_epoch = 2880  # a cwnd of 1440 bytes when we had congestion
@@ -205,7 +208,7 @@ class CubicCongestionControlTest(TestCase):
         # congestion window should be equal to W_est (Reno estimated window)
         self.assertAlmostEqual(cubic.congestion_window, expected)
 
-    def test_concave_region(self):
+    def test_concave_region(self) -> None:
         cubic = CubicCongestionControl(1440)
         cubic._W_max = 25000  # set the target number of bytes to 25000
         cubic._cwnd_epoch = 2880  # a cwnd of 1440 bytes when we had congestion
@@ -237,7 +240,7 @@ class CubicCongestionControlTest(TestCase):
 
         self.assertAlmostEqual(cubic.congestion_window, expected)
 
-    def test_increasing_rtt(self):
+    def test_increasing_rtt(self) -> None:
         cubic = CubicCongestionControl(1440)
 
         # get some low rtt
@@ -250,7 +253,7 @@ class CubicCongestionControlTest(TestCase):
 
         self.assertEqual(cubic.ssthresh, cubic.congestion_window)
 
-    def test_increasing_rtt_exiting_slow_start(self):
+    def test_increasing_rtt_exiting_slow_start(self) -> None:
         packet = ack_eliciting_packet(sent_time=200.0)
 
         cubic = CubicCongestionControl(1440)
@@ -286,7 +289,7 @@ class CubicCongestionControlTest(TestCase):
 
         self.assertEqual(cubic.K, K)
 
-    def test_packet_lost(self):
+    def test_packet_lost(self) -> None:
         packet = ack_eliciting_packet(sent_time=200.0)
 
         packet2 = ack_eliciting_packet(sent_time=240.0)
@@ -327,7 +330,7 @@ class CubicCongestionControlTest(TestCase):
 
         self.assertEqual(cubic.K, K)
 
-    def test_persistent_congestion(self):
+    def test_persistent_congestion(self) -> None:
         cubic = CubicCongestionControl(1440)
         cubic.on_packets_lost(now=1.0, packets=[ack_eliciting_packet(sent_time=0.5)])
 
@@ -336,7 +339,7 @@ class CubicCongestionControlTest(TestCase):
         self.assertEqual(cubic.congestion_window, K_MINIMUM_WINDOW * 1440)
         self.assertEqual(cubic._congestion_recovery_start_time, 0.0)
 
-    def test_lost_with_W_max(self):
+    def test_lost_with_W_max(self) -> None:
         packet = ack_eliciting_packet(sent_time=200.0)
 
         cubic = CubicCongestionControl(1440)
@@ -353,7 +356,7 @@ class CubicCongestionControlTest(TestCase):
             cubic._W_max, previous_cwnd * (1 + K_CUBIC_LOSS_REDUCTION_FACTOR) / 2
         )
 
-    def test_cwnd_target(self):
+    def test_cwnd_target(self) -> None:
         cubic = CubicCongestionControl(1440)
         cubic._W_max = 25000  # set the target number of bytes to 25000
         cubic._cwnd_epoch = 2880  # a cwnd of 1440 bytes when we had congestion

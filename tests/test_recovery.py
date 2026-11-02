@@ -32,7 +32,7 @@ def send_one_rtt_packets(
         )
 
 
-def send_probe():
+def send_probe() -> None:
     """
     Stand in for the connection, which would send an ack-eliciting packet
     when the PTO fires.
@@ -80,22 +80,22 @@ def take_rtt_sample(recovery: QuicPacketRecovery, space: QuicPacketSpace) -> Non
 
 
 class QuicPacketNumberWindowTest(TestCase):
-    def test_empty(self):
+    def test_empty(self) -> None:
         window = QuicPacketNumberWindow()
-        self.assertNotIn(0, window)
-        self.assertNotIn(7, window)
-        self.assertNotIn(100, window)
+        self.assertFalse(0 in window)
+        self.assertFalse(7 in window)
+        self.assertFalse(100 in window)
 
-    def test_add(self):
+    def test_add(self) -> None:
         window = QuicPacketNumberWindow()
         window.add(0)
         window.add(2)
-        self.assertIn(0, window)
-        self.assertNotIn(1, window)
-        self.assertIn(2, window)
-        self.assertNotIn(3, window)
+        self.assertTrue(0 in window)
+        self.assertFalse(1 in window)
+        self.assertTrue(2 in window)
+        self.assertFalse(3 in window)
 
-    def test_slide(self):
+    def test_slide(self) -> None:
         window = QuicPacketNumberWindow()
         size = 2 * MAX_ACK_RANGES
         window.add(1)
@@ -103,46 +103,46 @@ class QuicPacketNumberWindowTest(TestCase):
         window.add(size + 2)
 
         # packets below the window are considered received
-        self.assertIn(0, window)
-        self.assertIn(1, window)
-        self.assertIn(2, window)
+        self.assertTrue(0 in window)
+        self.assertTrue(1 in window)
+        self.assertTrue(2 in window)
 
         # packets within the window are tracked individually
-        self.assertNotIn(3, window)
-        self.assertNotIn(4, window)
-        self.assertIn(5, window)
-        self.assertNotIn(size + 1, window)
-        self.assertIn(size + 2, window)
-        self.assertNotIn(size + 3, window)
+        self.assertFalse(3 in window)
+        self.assertFalse(4 in window)
+        self.assertTrue(5 in window)
+        self.assertFalse(size + 1 in window)
+        self.assertTrue(size + 2 in window)
+        self.assertFalse(size + 3 in window)
 
         # adding a packet below the window is a no-op
         window.add(0)
-        self.assertNotIn(3, window)
+        self.assertFalse(3 in window)
 
-    def test_slide_beyond_size(self):
+    def test_slide_beyond_size(self) -> None:
         window = QuicPacketNumberWindow()
         size = 2 * MAX_ACK_RANGES
         window.add(3)
         window.add(1000)
-        self.assertIn(1000 - size, window)
-        self.assertNotIn(1000 - size + 1, window)
-        self.assertNotIn(999, window)
-        self.assertIn(1000, window)
-        self.assertNotIn(1001, window)
+        self.assertTrue(1000 - size in window)
+        self.assertFalse(1000 - size + 1 in window)
+        self.assertFalse(999 in window)
+        self.assertTrue(1000 in window)
+        self.assertFalse(1001 in window)
 
 
 class QuicPacketPacerTest(TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.pacer = QuicPacketPacer(max_datagram_size=1280)
 
-    def test_no_measurement(self):
+    def test_no_measurement(self) -> None:
         self.assertIsNone(self.pacer.next_send_time(now=0.0))
         self.pacer.update_after_send(now=0.0)
 
         self.assertIsNone(self.pacer.next_send_time(now=0.0))
         self.pacer.update_after_send(now=0.0)
 
-    def test_with_measurement(self):
+    def test_with_measurement(self) -> None:
         self.assertIsNone(self.pacer.next_send_time(now=0.0))
         self.pacer.update_after_send(now=0.0)
 
@@ -176,7 +176,7 @@ class QuicPacketPacerTest(TestCase):
 
 
 class QuicPacketRecoveryTest(TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.INITIAL_SPACE = QuicPacketSpace()
         self.HANDSHAKE_SPACE = QuicPacketSpace()
         self.ONE_RTT_SPACE = QuicPacketSpace(is_application_data=True)
@@ -194,10 +194,10 @@ class QuicPacketRecoveryTest(TestCase):
             self.ONE_RTT_SPACE,
         ]
 
-    def test_discard_space(self):
+    def test_discard_space(self) -> None:
         self.recovery.discard_space(self.INITIAL_SPACE)
 
-    def test_get_loss_detection_time_amplification_limited(self):
+    def test_get_loss_detection_time_amplification_limited(self) -> None:
         take_rtt_sample(self.recovery, self.INITIAL_SPACE)
         self.recovery.on_packet_sent(
             packet=ack_eliciting_packet(
@@ -222,7 +222,7 @@ class QuicPacketRecoveryTest(TestCase):
             self.recovery.get_loss_detection_time(amplification_limited=True), 1.2
         )
 
-    def test_get_loss_detection_time_application_data(self):
+    def test_get_loss_detection_time_application_data(self) -> None:
         take_rtt_sample(self.recovery, self.INITIAL_SPACE)
 
         # The PTO is not armed before the handshake is confirmed.
@@ -244,7 +244,7 @@ class QuicPacketRecoveryTest(TestCase):
             self.recovery.get_loss_detection_time(amplification_limited=False), 2.325
         )
 
-    def test_get_loss_detection_time_handshake(self):
+    def test_get_loss_detection_time_handshake(self) -> None:
         take_rtt_sample(self.recovery, self.INITIAL_SPACE)
 
         # The PTO does not include max_ack_delay.
@@ -260,12 +260,12 @@ class QuicPacketRecoveryTest(TestCase):
             self.recovery.get_loss_detection_time(amplification_limited=False), 1.3
         )
 
-    def test_get_loss_detection_time_nothing_in_flight(self):
+    def test_get_loss_detection_time_nothing_in_flight(self) -> None:
         self.assertIsNone(
             self.recovery.get_loss_detection_time(amplification_limited=False)
         )
 
-    def test_get_loss_detection_time_without_address_validation(self):
+    def test_get_loss_detection_time_without_address_validation(self) -> None:
         self.recovery.peer_completed_address_validation = False
         self.recovery.on_packet_sent(
             packet=ack_eliciting_packet(
@@ -282,7 +282,7 @@ class QuicPacketRecoveryTest(TestCase):
             self.recovery.get_loss_detection_time(amplification_limited=False), 0.2
         )
 
-    def test_on_ack_received_ack_eliciting(self):
+    def test_on_ack_received_ack_eliciting(self) -> None:
         packet = QuicSentPacket(
             epoch=tls.Epoch.ONE_RTT,
             in_flight=True,
@@ -318,7 +318,7 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(self.recovery._rtt_min, 10.0)
         self.assertEqual(self.recovery._rtt_smoothed, 10.0)
 
-    def test_on_ack_received_non_ack_eliciting(self):
+    def test_on_ack_received_non_ack_eliciting(self) -> None:
         packet = QuicSentPacket(
             epoch=tls.Epoch.ONE_RTT,
             in_flight=True,
@@ -354,7 +354,7 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(self.recovery._rtt_min, math.inf)
         self.assertEqual(self.recovery._rtt_smoothed, 0.0)
 
-    def test_on_ack_received_with_ranges(self):
+    def test_on_ack_received_with_ranges(self) -> None:
         # Packets 1 and 3 were acknowledged and packet 2 lost earlier, so the first
         # two ranges contain no packet in flight.
         deliveries = send_watched_packets(
@@ -380,7 +380,7 @@ class QuicPacketRecoveryTest(TestCase):
         )
         self.assertEqual(list(self.ONE_RTT_SPACE.sent_packets), [6, 7, 9])
 
-    def test_on_ack_received_without_address_validation(self):
+    def test_on_ack_received_without_address_validation(self) -> None:
         self.recovery.peer_completed_address_validation = False
         self.recovery.on_packet_sent(
             packet=ack_eliciting_packet(
@@ -420,7 +420,7 @@ class QuicPacketRecoveryTest(TestCase):
         )
         self.assertEqual(self.recovery._pto_count, 0)
 
-    def test_on_loss_detection_timeout_retransmits_oldest_packet(self):
+    def test_on_loss_detection_timeout_retransmits_oldest_packet(self) -> None:
         self.recovery.handshake_confirmed = True
         deliveries = send_watched_packets(
             self.recovery, self.ONE_RTT_SPACE, {0: 1.0, 1: 1.1}
@@ -434,7 +434,9 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(self.recovery.bytes_in_flight, 1280)
         self.assertEqual(self.recovery.congestion_window, congestion_window)
 
-    def test_on_loss_detection_timeout_retransmits_oldest_packet_unconfirmed(self):
+    def test_on_loss_detection_timeout_retransmits_oldest_packet_unconfirmed(
+        self,
+    ) -> None:
         one_rtt_deliveries = send_watched_packets(
             self.recovery, self.ONE_RTT_SPACE, {0: 1.0}
         )
@@ -448,7 +450,7 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(one_rtt_deliveries, [])
         self.assertEqual(handshake_deliveries, [(QuicDeliveryState.LOST, 0)])
 
-    def test_on_loss_detection_timeout_with_crypto(self):
+    def test_on_loss_detection_timeout_with_crypto(self) -> None:
         self.recovery.handshake_confirmed = True
         deliveries = send_watched_packets(self.recovery, self.ONE_RTT_SPACE, {0: 1.0})
         self.recovery.on_packet_sent(
@@ -474,7 +476,7 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(self.recovery.bytes_in_flight, 1280)
         self.assertEqual(self.recovery.congestion_window, congestion_window)
 
-    def test_on_packet_lost_crypto(self):
+    def test_on_packet_lost_crypto(self) -> None:
         packet = QuicSentPacket(
             epoch=tls.Epoch.INITIAL,
             in_flight=True,
@@ -497,7 +499,7 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(space.ack_eliciting_in_flight, 0)
         self.assertEqual(len(space.sent_packets), 0)
 
-    def test_on_packets_lost_persistent_congestion(self):
+    def test_on_packets_lost_persistent_congestion(self) -> None:
         take_rtt_sample(self.recovery, self.INITIAL_SPACE)
 
         # Packets 1 and 2 are lost, and sent further apart than the persistent
@@ -513,7 +515,7 @@ class QuicPacketRecoveryTest(TestCase):
         )
         self.assertEqual(self.recovery.congestion_window, K_MINIMUM_WINDOW * 1280)
 
-    def test_on_packets_lost_persistent_congestion_acked_in_between(self):
+    def test_on_packets_lost_persistent_congestion_acked_in_between(self) -> None:
         take_rtt_sample(self.recovery, self.INITIAL_SPACE)
 
         # Packets 1 and 3 are lost, but packet 2 was acknowledged.
@@ -528,7 +530,7 @@ class QuicPacketRecoveryTest(TestCase):
         )
         self.assertEqual(self.recovery.congestion_window, 7680)
 
-    def test_on_packets_lost_persistent_congestion_before_rtt_sample(self):
+    def test_on_packets_lost_persistent_congestion_before_rtt_sample(self) -> None:
         # Packets 0 and 1 are lost, but were sent before the first RTT sample.
         send_one_rtt_packets(
             self.recovery, self.ONE_RTT_SPACE, {0: 0.0, 1: 2.0, 2: 2.1}
@@ -541,7 +543,7 @@ class QuicPacketRecoveryTest(TestCase):
         )
         self.assertEqual(self.recovery.congestion_window, 7040)
 
-    def test_on_packets_lost_persistent_congestion_short_period(self):
+    def test_on_packets_lost_persistent_congestion_short_period(self) -> None:
         take_rtt_sample(self.recovery, self.INITIAL_SPACE)
 
         # Packets 1 and 2 are lost, but sent within the persistent congestion
@@ -557,7 +559,7 @@ class QuicPacketRecoveryTest(TestCase):
         )
         self.assertEqual(self.recovery.congestion_window, 7040)
 
-    def test_reschedule_data_speed_up_handshake(self):
+    def test_reschedule_data_speed_up_handshake(self) -> None:
         self.recovery.handshake_confirmed = True
         deliveries = send_watched_packets(self.recovery, self.ONE_RTT_SPACE, {0: 1.0})
 

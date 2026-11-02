@@ -4,7 +4,7 @@ from aioquic.quic.retry import QuicRetryTokenHandler
 
 
 class QuicRetryTokenHandlerTest(TestCase):
-    def test_retry_token(self):
+    def test_retry_token(self) -> None:
         address = ("127.0.0.1", 1234)
         original_destination_connection_id = b"\x08\x07\x06\05\x04\x03\x02\x01"
         retry_source_connection_id = b"abcdefgh"

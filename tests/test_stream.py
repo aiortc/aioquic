@@ -7,7 +7,7 @@ from aioquic.quic.stream import FinalSizeError, QuicStream
 
 
 class QuicStreamTest(TestCase):
-    def test_receiver_empty(self):
+    def test_receiver_empty(self) -> None:
         stream = QuicStream(stream_id=0)
         self.assertEqual(bytes(stream.receiver._buffer), b"")
         self.assertEqual(list(stream.receiver._ranges), [])
@@ -21,7 +21,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(list(stream.receiver._ranges), [])
         self.assertEqual(stream.receiver._buffer_start, 0)
 
-    def test_receiver_ordered(self):
+    def test_receiver_ordered(self) -> None:
         stream = QuicStream(stream_id=0)
 
         # add data at start
@@ -59,7 +59,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(stream.receiver.highest_offset, 24)
         self.assertTrue(stream.receiver.is_finished)
 
-    def test_receiver_unordered(self):
+    def test_receiver_unordered(self) -> None:
         stream = QuicStream(stream_id=0)
 
         # add data at offset 8
@@ -84,7 +84,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(stream.receiver._buffer_start, 16)
         self.assertEqual(stream.receiver.highest_offset, 16)
 
-    def test_receiver_offset_only(self):
+    def test_receiver_offset_only(self) -> None:
         stream = QuicStream(stream_id=0)
 
         # add data at offset 0
@@ -107,7 +107,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(stream.receiver._buffer_start, 0)
         self.assertEqual(stream.receiver.highest_offset, 8)
 
-    def test_receiver_already_fully_consumed(self):
+    def test_receiver_already_fully_consumed(self) -> None:
         stream = QuicStream(stream_id=0)
 
         # add data at offset 0
@@ -136,7 +136,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(list(stream.receiver._ranges), [])
         self.assertEqual(stream.receiver._buffer_start, 8)
 
-    def test_receiver_already_partially_consumed(self):
+    def test_receiver_already_partially_consumed(self) -> None:
         stream = QuicStream(stream_id=0)
 
         self.assertEqual(
@@ -154,7 +154,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(list(stream.receiver._ranges), [])
         self.assertEqual(stream.receiver._buffer_start, 16)
 
-    def test_receiver_already_partially_consumed_2(self):
+    def test_receiver_already_partially_consumed_2(self) -> None:
         stream = QuicStream(stream_id=0)
 
         self.assertEqual(
@@ -177,7 +177,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(list(stream.receiver._ranges), [])
         self.assertEqual(stream.receiver._buffer_start, 24)
 
-    def test_receiver_fin(self):
+    def test_receiver_fin(self) -> None:
         stream = QuicStream(stream_id=0)
 
         self.assertEqual(
@@ -191,7 +191,7 @@ class QuicStreamTest(TestCase):
             StreamDataReceived(data=b"89012345", end_stream=True, stream_id=0),
         )
 
-    def test_receiver_fin_below_received_data(self):
+    def test_receiver_fin_below_received_data(self) -> None:
         stream = QuicStream(stream_id=0)
         stream.receiver.handle_frame(QuicStreamFrame(offset=4, data=b"4567"))
 
@@ -202,7 +202,7 @@ class QuicStreamTest(TestCase):
             )
         self.assertEqual(str(cm.exception), "Data received beyond final size")
 
-    def test_receiver_fin_out_of_order(self):
+    def test_receiver_fin_out_of_order(self) -> None:
         stream = QuicStream(stream_id=0)
 
         # add data at offset 8 with FIN
@@ -223,7 +223,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(stream.receiver.highest_offset, 16)
         self.assertTrue(stream.receiver.is_finished)
 
-    def test_receiver_fin_then_data(self):
+    def test_receiver_fin_then_data(self) -> None:
         stream = QuicStream(stream_id=0)
         stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"0123", fin=True))
 
@@ -239,7 +239,7 @@ class QuicStreamTest(TestCase):
             )
         self.assertEqual(str(cm.exception), "Cannot change final size")
 
-    def test_receiver_fin_twice(self):
+    def test_receiver_fin_twice(self) -> None:
         stream = QuicStream(stream_id=0)
         self.assertEqual(
             stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"01234567")),
@@ -260,14 +260,14 @@ class QuicStreamTest(TestCase):
             None,
         )
 
-    def test_receiver_fin_without_data(self):
+    def test_receiver_fin_without_data(self) -> None:
         stream = QuicStream(stream_id=0)
         self.assertEqual(
             stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"", fin=True)),
             StreamDataReceived(data=b"", end_stream=True, stream_id=0),
         )
 
-    def test_receiver_reset(self):
+    def test_receiver_reset(self) -> None:
         stream = QuicStream(stream_id=0)
         self.assertEqual(
             stream.receiver.handle_reset(final_size=4),
@@ -276,14 +276,14 @@ class QuicStreamTest(TestCase):
         self.assertEqual(stream.receiver.highest_offset, 4)
         self.assertTrue(stream.receiver.is_finished)
 
-    def test_receiver_reset_after_fin(self):
+    def test_receiver_reset_after_fin(self) -> None:
         stream = QuicStream(stream_id=0)
         stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"0123", fin=True))
 
         # all data was received, the reset is ignored
         self.assertEqual(stream.receiver.handle_reset(final_size=4), None)
 
-    def test_receiver_reset_after_fin_out_of_order(self):
+    def test_receiver_reset_after_fin_out_of_order(self) -> None:
         stream = QuicStream(stream_id=0)
         stream.receiver.handle_frame(QuicStreamFrame(offset=2, data=b"23", fin=True))
 
@@ -293,7 +293,7 @@ class QuicStreamTest(TestCase):
             StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
         )
 
-    def test_receiver_reset_below_received_data(self):
+    def test_receiver_reset_below_received_data(self) -> None:
         stream = QuicStream(stream_id=0)
         stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"01234567"))
 
@@ -302,7 +302,7 @@ class QuicStreamTest(TestCase):
             stream.receiver.handle_reset(final_size=4)
         self.assertEqual(str(cm.exception), "Data received beyond final size")
 
-    def test_receiver_reset_then_data(self):
+    def test_receiver_reset_then_data(self) -> None:
         stream = QuicStream(stream_id=0)
         self.assertEqual(
             stream.receiver.handle_reset(final_size=4),
@@ -320,7 +320,7 @@ class QuicStreamTest(TestCase):
             stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"01234567"))
         self.assertEqual(str(cm.exception), "Data received beyond final size")
 
-    def test_receiver_reset_twice(self):
+    def test_receiver_reset_twice(self) -> None:
         stream = QuicStream(stream_id=0)
         self.assertEqual(
             stream.receiver.handle_reset(final_size=4),
@@ -330,7 +330,7 @@ class QuicStreamTest(TestCase):
         # the duplicate reset is ignored
         self.assertEqual(stream.receiver.handle_reset(final_size=4), None)
 
-    def test_receiver_reset_twice_final_size_error(self):
+    def test_receiver_reset_twice_final_size_error(self) -> None:
         stream = QuicStream(stream_id=0)
         self.assertEqual(
             stream.receiver.handle_reset(final_size=4),
@@ -341,7 +341,7 @@ class QuicStreamTest(TestCase):
             stream.receiver.handle_reset(final_size=5)
         self.assertEqual(str(cm.exception), "Cannot change final size")
 
-    def test_receiver_stop(self):
+    def test_receiver_stop(self) -> None:
         stream = QuicStream()
 
         # stop is requested
@@ -357,7 +357,7 @@ class QuicStreamTest(TestCase):
         stream.receiver.on_stop_sending_delivery(QuicDeliveryState.ACKED)
         self.assertFalse(stream.receiver.stop_pending)
 
-    def test_receiver_stop_lost(self):
+    def test_receiver_stop_lost(self) -> None:
         stream = QuicStream()
 
         # stop is requested
@@ -382,7 +382,7 @@ class QuicStreamTest(TestCase):
         stream.receiver.on_stop_sending_delivery(QuicDeliveryState.ACKED)
         self.assertFalse(stream.receiver.stop_pending)
 
-    def test_sender_data(self):
+    def test_sender_data(self) -> None:
         stream = QuicStream()
         self.assertEqual(stream.sender.next_offset, 0)
 
@@ -425,7 +425,7 @@ class QuicStreamTest(TestCase):
         stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 8, 16, False)
         self.assertFalse(stream.sender.is_finished)
 
-    def test_sender_data_and_fin(self):
+    def test_sender_data_and_fin(self) -> None:
         stream = QuicStream()
 
         # nothing to send yet
@@ -464,7 +464,7 @@ class QuicStreamTest(TestCase):
         stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 8, 16, True)
         self.assertTrue(stream.sender.is_finished)
 
-    def test_sender_data_and_fin_ack_out_of_order(self):
+    def test_sender_data_and_fin_ack_out_of_order(self) -> None:
         stream = QuicStream()
 
         # nothing to send yet
@@ -503,7 +503,7 @@ class QuicStreamTest(TestCase):
         stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 0, 8, False)
         self.assertTrue(stream.sender.is_finished)
 
-    def test_sender_data_lost(self):
+    def test_sender_data_lost(self) -> None:
         stream = QuicStream()
 
         # nothing to send yet
@@ -549,7 +549,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(list(stream.sender._pending), [])
         self.assertEqual(stream.sender.next_offset, 16)
 
-    def test_sender_data_lost_fin(self):
+    def test_sender_data_lost_fin(self) -> None:
         stream = QuicStream()
 
         # nothing to send yet
@@ -603,7 +603,7 @@ class QuicStreamTest(TestCase):
         stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 8, 16, True)
         self.assertTrue(stream.sender.is_finished)
 
-    def test_sender_blocked(self):
+    def test_sender_blocked(self) -> None:
         stream = QuicStream()
         max_offset = 12
 
@@ -665,7 +665,7 @@ class QuicStreamTest(TestCase):
         frame = stream.sender.get_frame(8, max_offset)
         self.assertIsNone(frame)
 
-    def test_sender_fin_only(self):
+    def test_sender_fin_only(self) -> None:
         stream = QuicStream()
 
         # nothing to send yet
@@ -691,7 +691,7 @@ class QuicStreamTest(TestCase):
         stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 0, 0, True)
         self.assertTrue(stream.sender.is_finished)
 
-    def test_sender_fin_only_despite_blocked(self):
+    def test_sender_fin_only_despite_blocked(self) -> None:
         stream = QuicStream()
 
         # nothing to send yet
@@ -713,7 +713,7 @@ class QuicStreamTest(TestCase):
         self.assertIsNone(frame)
         self.assertTrue(stream.sender.buffer_is_empty)
 
-    def test_sender_fin_only_without_room(self):
+    def test_sender_fin_only_without_room(self) -> None:
         """
         A FIN without data waits for a packet with room for the frame header.
         """
@@ -731,7 +731,7 @@ class QuicStreamTest(TestCase):
         self.assertTrue(frame.fin)
         self.assertEqual(frame.offset, 0)
 
-    def test_sender_fin_then_ack(self):
+    def test_sender_fin_then_ack(self) -> None:
         stream = QuicStream()
 
         # send some data
@@ -755,7 +755,7 @@ class QuicStreamTest(TestCase):
         stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 4, 4, True)
         self.assertTrue(stream.sender.is_finished)
 
-    def test_sender_reset(self):
+    def test_sender_reset(self) -> None:
         stream = QuicStream()
 
         # send some data and EOF
@@ -787,7 +787,7 @@ class QuicStreamTest(TestCase):
         self.assertFalse(stream.sender.reset_pending)
         self.assertTrue(stream.sender.is_finished)
 
-    def test_sender_reset_after_fin_acked(self):
+    def test_sender_reset_after_fin_acked(self) -> None:
         stream = QuicStream()
 
         # Data and EOF are sent and acknowledged.
@@ -802,7 +802,7 @@ class QuicStreamTest(TestCase):
         stream.sender.reset(QuicErrorCode.NO_ERROR)
         self.assertFalse(stream.sender.reset_pending)
 
-    def test_sender_reset_lost(self):
+    def test_sender_reset_lost(self) -> None:
         stream = QuicStream()
 
         # reset is requested
@@ -833,7 +833,7 @@ class QuicStreamTest(TestCase):
         self.assertTrue(stream.sender.buffer_is_empty)
         self.assertTrue(stream.sender.is_finished)
 
-    def test_sender_reset_with_data_lost(self):
+    def test_sender_reset_with_data_lost(self) -> None:
         stream = QuicStream()
 
         # send some data and EOF
@@ -866,7 +866,7 @@ class QuicStreamTest(TestCase):
         self.assertTrue(stream.sender.buffer_is_empty)
         self.assertTrue(stream.sender.is_finished)
 
-    def test_sender_write_after_fin(self):
+    def test_sender_write_after_fin(self) -> None:
         stream = QuicStream()
         stream.sender.write(b"data", end_stream=True)
 
@@ -874,7 +874,7 @@ class QuicStreamTest(TestCase):
             stream.sender.write(b"more")
         self.assertEqual(str(cm.exception), "Cannot send data after FIN")
 
-    def test_sender_write_after_reset(self):
+    def test_sender_write_after_reset(self) -> None:
         stream = QuicStream()
         stream.sender.reset(QuicErrorCode.NO_ERROR)
 
