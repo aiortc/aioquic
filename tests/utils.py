@@ -5,7 +5,8 @@ import ipaddress
 import logging
 import os
 import tempfile
-from typing import Callable, Coroutine, ParamSpec, TypeVar
+from collections.abc import Callable, Coroutine
+from typing import Optional, ParamSpec, TypeVar, Union
 
 from aioquic import tls
 from aioquic.quic.packet import QuicPacketType
@@ -14,6 +15,12 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
 
+CertificatePrivateKey = Union[
+    ec.EllipticCurvePrivateKey,
+    ed448.Ed448PrivateKey,
+    ed25519.Ed25519PrivateKey,
+    rsa.RSAPrivateKey,
+]
 K = TypeVar(
     "K",
     ec.EllipticCurvePrivateKey,
@@ -54,7 +61,7 @@ def asynctest(
     coro: Callable[P, Coroutine[None, None, None]],
 ) -> Callable[P, None]:
     @functools.wraps(coro)
-    def wrap(*args, **kwargs):
+    def wrap(*args: P.args, **kwargs: P.kwargs) -> None:
         asyncio.run(coro(*args, **kwargs))
 
     return wrap
@@ -73,7 +80,7 @@ def generate_certificate(
     *,
     alternative_names: list[str],
     common_name: str,
-    hash_algorithm,
+    hash_algorithm: Optional[hashes.SHA256],
     key: K,
 ) -> tuple[x509.Certificate, K]:
     subject = issuer = x509.Name(
@@ -265,7 +272,9 @@ def generate_default_certificates() -> None:
 
 
 def generate_ec_certificate(
-    common_name: str, alternative_names: list[str] = [], curve=ec.SECP256R1
+    common_name: str,
+    alternative_names: list[str] = [],
+    curve: type[ec.EllipticCurve] = ec.SECP256R1,
 ) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
     key = ec.generate_private_key(curve=curve())
     return generate_certificate(

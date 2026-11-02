@@ -4,17 +4,21 @@ import contextlib
 import random
 import socket
 import weakref
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator, Callable
+from typing import Any, Optional
 from unittest import TestCase, skipIf
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from aioquic.asyncio.client import connect
-from aioquic.asyncio.protocol import QuicConnectionProtocol
+from aioquic.asyncio.protocol import QuicConnectionProtocol, QuicStreamHandler
 from aioquic.asyncio.server import serve
 from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.connection import NetworkAddress, QuicConnection
 from aioquic.quic.events import ConnectionTerminated, QuicEvent
 from aioquic.quic.logger import QuicLogger
 from aioquic.quic.packet import QuicErrorCode, encode_quic_version_negotiation
+from aioquic.tls import SessionTicket
+from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
 from .utils import (
@@ -23,6 +27,7 @@ from .utils import (
     SERVER_COMBINEDFILE,
     SERVER_KEYFILE,
     SKIP_TESTS,
+    CertificatePrivateKey,
     asynctest,
     generate_ec_certificate,
     generate_ed448_certificate,
@@ -36,7 +41,9 @@ real_sendto = socket.socket.sendto
 dropped_sockets: weakref.WeakSet[socket.socket] = weakref.WeakSet()
 
 
-def sendto_with_loss(self, data, addr=None):
+def sendto_with_loss(
+    self: socket.socket, data: bytes, addr: Optional[NetworkAddress] = None
+) -> None:
     """
     Simulate 25% packet loss, without dropping two datagrams in a row from the
     same socket.
@@ -53,18 +60,18 @@ def sendto_with_loss(self, data, addr=None):
 
 
 class SessionTicketStore:
-    def __init__(self):
-        self.tickets = {}
+    def __init__(self) -> None:
+        self.tickets: dict[bytes, SessionTicket] = {}
 
-    def add(self, ticket):
+    def add(self, ticket: SessionTicket) -> None:
         self.tickets[ticket.ticket] = ticket
 
-    def pop(self, label):
+    def pop(self, label: bytes) -> Optional[SessionTicket]:
         return self.tickets.pop(label, None)
 
 
-def handle_stream(reader, writer):
-    async def serve():
+def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def serve() -> None:
         data = await reader.read()
         writer.write(bytes(reversed(data)))
         writer.write_eof()
@@ -73,7 +80,7 @@ def handle_stream(reader, writer):
 
 
 class HighLevelTest(TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.bogus_port = 1024
         self.server_host = "localhost"
 
@@ -81,12 +88,12 @@ class HighLevelTest(TestCase):
         self,
         *,
         port: int,
-        host=None,
-        cadata=None,
-        cafile=SERVER_CACERTFILE,
-        configuration=None,
-        request=b"ping",
-        **kwargs,
+        host: Optional[str] = None,
+        cadata: Optional[bytes] = None,
+        cafile: Optional[str] = SERVER_CACERTFILE,
+        configuration: Optional[QuicConfiguration] = None,
+        request: bytes | bytearray | memoryview = b"ping",
+        **kwargs: Any,
     ) -> bytes:
         if host is None:
             host = self.server_host
@@ -118,9 +125,9 @@ class HighLevelTest(TestCase):
     async def run_server(
         self,
         configuration: Optional[QuicConfiguration] = None,
-        host="::",
-        stream_handler=handle_stream,
-        **kwargs,
+        host: str = "::",
+        stream_handler: QuicStreamHandler = handle_stream,
+        **kwargs: Any,
     ) -> AsyncGenerator[int, None]:
         if configuration is None:
             configuration = QuicConfiguration(is_client=False)
@@ -187,7 +194,7 @@ class HighLevelTest(TestCase):
             self.assertEqual(response, b"gnip")
 
     async def _test_connect_and_serve_with_certificate(
-        self, certificate, private_key
+        self, certificate: x509.Certificate, private_key: CertificatePrivateKey
     ) -> None:
         async with self.run_server(
             configuration=QuicConfiguration(
@@ -204,7 +211,7 @@ class HighLevelTest(TestCase):
             self.assertEqual(response, b"gnip")
 
     @asynctest
-    async def test_connect_and_serve_with_ec_certificate(self):
+    async def test_connect_and_serve_with_ec_certificate(self) -> None:
         await self._test_connect_and_serve_with_certificate(
             *generate_ec_certificate(
                 alternative_names=["localhost"], common_name="localhost"
@@ -212,7 +219,7 @@ class HighLevelTest(TestCase):
         )
 
     @asynctest
-    async def test_connect_and_serve_with_ed25519_certificate(self):
+    async def test_connect_and_serve_with_ed25519_certificate(self) -> None:
         await self._test_connect_and_serve_with_certificate(
             *generate_ed25519_certificate(
                 alternative_names=["localhost"], common_name="localhost"
@@ -221,7 +228,7 @@ class HighLevelTest(TestCase):
 
     @skipIf("ed448" in SKIP_TESTS, "Skipping ed448 tests")
     @asynctest
-    async def test_connect_and_serve_with_ed448_certificate(self):
+    async def test_connect_and_serve_with_ed448_certificate(self) -> None:
         await self._test_connect_and_serve_with_certificate(
             *generate_ed448_certificate(
                 alternative_names=["localhost"], common_name="localhost"
@@ -229,7 +236,7 @@ class HighLevelTest(TestCase):
         )
 
     @asynctest
-    async def test_connect_and_serve_with_rsa_certificate(self):
+    async def test_connect_and_serve_with_rsa_certificate(self) -> None:
         await self._test_connect_and_serve_with_certificate(
             *generate_rsa_certificate(
                 alternative_names=["localhost"], common_name="localhost"
@@ -237,7 +244,7 @@ class HighLevelTest(TestCase):
         )
 
     @asynctest
-    async def test_connect_and_serve_large(self):
+    async def test_connect_and_serve_large(self) -> None:
         """
         Transfer enough data to require raising MAX_DATA and MAX_STREAM_DATA.
         """
@@ -247,14 +254,14 @@ class HighLevelTest(TestCase):
             self.assertEqual(response, data)
 
     @asynctest
-    async def test_connect_and_serve_without_client_configuration(self):
+    async def test_connect_and_serve_without_client_configuration(self) -> None:
         async with self.run_server() as server_port:
             with self.assertRaises(ConnectionError):
                 async with connect(self.server_host, server_port) as client:
                     await client.ping()
 
     @asynctest
-    async def test_connect_and_serve_writelines(self):
+    async def test_connect_and_serve_writelines(self) -> None:
         async with self.run_server() as server_port:
             configuration = QuicConfiguration(is_client=True)
             configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
@@ -276,8 +283,10 @@ class HighLevelTest(TestCase):
             asyncio.get_running_loop().create_future()
         )
 
-        def handle_unidirectional_stream(reader, writer):
-            async def serve():
+        def handle_unidirectional_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            async def serve() -> None:
                 # the stream is receive-only, closing it must not send a FIN
                 self.assertEqual(writer.can_write_eof(), False)
                 self.assertEqual(await reader.read(), b"ping")
@@ -305,7 +314,9 @@ class HighLevelTest(TestCase):
     @skipIf("loss" in SKIP_TESTS, "Skipping loss tests")
     @patch("socket.socket.sendto", new_callable=lambda: sendto_with_loss)
     @asynctest
-    async def test_connect_and_serve_with_packet_loss(self, mock_sendto) -> None:
+    async def test_connect_and_serve_with_packet_loss(
+        self, mock_sendto: Callable[..., None]
+    ) -> None:
         """
         This test ensures handshake success and stream data is successfully sent
         and received in the presence of packet loss (randomized 25% in each direction).
@@ -327,11 +338,11 @@ class HighLevelTest(TestCase):
         self.assertEqual(response, data)
 
     @asynctest
-    async def test_connect_and_serve_with_session_ticket(self):
+    async def test_connect_and_serve_with_session_ticket(self) -> None:
         client_ticket = None
         store = SessionTicketStore()
 
-        def save_ticket(t):
+        def save_ticket(t: SessionTicket) -> None:
             nonlocal client_ticket
             client_ticket = t
 
@@ -356,7 +367,7 @@ class HighLevelTest(TestCase):
             self.assertEqual(response, b"gnip")
 
     @asynctest
-    async def test_connect_and_serve_with_retry(self):
+    async def test_connect_and_serve_with_retry(self) -> None:
         async with self.run_server(retry=True) as server_port:
             response = await self.run_client(port=server_port)
             self.assertEqual(response, b"gnip")
@@ -364,14 +375,16 @@ class HighLevelTest(TestCase):
     @asynctest
     async def test_connect_and_serve_with_retry_bad_original_destination_connection_id(
         self,
-    ):
+    ) -> None:
         """
         If the server's transport parameters do not have the correct
         original_destination_connection_id the connection must fail.
         """
 
-        def create_protocol(*args, **kwargs):
-            protocol = QuicConnectionProtocol(*args, **kwargs)
+        def create_protocol(
+            quic: QuicConnection, stream_handler: Optional[QuicStreamHandler] = None
+        ) -> QuicConnectionProtocol:
+            protocol = QuicConnectionProtocol(quic, stream_handler=stream_handler)
             protocol._quic._original_destination_connection_id = None
             return protocol
 
@@ -382,14 +395,18 @@ class HighLevelTest(TestCase):
                 await self.run_client(port=server_port)
 
     @asynctest
-    async def test_connect_and_serve_with_retry_bad_retry_source_connection_id(self):
+    async def test_connect_and_serve_with_retry_bad_retry_source_connection_id(
+        self,
+    ) -> None:
         """
         If the server's transport parameters do not have the correct
         retry_source_connection_id the connection must fail.
         """
 
-        def create_protocol(*args, **kwargs):
-            protocol = QuicConnectionProtocol(*args, **kwargs)
+        def create_protocol(
+            quic: QuicConnection, stream_handler: Optional[QuicStreamHandler] = None
+        ) -> QuicConnectionProtocol:
+            protocol = QuicConnectionProtocol(quic, stream_handler=stream_handler)
             protocol._quic._retry_source_connection_id = None
             return protocol
 
@@ -401,7 +418,9 @@ class HighLevelTest(TestCase):
 
     @patch("aioquic.quic.retry.QuicRetryTokenHandler.validate_token")
     @asynctest
-    async def test_connect_and_serve_with_retry_bad_token(self, mock_validate) -> None:
+    async def test_connect_and_serve_with_retry_bad_token(
+        self, mock_validate: MagicMock
+    ) -> None:
         """
         If the retry token is invalid, the server must close the connection
         with INVALID_TOKEN.

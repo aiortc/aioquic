@@ -21,14 +21,14 @@ SINGLE_TRACE = {
 
 
 class QuicLoggerTest(TestCase):
-    def test_empty(self):
+    def test_empty(self) -> None:
         logger = QuicLogger()
         self.assertEqual(
             logger.to_dict(),
             {"qlog_format": "JSON", "qlog_version": "0.3", "traces": []},
         )
 
-    def test_end_trace_unknown(self):
+    def test_end_trace_unknown(self) -> None:
         logger = QuicLogger()
         trace = QuicLogger().start_trace(is_client=True, odcid=bytes(8))
         with self.assertRaises(ValueError) as cm:
@@ -37,7 +37,7 @@ class QuicLoggerTest(TestCase):
             str(cm.exception), "QuicLoggerTrace does not belong to QuicLogger"
         )
 
-    def test_single_trace(self):
+    def test_single_trace(self) -> None:
         logger = QuicLogger()
         trace = logger.start_trace(is_client=True, odcid=bytes(8))
         logger.end_trace(trace)
@@ -45,7 +45,7 @@ class QuicLoggerTest(TestCase):
 
 
 class QuicFileLoggerTest(TestCase):
-    def test_invalid_path(self):
+    def test_invalid_path(self) -> None:
         with self.assertRaises(ValueError) as cm:
             QuicFileLogger("this_path_should_not_exist")
         self.assertEqual(
@@ -53,7 +53,7 @@ class QuicFileLoggerTest(TestCase):
             "QUIC log output directory 'this_path_should_not_exist' does not exist",
         )
 
-    def test_single_trace(self):
+    def test_single_trace(self) -> None:
         with tempfile.TemporaryDirectory() as dirpath:
             logger = QuicFileLogger(dirpath)
             trace = logger.start_trace(is_client=True, odcid=bytes(8))

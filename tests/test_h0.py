@@ -1,20 +1,26 @@
+import contextlib
 from unittest import TestCase
 
 from aioquic.h0.connection import H0_ALPN, H0Connection
-from aioquic.h3.events import DataReceived, HeadersReceived
+from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
+from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import StreamDataReceived
 
 from .test_connection import client_and_server, transfer
 
 
-def h0_client_and_server():
+def h0_client_and_server() -> contextlib.AbstractContextManager[
+    tuple[QuicConnection, QuicConnection]
+]:
     return client_and_server(
         client_options={"alpn_protocols": H0_ALPN},
         server_options={"alpn_protocols": H0_ALPN},
     )
 
 
-def h0_transfer(quic_sender, h0_receiver):
+def h0_transfer(
+    quic_sender: QuicConnection, h0_receiver: H0Connection
+) -> list[H3Event]:
     quic_receiver = h0_receiver._quic
     transfer(quic_sender, quic_receiver)
 
@@ -28,7 +34,7 @@ def h0_transfer(quic_sender, h0_receiver):
 
 
 class H0ConnectionTest(TestCase):
-    def test_connect(self):
+    def test_connect(self) -> None:
         with h0_client_and_server() as (quic_client, quic_server):
             h0_client = H0Connection(quic_client)
             h0_server = H0Connection(quic_server)
@@ -50,14 +56,14 @@ class H0ConnectionTest(TestCase):
             events = h0_transfer(quic_client, h0_server)
             self.assertEqual(len(events), 2)
 
-            self.assertTrue(isinstance(events[0], HeadersReceived))
+            assert isinstance(events[0], HeadersReceived)
             self.assertEqual(
                 events[0].headers, [(b":method", b"GET"), (b":path", b"/")]
             )
             self.assertEqual(events[0].stream_id, stream_id)
             self.assertEqual(events[0].stream_ended, False)
 
-            self.assertTrue(isinstance(events[1], DataReceived))
+            assert isinstance(events[1], DataReceived)
             self.assertEqual(events[1].data, b"")
             self.assertEqual(events[1].stream_id, stream_id)
             self.assertEqual(events[1].stream_ended, True)
@@ -80,17 +86,17 @@ class H0ConnectionTest(TestCase):
             events = h0_transfer(quic_server, h0_client)
             self.assertEqual(len(events), 2)
 
-            self.assertTrue(isinstance(events[0], HeadersReceived))
+            assert isinstance(events[0], HeadersReceived)
             self.assertEqual(events[0].headers, [])
             self.assertEqual(events[0].stream_id, stream_id)
             self.assertEqual(events[0].stream_ended, False)
 
-            self.assertTrue(isinstance(events[1], DataReceived))
+            assert isinstance(events[1], DataReceived)
             self.assertEqual(events[1].data, b"<html><body>hello</body></html>")
             self.assertEqual(events[1].stream_id, stream_id)
             self.assertEqual(events[1].stream_ended, True)
 
-    def test_headers_only(self):
+    def test_headers_only(self) -> None:
         with h0_client_and_server() as (quic_client, quic_server):
             h0_client = H0Connection(quic_client)
             h0_server = H0Connection(quic_server)
@@ -112,14 +118,14 @@ class H0ConnectionTest(TestCase):
             events = h0_transfer(quic_client, h0_server)
             self.assertEqual(len(events), 2)
 
-            self.assertTrue(isinstance(events[0], HeadersReceived))
+            assert isinstance(events[0], HeadersReceived)
             self.assertEqual(
                 events[0].headers, [(b":method", b"HEAD"), (b":path", b"/")]
             )
             self.assertEqual(events[0].stream_id, stream_id)
             self.assertEqual(events[0].stream_ended, False)
 
-            self.assertTrue(isinstance(events[1], DataReceived))
+            assert isinstance(events[1], DataReceived)
             self.assertEqual(events[1].data, b"")
             self.assertEqual(events[1].stream_id, stream_id)
             self.assertEqual(events[1].stream_ended, True)
@@ -138,17 +144,17 @@ class H0ConnectionTest(TestCase):
             events = h0_transfer(quic_server, h0_client)
             self.assertEqual(len(events), 2)
 
-            self.assertTrue(isinstance(events[0], HeadersReceived))
+            assert isinstance(events[0], HeadersReceived)
             self.assertEqual(events[0].headers, [])
             self.assertEqual(events[0].stream_id, stream_id)
             self.assertEqual(events[0].stream_ended, False)
 
-            self.assertTrue(isinstance(events[1], DataReceived))
+            assert isinstance(events[1], DataReceived)
             self.assertEqual(events[1].data, b"")
             self.assertEqual(events[1].stream_id, stream_id)
             self.assertEqual(events[1].stream_ended, True)
 
-    def test_fragmented_request(self):
+    def test_fragmented_request(self) -> None:
         with h0_client_and_server() as (quic_client, quic_server):
             h0_server = H0Connection(quic_server)
             stream_id = 0
@@ -176,7 +182,7 @@ class H0ConnectionTest(TestCase):
             )
             self.assertEqual(len(events), 2)
 
-            self.assertTrue(isinstance(events[0], HeadersReceived))
+            assert isinstance(events[0], HeadersReceived)
             self.assertEqual(
                 events[0].headers,
                 [(b":method", b"GET"), (b":path", b"/01234567890123456")],
@@ -184,7 +190,7 @@ class H0ConnectionTest(TestCase):
             self.assertEqual(events[0].stream_id, stream_id)
             self.assertEqual(events[0].stream_ended, False)
 
-            self.assertTrue(isinstance(events[1], DataReceived))
+            assert isinstance(events[1], DataReceived)
             self.assertEqual(events[1].data, b"")
             self.assertEqual(events[1].stream_id, stream_id)
             self.assertEqual(events[1].stream_ended, True)
