@@ -1,4 +1,3 @@
-import binascii
 import dataclasses
 import datetime
 import ssl
@@ -65,27 +64,27 @@ from .utils import (
 CERTIFICATE_DATA = load("tls_certificate.bin")[11:-2]
 CERTIFICATE_VERIFY_SIGNATURE = load("tls_certificate_verify.bin")[-384:]
 
-CLIENT_QUIC_TRANSPORT_PARAMETERS = binascii.unhexlify(
-    b"ff0000110031000500048010000000060004801000000007000480100000000"
-    b"4000481000000000100024258000800024064000a00010a"
+CLIENT_QUIC_TRANSPORT_PARAMETERS = bytes.fromhex(
+    "ff0000110031000500048010000000060004801000000007000480100000000"
+    "4000481000000000100024258000800024064000a00010a"
 )
 
-SERVER_QUIC_TRANSPORT_PARAMETERS = binascii.unhexlify(
-    b"ff00001104ff000011004500050004801000000006000480100000000700048"
-    b"010000000040004810000000001000242580002001000000000000000000000"
-    b"000000000000000800024064000a00010a"
+SERVER_QUIC_TRANSPORT_PARAMETERS = bytes.fromhex(
+    "ff00001104ff000011004500050004801000000006000480100000000700048"
+    "010000000040004810000000001000242580002001000000000000000000000"
+    "000000000000000800024064000a00010a"
 )
 
-SERVER_QUIC_TRANSPORT_PARAMETERS_2 = binascii.unhexlify(
-    b"0057000600048000ffff000500048000ffff00020010c5ac410fbdd4fe6e2c1"
-    b"42279f231e8e0000a000103000400048005fffa000b000119000100026710ff"
-    b"42000c5c067f27e39321c63e28e7c90003000247e40008000106"
+SERVER_QUIC_TRANSPORT_PARAMETERS_2 = bytes.fromhex(
+    "0057000600048000ffff000500048000ffff00020010c5ac410fbdd4fe6e2c1"
+    "42279f231e8e0000a000103000400048005fffa000b000119000100026710ff"
+    "42000c5c067f27e39321c63e28e7c90003000247e40008000106"
 )
 
-SERVER_QUIC_TRANSPORT_PARAMETERS_3 = binascii.unhexlify(
-    b"0054000200100dcb50a442513295b4679baf04cb5effff8a0009c8afe72a6397"
-    b"255407000600048000ffff0008000106000400048005fffa000500048000ffff"
-    b"0003000247e4000a000103000100026710000b000119"
+SERVER_QUIC_TRANSPORT_PARAMETERS_3 = bytes.fromhex(
+    "0054000200100dcb50a442513295b4679baf04cb5effff8a0009c8afe72a6397"
+    "255407000600048000ffff0008000106000400048005fffa000500048000ffff"
+    "0003000247e4000a000103000100026710000b000119"
 )
 
 
@@ -415,7 +414,7 @@ class ContextTest(TestCase):
             lambda x: x.replace(
                 certificate_data,
                 certificate_data.replace(
-                    binascii.unhexlify("0203010001"), binascii.unhexlify("0203000001")
+                    bytes.fromhex("0203010001"), bytes.fromhex("0203000001")
                 ),
             ),
             tls.AlertBadCertificate("Certificate has an invalid key"),
@@ -446,8 +445,8 @@ class ContextTest(TestCase):
             lambda x: x.replace(
                 certificate_data,
                 certificate_data.replace(
-                    binascii.unhexlify("06092a864886f70d010101"),
-                    binascii.unhexlify("06092a864886f70d01017f"),
+                    bytes.fromhex("06092a864886f70d010101"),
+                    bytes.fromhex("06092a864886f70d01017f"),
                 ),
             ),
             tls.AlertUnsupportedCertificate("Certificate has an unsupported key type"),
@@ -1262,13 +1261,13 @@ class TlsTest(TestCase):
 
         self.assertEqual(
             hello.random,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "18b2b23bf3e44b5d52ccfe7aecbc5ff14eadc3d349fabf804d71f165ae76e7d5"
             ),
         )
         self.assertEqual(
             hello.legacy_session_id,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
             ),
         )
@@ -1289,7 +1288,7 @@ class TlsTest(TestCase):
             [
                 (
                     tls.Group.SECP256R1,
-                    binascii.unhexlify(
+                    bytes.fromhex(
                         "047bfea344467535054263b75def60cffa82405a211b68d1eb8d1d944e67aef8"
                         "93c7665a5473d032cfaf22a73da28eb4aacae0017ed12557b5791f98a1e84f15"
                         "b0"
@@ -1338,7 +1337,7 @@ class TlsTest(TestCase):
 
         self.assertEqual(
             hello.random,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "ed575c6fbd599c4dfaabd003dca6e860ccdb0e1782c1af02e57bf27cb6479b76"
             ),
         )
@@ -1362,7 +1361,7 @@ class TlsTest(TestCase):
             [
                 (
                     tls.Group.SECP256R1,
-                    binascii.unhexlify(
+                    bytes.fromhex(
                         "048842315c437bb0ce2929c816fee4e942ec5cb6db6a6b9bf622680188ebb0d4"
                         "b652e69033f71686aa01cbc79155866e264c9f33f45aa16b0dfa10a222e3a669"
                         "22"
@@ -1419,7 +1418,7 @@ class TlsTest(TestCase):
             tls.OfferedPsks(
                 identities=[
                     (
-                        binascii.unhexlify(
+                        bytes.fromhex(
                             "fab3dc7d79f35ea53e9adf21150e601591a750b80cde0cd167fef6e0cdbc032a"
                             "c4161fc5c5b66679de49524bd5624c50d71ba3e650780a4bfe402d6a06a00525"
                             "0b5dc52085233b69d0dd13924cc5c713a396784ecafc59f5ea73c1585d79621b"
@@ -1429,7 +1428,7 @@ class TlsTest(TestCase):
                     )
                 ],
                 binders=[
-                    binascii.unhexlify(
+                    bytes.fromhex(
                         "1788ad43fdff37cfc628f24b6ce7c8c76180705380da17da32811b5bae4e78"
                         "d7aaaf65a9b713872f2bb28818ca1a6b01"
                     )
@@ -1459,10 +1458,10 @@ class TlsTest(TestCase):
 
         # Write a ClientHello with an extension *after* PSK.
         hello = ClientHello(
-            random=binascii.unhexlify(
+            random=bytes.fromhex(
                 "18b2b23bf3e44b5d52ccfe7aecbc5ff14eadc3d349fabf804d71f165ae76e7d5"
             ),
-            legacy_session_id=binascii.unhexlify(
+            legacy_session_id=bytes.fromhex(
                 "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
             ),
             cipher_suites=[tls.CipherSuite.AES_256_GCM_SHA384],
@@ -1470,7 +1469,7 @@ class TlsTest(TestCase):
             key_share=[
                 (
                     tls.Group.SECP256R1,
-                    binascii.unhexlify(
+                    bytes.fromhex(
                         "047bfea344467535054263b75def60cffa82405a211b68d1eb8d1d944e67aef8"
                         "93c7665a5473d032cfaf22a73da28eb4aacae0017ed12557b5791f98a1e84f15"
                         "b0"
@@ -1507,13 +1506,13 @@ class TlsTest(TestCase):
 
         self.assertEqual(
             hello.random,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "987d8934140b0a42cc5545071f3f9f7f61963d7b6404eb674c8dbe513604346b"
             ),
         )
         self.assertEqual(
             hello.legacy_session_id,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "26b19bdd30dbf751015a3a16e13bd59002dfe420b799d2a5cd5e11b8fa7bcb66"
             ),
         )
@@ -1534,7 +1533,7 @@ class TlsTest(TestCase):
             [
                 (
                     tls.Group.SECP256R1,
-                    binascii.unhexlify(
+                    bytes.fromhex(
                         "04b62d70f907c814cd65d0f73b8b991f06b70c77153f548410a191d2b19764a2"
                         "ecc06065a480efa9e1f10c8da6e737d5bfc04be3f773e20a0c997f51b5621280"
                         "40"
@@ -1589,10 +1588,10 @@ class TlsTest(TestCase):
 
     def test_push_client_hello(self) -> None:
         hello = ClientHello(
-            random=binascii.unhexlify(
+            random=bytes.fromhex(
                 "18b2b23bf3e44b5d52ccfe7aecbc5ff14eadc3d349fabf804d71f165ae76e7d5"
             ),
-            legacy_session_id=binascii.unhexlify(
+            legacy_session_id=bytes.fromhex(
                 "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
             ),
             cipher_suites=[
@@ -1604,7 +1603,7 @@ class TlsTest(TestCase):
             key_share=[
                 (
                     tls.Group.SECP256R1,
-                    binascii.unhexlify(
+                    bytes.fromhex(
                         "047bfea344467535054263b75def60cffa82405a211b68d1eb8d1d944e67aef8"
                         "93c7665a5473d032cfaf22a73da28eb4aacae0017ed12557b5791f98a1e84f15"
                         "b0"
@@ -1644,13 +1643,13 @@ class TlsTest(TestCase):
 
         self.assertEqual(
             hello.random,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "ada85271d19680c615ea7336519e3fdf6f1e26f3b1075ee1de96ffa8884e8280"
             ),
         )
         self.assertEqual(
             hello.legacy_session_id,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
             ),
         )
@@ -1660,7 +1659,7 @@ class TlsTest(TestCase):
             hello.key_share,
             (
                 tls.Group.SECP256R1,
-                binascii.unhexlify(
+                bytes.fromhex(
                     "048b27d0282242d84b7fcc02a9c4f13eca0329e3c7029aa34a33794e6e7ba189"
                     "5cca1c503bf0378ac6937c354912116ff3251026bca1958d7f387316c83ae6cf"
                     "b2"
@@ -1677,13 +1676,13 @@ class TlsTest(TestCase):
 
         self.assertEqual(
             hello.random,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "ccbaaf04fc1bd5143b2cc6b97520cf37d91470dbfc8127131a7bf0f941e3a137"
             ),
         )
         self.assertEqual(
             hello.legacy_session_id,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "9483e7e895d0f4cec17086b0849601c0632662cd764e828f2f892f4c4b7771b0"
             ),
         )
@@ -1693,7 +1692,7 @@ class TlsTest(TestCase):
             hello.key_share,
             (
                 tls.Group.SECP256R1,
-                binascii.unhexlify(
+                bytes.fromhex(
                     "0485d7cecbebfc548fc657bf51b8e8da842a4056b164a27f7702ca318c16e488"
                     "18b6409593b15c6649d6f459387a53128b164178adc840179aad01d36ce95d62"
                     "76"
@@ -1722,17 +1721,17 @@ class TlsTest(TestCase):
         self.assertEqual(
             hello,
             ServerHello(
-                random=binascii.unhexlify(
+                random=bytes.fromhex(
                     "ada85271d19680c615ea7336519e3fdf6f1e26f3b1075ee1de96ffa8884e8280"
                 ),
-                legacy_session_id=binascii.unhexlify(
+                legacy_session_id=bytes.fromhex(
                     "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
                 ),
                 cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
                 compression_method=tls.CompressionMethod.NULL,
                 key_share=(
                     tls.Group.SECP256R1,
-                    binascii.unhexlify(
+                    bytes.fromhex(
                         "048b27d0282242d84b7fcc02a9c4f13eca0329e3c7029aa34a33794e6e7ba189"
                         "5cca1c503bf0378ac6937c354912116ff3251026bca1958d7f387316c83ae6cf"
                         "b2"
@@ -1750,17 +1749,17 @@ class TlsTest(TestCase):
 
     def test_push_server_hello(self) -> None:
         hello = ServerHello(
-            random=binascii.unhexlify(
+            random=bytes.fromhex(
                 "ada85271d19680c615ea7336519e3fdf6f1e26f3b1075ee1de96ffa8884e8280"
             ),
-            legacy_session_id=binascii.unhexlify(
+            legacy_session_id=bytes.fromhex(
                 "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
             ),
             cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
             compression_method=tls.CompressionMethod.NULL,
             key_share=(
                 tls.Group.SECP256R1,
-                binascii.unhexlify(
+                bytes.fromhex(
                     "048b27d0282242d84b7fcc02a9c4f13eca0329e3c7029aa34a33794e6e7ba189"
                     "5cca1c503bf0378ac6937c354912116ff3251026bca1958d7f387316c83ae6cf"
                     "b2"
@@ -1785,7 +1784,7 @@ class TlsTest(TestCase):
                 ticket_lifetime=86400,
                 ticket_age_add=3303452425,
                 ticket_nonce=b"",
-                ticket=binascii.unhexlify(
+                ticket=bytes.fromhex(
                     "dbe6f1a77a78c0426bfa607cd0d02b350247d90618704709596beda7e962cc81"
                 ),
                 max_early_data_size=0xFFFFFFFF,
@@ -1809,7 +1808,7 @@ class TlsTest(TestCase):
                 ticket_lifetime=86400,
                 ticket_age_add=3303452425,
                 ticket_nonce=b"",
-                ticket=binascii.unhexlify(
+                ticket=bytes.fromhex(
                     "dbe6f1a77a78c0426bfa607cd0d02b350247d90618704709596beda7e962cc81"
                 ),
                 max_early_data_size=0xFFFFFFFF,
@@ -1906,7 +1905,7 @@ class TlsTest(TestCase):
             ("two protocols", "0800000e000c001000080006026833026871"),
         ]:
             with self.subTest(desc):
-                buf = Buffer(data=binascii.unhexlify(data))
+                buf = Buffer(data=bytes.fromhex(data))
                 with self.assertRaises(tls.AlertDecodeError) as cm:
                     pull_encrypted_extensions(buf)
                 self.assertEqual(
@@ -1989,14 +1988,14 @@ class TlsTest(TestCase):
 
         self.assertEqual(
             finished.verify_data,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "f157923234ff9a4921aadb2e0ec7b1a30fce73fb9ec0c4276f9af268f408ec68"
             ),
         )
 
     def test_push_finished(self) -> None:
         finished = Finished(
-            verify_data=binascii.unhexlify(
+            verify_data=bytes.fromhex(
                 "f157923234ff9a4921aadb2e0ec7b1a30fce73fb9ec0c4276f9af268f408ec68"
             )
         )
@@ -2233,7 +2232,7 @@ class VerifyCertificateTest(TestCase):
         """
 
         # the buffer is equivalent to "H2", b'\xff\xff', "é" in UTF-8, "H3"
-        buf = Buffer(data=binascii.unhexlify("000c02483202ffff02c3a9024833"))
+        buf = Buffer(data=bytes.fromhex("000c02483202ffff02c3a9024833"))
 
         self.assertEqual(
             tls.pull_list(buf, 2, partial(tls.pull_alpn_protocol, buf)), ["H2", "H3"]

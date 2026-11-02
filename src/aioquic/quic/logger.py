@@ -1,4 +1,3 @@
-import binascii
 import json
 import os
 import time
@@ -26,7 +25,7 @@ QLOG_VERSION = "0.3"
 
 
 def hexdump(data: bytes) -> str:
-    return binascii.hexlify(data).decode("ascii")
+    return data.hex()
 
 
 class QuicLoggerTrace:

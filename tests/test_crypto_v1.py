@@ -1,4 +1,3 @@
-import binascii
 from unittest import TestCase, skipIf
 
 from aioquic._crypto import AEAD, HeaderProtection
@@ -20,18 +19,16 @@ PROTOCOL_VERSION = QuicProtocolVersion.VERSION_1
 
 # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.5
 CHACHA20_CLIENT_PACKET_NUMBER = 654360564
-CHACHA20_CLIENT_PLAIN_HEADER = binascii.unhexlify("4200bff4")
-CHACHA20_CLIENT_PLAIN_PAYLOAD = binascii.unhexlify("01")
-CHACHA20_CLIENT_ENCRYPTED_PACKET = binascii.unhexlify(
+CHACHA20_CLIENT_PLAIN_HEADER = bytes.fromhex("4200bff4")
+CHACHA20_CLIENT_PLAIN_PAYLOAD = bytes.fromhex("01")
+CHACHA20_CLIENT_ENCRYPTED_PACKET = bytes.fromhex(
     "4cfe4189655e5cd55c41f69080575d7999c25a5bfb"
 )
 
 # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.2
 LONG_CLIENT_PACKET_NUMBER = 2
-LONG_CLIENT_PLAIN_HEADER = binascii.unhexlify(
-    "c300000001088394c8f03e5157080000449e00000002"
-)
-LONG_CLIENT_PLAIN_PAYLOAD = binascii.unhexlify(
+LONG_CLIENT_PLAIN_HEADER = bytes.fromhex("c300000001088394c8f03e5157080000449e00000002")
+LONG_CLIENT_PLAIN_PAYLOAD = bytes.fromhex(
     "060040f1010000ed0303ebf8fa56f12939b9584a3896472ec40bb863cfd3e868"
     "04fe3a47f06a2b69484c00000413011302010000c000000010000e00000b6578"
     "616d706c652e636f6dff01000100000a00080006001d00170018001000070005"
@@ -41,7 +38,7 @@ LONG_CLIENT_PLAIN_PAYLOAD = binascii.unhexlify(
     "3900320408ffffffffffffffff05048000ffff07048000ffff08011001048000"
     "75300901100f088394c8f03e51570806048000ffff"
 ) + bytes(917)
-LONG_CLIENT_ENCRYPTED_PACKET = binascii.unhexlify(
+LONG_CLIENT_ENCRYPTED_PACKET = bytes.fromhex(
     "c000000001088394c8f03e5157080000449e7b9aec34d1b1c98dd7689fb8ec11"
     "d242b123dc9bd8bab936b47d92ec356c0bab7df5976d27cd449f63300099f399"
     "1c260ec4c60d17b31f8429157bb35a1282a643a8d2262cad67500cadb8e7378c"
@@ -84,16 +81,14 @@ LONG_CLIENT_ENCRYPTED_PACKET = binascii.unhexlify(
 
 # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.3
 LONG_SERVER_PACKET_NUMBER = 1
-LONG_SERVER_PLAIN_HEADER = binascii.unhexlify(
-    "c1000000010008f067a5502a4262b50040750001"
-)
-LONG_SERVER_PLAIN_PAYLOAD = binascii.unhexlify(
+LONG_SERVER_PLAIN_HEADER = bytes.fromhex("c1000000010008f067a5502a4262b50040750001")
+LONG_SERVER_PLAIN_PAYLOAD = bytes.fromhex(
     "02000000000600405a020000560303eefce7f7b37ba1d1632e96677825ddf739"
     "88cfc79825df566dc5430b9a045a1200130100002e00330024001d00209d3c94"
     "0d89690b84d08a60993c144eca684d1081287c834d5311bcf32bb9da1a002b00"
     "020304"
 )
-LONG_SERVER_ENCRYPTED_PACKET = binascii.unhexlify(
+LONG_SERVER_ENCRYPTED_PACKET = bytes.fromhex(
     "cf000000010008f067a5502a4262b5004075c0d95a482cd0991cd25b0aac406a"
     "5816b6394100f37a1c69797554780bb38cc5a99f5ede4cf73c3ec2493a1839b3"
     "dbcba3f6ea46c5b7684df3548e7ddeb9c3bf9c73cc3f3bded74b562bfb19fb84"
@@ -102,12 +97,12 @@ LONG_SERVER_ENCRYPTED_PACKET = binascii.unhexlify(
 )
 
 SHORT_SERVER_PACKET_NUMBER = 3
-SHORT_SERVER_PLAIN_HEADER = binascii.unhexlify("41b01fd24a586a9cf30003")
-SHORT_SERVER_PLAIN_PAYLOAD = binascii.unhexlify(
+SHORT_SERVER_PLAIN_HEADER = bytes.fromhex("41b01fd24a586a9cf30003")
+SHORT_SERVER_PLAIN_PAYLOAD = bytes.fromhex(
     "06003904000035000151805a4bebf5000020b098c8dc4183e4c182572e10ac3e"
     "2b88897e0524c8461847548bd2dffa2c0ae60008002a0004ffffffff"
 )
-SHORT_SERVER_ENCRYPTED_PACKET = binascii.unhexlify(
+SHORT_SERVER_ENCRYPTED_PACKET = bytes.fromhex(
     "5db01fd24a586a9cf33dec094aaec6d6b4b7a5e15f5a3f05d06cf1ad0355c19d"
     "cce0807eecf7bf1c844a66e1ecd1f74b2a2d69bfd25d217833edd973246597bd"
     "5107ea15cb1e210045396afa602fe23432f4ab24ce251b"
@@ -124,7 +119,7 @@ class CryptoTest(TestCase):
     def create_crypto(self, is_client: bool) -> CryptoPair:
         pair = CryptoPair()
         pair.setup_initial(
-            cid=binascii.unhexlify("8394c8f03e515708"),
+            cid=bytes.fromhex("8394c8f03e515708"),
             is_client=is_client,
             version=PROTOCOL_VERSION,
         )
@@ -144,7 +139,7 @@ class CryptoTest(TestCase):
         # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.1
 
         # client
-        secret = binascii.unhexlify(
+        secret = bytes.fromhex(
             "c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea"
         )
         key, iv, hp = derive_key_iv_hp(
@@ -152,12 +147,12 @@ class CryptoTest(TestCase):
             secret=secret,
             version=PROTOCOL_VERSION,
         )
-        self.assertEqual(key, binascii.unhexlify("1f369613dd76d5467730efcbe3b1a22d"))
-        self.assertEqual(iv, binascii.unhexlify("fa044b2f42a3fd3b46fb255c"))
-        self.assertEqual(hp, binascii.unhexlify("9f50449e04a0e810283a1e9933adedd2"))
+        self.assertEqual(key, bytes.fromhex("1f369613dd76d5467730efcbe3b1a22d"))
+        self.assertEqual(iv, bytes.fromhex("fa044b2f42a3fd3b46fb255c"))
+        self.assertEqual(hp, bytes.fromhex("9f50449e04a0e810283a1e9933adedd2"))
 
         # server
-        secret = binascii.unhexlify(
+        secret = bytes.fromhex(
             "3c199828fd139efd216c155ad844cc81fb82fa8d7446fa7d78be803acdda951b"
         )
         key, iv, hp = derive_key_iv_hp(
@@ -165,16 +160,16 @@ class CryptoTest(TestCase):
             secret=secret,
             version=PROTOCOL_VERSION,
         )
-        self.assertEqual(key, binascii.unhexlify("cf3a5331653c364c88f0f379b6067e37"))
-        self.assertEqual(iv, binascii.unhexlify("0ac1493ca1905853b0bba03e"))
-        self.assertEqual(hp, binascii.unhexlify("c206b8d9b9f0f37644430b490eeaa314"))
+        self.assertEqual(key, bytes.fromhex("cf3a5331653c364c88f0f379b6067e37"))
+        self.assertEqual(iv, bytes.fromhex("0ac1493ca1905853b0bba03e"))
+        self.assertEqual(hp, bytes.fromhex("c206b8d9b9f0f37644430b490eeaa314"))
 
     @skipIf("chacha20" in SKIP_TESTS, "Skipping chacha20 tests")
     def test_derive_key_iv_hp_chacha20(self) -> None:
         # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.5
 
         # server
-        secret = binascii.unhexlify(
+        secret = bytes.fromhex(
             "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
         )
         key, iv, hp = derive_key_iv_hp(
@@ -184,14 +179,14 @@ class CryptoTest(TestCase):
         )
         self.assertEqual(
             key,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "c6d98ff3441c3fe1b2182094f69caa2ed4b716b65488960a7a984979fb23e1c8"
             ),
         )
-        self.assertEqual(iv, binascii.unhexlify("e0459b3474bdd0e44a41c144"))
+        self.assertEqual(iv, bytes.fromhex("e0459b3474bdd0e44a41c144"))
         self.assertEqual(
             hp,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "25a282b9e82f06f21f488917a4fc8f1b73573685608597d0efcb076b0ab7a7a4"
             ),
         )
@@ -201,7 +196,7 @@ class CryptoTest(TestCase):
         pair = CryptoPair()
         pair.recv.setup(
             cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
-            secret=binascii.unhexlify(
+            secret=bytes.fromhex(
                 "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
             ),
             version=PROTOCOL_VERSION,
@@ -219,7 +214,7 @@ class CryptoTest(TestCase):
         pair = CryptoPair()
         pair.recv.setup(
             cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
-            secret=binascii.unhexlify(
+            secret=bytes.fromhex(
                 "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
             ),
             version=PROTOCOL_VERSION,
@@ -261,7 +256,7 @@ class CryptoTest(TestCase):
         pair = CryptoPair()
         pair.recv.setup(
             cipher_suite=INITIAL_CIPHER_SUITE,
-            secret=binascii.unhexlify(
+            secret=bytes.fromhex(
                 "310281977cb8c1c1c1212d784b2d29e5a6489e23de848d370a5a2f9537f3a100"
             ),
             version=PROTOCOL_VERSION,
@@ -278,7 +273,7 @@ class CryptoTest(TestCase):
         pair = CryptoPair()
         pair.recv.setup(
             cipher_suite=INITIAL_CIPHER_SUITE,
-            secret=binascii.unhexlify(
+            secret=bytes.fromhex(
                 "310281977cb8c1c1c1212d784b2d29e5a6489e23de848d370a5a2f9537f3a100"
             ),
             version=PROTOCOL_VERSION,
@@ -301,7 +296,7 @@ class CryptoTest(TestCase):
         pair = CryptoPair()
         pair.send.setup(
             cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
-            secret=binascii.unhexlify(
+            secret=bytes.fromhex(
                 "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
             ),
             version=PROTOCOL_VERSION,
@@ -338,7 +333,7 @@ class CryptoTest(TestCase):
         pair = CryptoPair()
         pair.send.setup(
             cipher_suite=INITIAL_CIPHER_SUITE,
-            secret=binascii.unhexlify(
+            secret=bytes.fromhex(
                 "310281977cb8c1c1c1212d784b2d29e5a6489e23de848d370a5a2f9537f3a100"
             ),
             version=PROTOCOL_VERSION,
@@ -363,7 +358,7 @@ class CryptoTest(TestCase):
         def create_packet(key_phase: int, packet_number: int) -> tuple[bytes, bytes]:
             buf = Buffer(capacity=100)
             buf.push_uint8(PACKET_FIXED_BIT | key_phase << 2 | 1)
-            buf.push_bytes(binascii.unhexlify("8394c8f03e515708"))
+            buf.push_bytes(bytes.fromhex("8394c8f03e515708"))
             buf.push_uint16(packet_number)
             return buf.data, b"\x00\x01\x02\x03"
 
@@ -422,7 +417,7 @@ class CryptoTest(TestCase):
         crypto = CryptoContext()
         crypto.setup(
             cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
-            secret=binascii.unhexlify(
+            secret=bytes.fromhex(
                 "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
             ),
             version=PROTOCOL_VERSION,
@@ -432,7 +427,7 @@ class CryptoTest(TestCase):
         self.assertEqual(next_crypto.key_phase, 1)
         self.assertEqual(
             next_crypto.secret,
-            binascii.unhexlify(
+            bytes.fromhex(
                 "1223504755036d556342ee9361d253421a826c9ecdf3c7148684b36b714881f9"
             ),
         )
