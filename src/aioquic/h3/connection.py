@@ -237,9 +237,9 @@ def parse_settings(data: bytes) -> dict[int, int]:
         except BufferReadError:
             raise FrameError("Could not parse SETTINGS frame")
         if setting in RESERVED_SETTINGS:
-            raise SettingsError("Setting identifier 0x%x is reserved" % setting)
+            raise SettingsError(f"Setting identifier 0x{setting:x} is reserved")
         if setting in settings:
-            raise SettingsError("Setting identifier 0x%x is included twice" % setting)
+            raise SettingsError(f"Setting identifier 0x{setting:x} is included twice")
         settings[setting] = value
     return dict(settings)
 
@@ -257,11 +257,11 @@ def validate_header_name(key: bytes) -> None:
     """
     for i, c in enumerate(key):
         if c <= 0x20 or (c >= 0x41 and c <= 0x5A) or c >= 0x7F:
-            raise MessageError("Header %r contains invalid characters" % key)
+            raise MessageError(f"Header {key!r} contains invalid characters")
         if c == COLON and i != 0:
             # Colon not at start, definitely bad.  Keys starting with a colon
             # will be checked in pseudo-header validation code.
-            raise MessageError("Header %r contains a non-initial colon" % key)
+            raise MessageError(f"Header {key!r} contains a non-initial colon")
 
 
 def validate_header_value(key: bytes, value: bytes) -> None:
@@ -270,15 +270,15 @@ def validate_header_value(key: bytes, value: bytes) -> None:
     """
     for c in value:
         if c == NUL or c == LF or c == CR:
-            raise MessageError("Header %r value has forbidden characters" % key)
+            raise MessageError(f"Header {key!r} value has forbidden characters")
     if len(value) > 0:
         first = value[0]
         if first in WHITESPACE:
-            raise MessageError("Header %r value starts with whitespace" % key)
+            raise MessageError(f"Header {key!r} value starts with whitespace")
         if len(value) > 1:
             last = value[-1]
             if last in WHITESPACE:
-                raise MessageError("Header %r value ends with whitespace" % key)
+                raise MessageError(f"Header {key!r} value ends with whitespace")
 
 
 def validate_headers(
@@ -302,12 +302,12 @@ def validate_headers(
             # pseudo-headers
             if after_pseudo_headers:
                 raise MessageError(
-                    "Pseudo-header %r is not allowed after regular headers" % key
+                    f"Pseudo-header {key!r} is not allowed after regular headers"
                 )
             if key not in allowed_pseudo_headers:
-                raise MessageError("Pseudo-header %r is not valid" % key)
+                raise MessageError(f"Pseudo-header {key!r} is not valid")
             if key in seen_pseudo_headers:
-                raise MessageError("Pseudo-header %r is included twice" % key)
+                raise MessageError(f"Pseudo-header {key!r} is included twice")
             seen_pseudo_headers.add(key)
 
             # store value
@@ -340,7 +340,7 @@ def validate_headers(
     # check required pseudo-headers are present
     missing = required_pseudo_headers.difference(seen_pseudo_headers)
     if missing:
-        raise MessageError("Pseudo-headers %s are missing" % sorted(missing))
+        raise MessageError(f"Pseudo-headers {sorted(missing)} are missing")
 
     if scheme in (b"http", b"https"):
         if not authority:

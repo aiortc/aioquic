@@ -2248,7 +2248,7 @@ class H3ConnectionTest(TestCase):
                         (b":method", b"GET"),
                         (b":scheme", b"https"),
                         (b":authority", b"localhost"),
-                        (b":path", "/{}.css".format(i).encode("ascii")),
+                        (b":path", f"/{i}.css".encode("ascii")),
                     ],
                 )
 

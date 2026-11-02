@@ -195,13 +195,13 @@ def pull_quic_header(buf: Buffer, host_cid_length: int | None = None) -> QuicHea
         destination_cid_length = buf.pull_uint8()
         if destination_cid_length > CONNECTION_ID_MAX_SIZE:
             raise ValueError(
-                "Destination CID is too long (%d bytes)" % destination_cid_length
+                f"Destination CID is too long ({destination_cid_length} bytes)"
             )
         destination_cid = buf.pull_bytes(destination_cid_length)
 
         source_cid_length = buf.pull_uint8()
         if source_cid_length > CONNECTION_ID_MAX_SIZE:
-            raise ValueError("Source CID is too long (%d bytes)" % source_cid_length)
+            raise ValueError(f"Source CID is too long ({source_cid_length} bytes)")
         source_cid = buf.pull_bytes(source_cid_length)
 
         if version == QuicProtocolVersion.NEGOTIATION:

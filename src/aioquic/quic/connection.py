@@ -170,15 +170,15 @@ class QuicConnectionError(Exception):
         self.reason_phrase = reason_phrase
 
     def __str__(self) -> str:
-        s = "Error: %d, reason: %s" % (self.error_code, self.reason_phrase)
+        s = f"Error: {self.error_code:d}, reason: {self.reason_phrase}"
         if self.frame_type is not None:
-            s += ", frame_type: %s" % self.frame_type
+            s += f", frame_type: {self.frame_type}"
         return s
 
 
 class QuicConnectionAdapter(logging.LoggerAdapter):
     def process(self, msg: str, kwargs: Any) -> tuple[str, Any]:
-        return "[%s] %s" % (self.extra["id"], msg), kwargs
+        return f"[{self.extra['id']}] {msg}", kwargs
 
 
 @dataclass
@@ -1790,8 +1790,9 @@ class QuicConnection:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.PROTOCOL_VIOLATION,
                 frame_type=QuicFrameType.CRYPTO,
-                reason_phrase="Invalid max_early_data value %s"
-                % session_ticket.max_early_data_size,
+                reason_phrase=(
+                    f"Invalid max_early_data value {session_ticket.max_early_data_size}"
+                ),
             )
         self._session_ticket_handler(session_ticket)
 
@@ -1850,8 +1851,8 @@ class QuicConnection:
         def create_crypto_pair(epoch: tls.Epoch) -> CryptoPair:
             epoch_name = ["initial", "0rtt", "handshake", "1rtt"][epoch.value]
             secret_names = [
-                "server_%s_secret" % epoch_name,
-                "client_%s_secret" % epoch_name,
+                f"server_{epoch_name}_secret",
+                f"client_{epoch_name}_secret",
             ]
             recv_secret_name = secret_names[not self._is_client]
             send_secret_name = secret_names[self._is_client]
@@ -3002,7 +3003,7 @@ class QuicConnection:
             self._peer_token = header.token
             self._retry_count += 1
             self._retry_source_connection_id = header.source_cid
-            self._logger.info("Retrying with token (%d bytes)" % len(header.token))
+            self._logger.info("Retrying with token (%d bytes)", len(header.token))
             self._connect(now=now)
         else:
             # Unexpected or invalid retry packet.
@@ -3188,7 +3189,7 @@ class QuicConnection:
                     raise QuicConnectionError(
                         error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
                         frame_type=QuicFrameType.CRYPTO,
-                        reason_phrase="%s is not allowed for clients" % attr,
+                        reason_phrase=f"{attr} is not allowed for clients",
                     )
 
         if not from_session_ticket:
@@ -3561,7 +3562,7 @@ class QuicConnection:
             label_row = self._is_client == (direction == tls.Direction.DECRYPT)
             label = SECRETS_LABELS[label_row][epoch.value]
             secrets_log_file.write(
-                "%s %s %s\n" % (label, self.tls.client_random.hex(), secret.hex())
+                f"{label} {self.tls.client_random.hex()} {secret.hex()}\n"
             )
             secrets_log_file.flush()
 
@@ -4101,7 +4102,7 @@ class QuicConnection:
         )
         self._logger.debug(
             "Sending PING%s in packet %d",
-            " (%s)" % comment if comment else "",
+            f" ({comment})" if comment else "",
             builder.packet_number,
         )
 

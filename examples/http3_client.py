@@ -304,8 +304,12 @@ async def perform_http_request(
         if isinstance(http_event, DataReceived):
             octets += len(http_event.data)
     logger.info(
-        "Response received for %s %s : %d bytes in %.1f s (%.3f Mbps)"
-        % (method, urlparse(url).path, octets, elapsed, octets * 8 / elapsed / 1000000)
+        "Response received for %s %s : %d bytes in %.1f s (%.3f Mbps)",
+        method,
+        urlparse(url).path,
+        octets,
+        elapsed,
+        octets * 8 / elapsed / 1000000,
     )
 
     # output response
@@ -412,7 +416,7 @@ async def main(
 
         # reconstruct url with new hostname and port
         _p = _p._replace(scheme=_scheme)
-        _p = _p._replace(netloc="{}:{}".format(_host, _port))
+        _p = _p._replace(netloc=f"{_host}:{_port}")
         _p = urlparse(_p.geturl())
         urls[i] = _p.geturl()
 
@@ -433,7 +437,7 @@ async def main(
 
             # send some messages and receive reply
             for i in range(2):
-                message = "Hello {}, WebSocket!".format(i)
+                message = f"Hello {i}, WebSocket!"
                 print("> " + message)
                 await ws.send(message)
 
@@ -516,12 +520,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-data",
         type=int,
-        help="connection-wide flow control limit (default: %d)" % defaults.max_data,
+        help=f"connection-wide flow control limit (default: {defaults.max_data})",
     )
     parser.add_argument(
         "--max-stream-data",
         type=int,
-        help="per-stream flow control limit (default: %d)" % defaults.max_stream_data,
+        help=f"per-stream flow control limit (default: {defaults.max_stream_data})",
     )
     parser.add_argument(
         "--negotiate-v2",
@@ -584,7 +588,7 @@ if __name__ == "__main__":
     )
 
     if args.output_dir is not None and not os.path.isdir(args.output_dir):
-        raise Exception("%s is not a directory" % args.output_dir)
+        raise Exception(f"{args.output_dir} is not a directory")
 
     # prepare configuration
     configuration = QuicConfiguration(
