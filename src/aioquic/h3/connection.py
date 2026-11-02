@@ -245,7 +245,7 @@ def parse_settings(data: bytes) -> dict[int, int]:
     return dict(settings)
 
 
-def stream_is_request_response(stream_id: int):
+def stream_is_request_response(stream_id: int) -> bool:
     """
     Returns True if the stream is a client-initiated bidirectional stream.
     """
@@ -265,7 +265,7 @@ def validate_header_name(key: bytes) -> None:
             raise MessageError("Header %r contains a non-initial colon" % key)
 
 
-def validate_header_value(key: bytes, value: bytes):
+def validate_header_value(key: bytes, value: bytes) -> None:
     """
     Validate a header value as specified by RFC 9113 section 8.2.1.
     """
@@ -831,7 +831,7 @@ class H3Connection:
                 raise IdError("MAX_PUSH_ID reduced the maximum push ID")
             self._max_push_id = max_push_id
 
-    def _check_content_length(self, stream: H3Stream):
+    def _check_content_length(self, stream: H3Stream) -> None:
         if (
             stream.expected_content_length is not None
             and stream.content_length != stream.expected_content_length
