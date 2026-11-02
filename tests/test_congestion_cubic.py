@@ -209,7 +209,7 @@ class CubicCongestionControlTest(TestCase):
         cubic = CubicCongestionControl(1440)
         cubic._W_max = 25000  # set the target number of bytes to 25000
         cubic._cwnd_epoch = 2880  # a cwnd of 1440 bytes when we had congestion
-        cubic._starting_conges2ion_avoidance = False
+        cubic._starting_congestion_avoidance = False
         cubic._first_slow_start = False
         cubic.ssthresh = 2880
         cubic._t_epoch = 5
@@ -357,7 +357,7 @@ class CubicCongestionControlTest(TestCase):
         cubic = CubicCongestionControl(1440)
         cubic._W_max = 25000  # set the target number of bytes to 25000
         cubic._cwnd_epoch = 2880  # a cwnd of 1440 bytes when we had congestion
-        cubic._starting_conges2ion_avoidance = False
+        cubic._starting_congestion_avoidance = False
         cubic._first_slow_start = False
         cubic.ssthresh = 2880
         cubic._t_epoch = 5

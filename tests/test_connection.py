@@ -5534,7 +5534,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
     def test_parse_transport_parameters_with_bad_initial_source_connection_id(self):
         client = create_standalone_client(self)
-        client._initial_source_connection_id = binascii.unhexlify("0011223344556677")
+        client._remote_initial_source_connection_id = binascii.unhexlify(
+            "0011223344556677"
+        )
 
         data = encode_transport_parameters(
             QuicTransportParameters(
@@ -6126,7 +6128,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertLessEqual(client._loss.congestion_window, 13540)
 
             # artificially raise received data counter
-            client._local_max_data_used = client._local_max_data
+            client._local_max_data.used = client._local_max_data.value
             self.assertEqual(server._remote_max_data, 1048576)
 
             # artificially raise bytes in flight
@@ -6134,6 +6136,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
             # MAX_DATA is not sent due to congestion control
             self.assertEqual(drop(client), 0)
+            self.assertEqual(client._local_max_data.sent, 1048576)
+            self.assertEqual(client._local_max_data.value, 2097152)
+
+            # MAX_DATA is sent once congestion control allows it
+            client._loss._cc.bytes_in_flight = 0
+            roundtrip_until_done(client, server)
+            self.assertEqual(client._local_max_data.sent, 2097152)
+            self.assertEqual(server._remote_max_data, 2097152)
 
     def test_send_max_data_retransmit(self):
         with client_and_server() as (client, server):
