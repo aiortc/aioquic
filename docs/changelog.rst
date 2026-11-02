@@ -1,6 +1,18 @@
 Changelog
 =========
 
+1.7.2
+-----
+
+* Fix data written to a stream returned by
+  :meth:`~aioquic.asyncio.QuicConnectionProtocol.create_stream` being
+  truncated when it was a :class:`memoryview` whose items are wider than one
+  byte.
+* Improve type annotations: all functions in the library are now annotated.
+* Fix the demo application with Starlette 1.0.
+* Remove the SiDUCK example, as the draft it implemented expired without being
+  adopted.
+
 1.7.1
 -----
 
