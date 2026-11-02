@@ -61,6 +61,7 @@ select = [
     "F",  # Pyflakes
     "W",  # pycodestyle
     "I",  # isort
+    "UP",  # pyupgrade
 ]
 
 [tool.ruff.lint.isort]
