@@ -1,5 +1,6 @@
 exclude .codespellrc
 exclude .readthedocs.yaml
+include AGENTS.md
 include CONTRIBUTING.md
 include LICENSE
 include SECURITY.md
