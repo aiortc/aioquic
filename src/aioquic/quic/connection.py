@@ -535,10 +535,18 @@ class QuicConnection:
 
         :param now: The current time.
         """
-        network_path = self._network_paths[0]
-
         if self._state in END_STATES:
             return []
+
+        # Without a network path, such as on a server before it accepts an INITIAL
+        # packet, nothing can be sent and a close needs no closing period (RFC 9000
+        # section 10.2.3).
+        if not self._network_paths:
+            if self._close_pending:
+                self._close_end()
+            return []
+
+        network_path = self._network_paths[0]
 
         # build datagrams
         builder = QuicPacketBuilder(

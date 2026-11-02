@@ -3596,12 +3596,29 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertIsNone(server.next_event())
 
     def test_receive_datagram_first_not_initial(self) -> None:
+        now = 0.0
         server = create_standalone_server(self)
 
         # Server receives a 1-RTT packet before any INITIAL packet.
         datagram = bytes([0x40]) + server.host_cid + bytes(40)
         with self.assertPacketsDropped(server, ["key_unavailable"]):
-            server.receive_datagram(datagram, CLIENT_ADDR, now=time.time())
+            server.receive_datagram(datagram, CLIENT_ADDR, now=now)
+
+        # Server has no network path, so it has nothing to send.
+        self.assertEqual(server.datagrams_to_send(now=now), [])
+
+        # Server is closed, the connection is terminated without a closing period.
+        server.close(error_code=QuicErrorCode.INTERNAL_ERROR)
+        self.assertEqual(server.datagrams_to_send(now=now), [])
+        self.assertEqual(
+            server.next_event(),
+            events.ConnectionTerminated(
+                error_code=QuicErrorCode.INTERNAL_ERROR,
+                frame_type=None,
+                reason_phrase="",
+            ),
+        )
+        self.assertEqual(server._state, QuicConnectionState.TERMINATED)
 
     def test_receive_datagram_garbage(self) -> None:
         client = create_standalone_client(self)
