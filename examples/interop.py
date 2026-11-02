@@ -12,7 +12,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Flag
-from typing import Optional, TextIO, cast
+from typing import TextIO, cast
 
 import httpx
 from aioquic.asyncio import connect
@@ -71,15 +71,15 @@ class Server:
     host: str
     port: int = 4433
     http3: bool = True
-    http3_port: Optional[int] = None
-    retry_port: Optional[int] = 4434
+    http3_port: int | None = None
+    retry_port: int | None = 4434
     path: str = "/"
-    push_path: Optional[str] = None
+    push_path: str | None = None
     result: Result = field(default_factory=lambda: Result(0))
-    session_resumption_port: Optional[int] = None
+    session_resumption_port: int | None = None
     structured_logging: bool = False
-    throughput_path: Optional[str] = "/%(size)d"
-    verify_mode: Optional[int] = None
+    throughput_path: str | None = "/%(size)d"
+    verify_mode: int | None = None
 
 
 SERVERS = [
@@ -499,8 +499,8 @@ async def main(
     *,
     servers: list[Server],
     tests: list[tuple[str, Callable[[Server, QuicConfiguration], Awaitable[None]]]],
-    quic_log: Optional[str] = None,
-    secrets_log_file: Optional[TextIO] = None,
+    quic_log: str | None = None,
+    secrets_log_file: TextIO | None = None,
 ) -> None:
     for server in servers:
         if server.structured_logging:

@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Iterator, Sequence
-from typing import Any, Optional
+from typing import Any
 
 
 class RangeSet(Sequence):
@@ -9,7 +9,7 @@ class RangeSet(Sequence):
             assert r.step == 1
             self.add(r.start, r.stop)
 
-    def add(self, start: int, stop: Optional[int] = None) -> None:
+    def add(self, start: int, stop: int | None = None) -> None:
         if stop is None:
             stop = start + 1
         assert stop > start

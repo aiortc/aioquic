@@ -4,7 +4,7 @@ import logging
 import pickle
 import ssl
 import struct
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
@@ -20,7 +20,7 @@ logger = logging.getLogger("client")
 class DnsClientProtocol(QuicConnectionProtocol):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._ack_waiter: Optional[asyncio.Future[DNSRecord]] = None
+        self._ack_waiter: asyncio.Future[DNSRecord] | None = None
 
     async def query(self, query_name: str, query_type: str) -> DNSRecord:
         # serialize query

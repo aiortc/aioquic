@@ -3,7 +3,7 @@ import contextlib
 import copy
 from collections import deque
 from collections.abc import Iterator
-from typing import Any, Optional
+from typing import Any
 from unittest import TestCase
 
 from aioquic.buffer import Buffer, encode_uint_var
@@ -149,7 +149,7 @@ class FakeQuicConnection(QuicConnection):
         # would create transport state which nothing here uses. Without that
         # state, an inherited method fails at once instead of acting on a
         # connection which never sends anything.
-        self.closed: Optional[tuple[int, str]] = None
+        self.closed: tuple[int, str] | None = None
         self.stream_queue: list[StreamDataReceived] = []
         self.stream_resets: list[tuple[int, int]] = []
         self._configuration = configuration
@@ -164,7 +164,7 @@ class FakeQuicConnection(QuicConnection):
     def close(
         self,
         error_code: int = QuicErrorCode.NO_ERROR,
-        frame_type: Optional[int] = None,
+        frame_type: int | None = None,
         reason_phrase: str = "",
     ) -> None:
         self.closed = (error_code, reason_phrase)
@@ -178,7 +178,7 @@ class FakeQuicConnection(QuicConnection):
             self._next_stream_bidi += 4
         return stream_id
 
-    def next_event(self) -> Optional[QuicEvent]:
+    def next_event(self) -> QuicEvent | None:
         try:
             return self._events.popleft()
         except IndexError:
@@ -3164,10 +3164,10 @@ class H3ConnectionTest(TestCase):
 
     def _content_length_template(
         self,
-        content_length: Optional[bytes],
+        content_length: bytes | None,
         data: bytes,
         end_at: str,
-        expected_closed: Optional[tuple[int, str]],
+        expected_closed: tuple[int, str] | None,
     ) -> None:
         quic_client = FakeQuicConnection(
             configuration=QuicConfiguration(is_client=True)

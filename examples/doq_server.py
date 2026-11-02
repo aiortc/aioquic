@@ -2,7 +2,6 @@ import argparse
 import asyncio
 import logging
 import struct
-from typing import Optional
 
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
@@ -38,7 +37,7 @@ class SessionTicketStore:
     def add(self, ticket: SessionTicket) -> None:
         self.tickets[ticket.ticket] = ticket
 
-    def pop(self, label: bytes) -> Optional[SessionTicket]:
+    def pop(self, label: bytes) -> SessionTicket | None:
         return self.tickets.pop(label, None)
 
 

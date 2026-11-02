@@ -4,7 +4,6 @@ import datetime
 import ssl
 from collections.abc import Callable
 from functools import partial
-from typing import Optional
 from unittest import TestCase, skipIf
 from unittest.mock import patch
 
@@ -130,11 +129,11 @@ class ContextTest(TestCase):
 
     def create_client(
         self,
-        alpn_protocols: Optional[list[str]] = None,
-        cadata: Optional[bytes] = None,
-        cafile: Optional[str] = SERVER_CACERTFILE,
-        cipher_suites: Optional[list[tls.CipherSuite]] = None,
-        verify_mode: Optional[int] = None,
+        alpn_protocols: list[str] | None = None,
+        cadata: bytes | None = None,
+        cafile: str | None = SERVER_CACERTFILE,
+        cipher_suites: list[tls.CipherSuite] | None = None,
+        verify_mode: int | None = None,
     ) -> Context:
         client = Context(
             alpn_protocols=alpn_protocols,
@@ -155,8 +154,8 @@ class ContextTest(TestCase):
 
     def create_server(
         self,
-        alpn_protocols: Optional[list[str]] = None,
-        cipher_suites: Optional[list[tls.CipherSuite]] = None,
+        alpn_protocols: list[str] | None = None,
+        cipher_suites: list[tls.CipherSuite] | None = None,
     ) -> Context:
         configuration = QuicConfiguration(is_client=False)
         configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
@@ -1050,7 +1049,7 @@ class ContextTest(TestCase):
         def client_new_ticket(ticket: SessionTicket) -> None:
             client_tickets.append(ticket)
 
-        def server_get_ticket(label: bytes) -> Optional[SessionTicket]:
+        def server_get_ticket(label: bytes) -> SessionTicket | None:
             for t in server_tickets:
                 if t.ticket == label:
                     return t

@@ -1,5 +1,5 @@
 import binascii
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .._crypto import AEAD, CryptoError, HeaderProtection
 from ..tls import CipherSuite, cipher_suite_hash, hkdf_expand_label, hkdf_extract
@@ -63,12 +63,12 @@ class CryptoContext:
         setup_cb: Callback = NoCallback,
         teardown_cb: Callback = NoCallback,
     ) -> None:
-        self.aead: Optional[AEAD] = None
-        self.cipher_suite: Optional[CipherSuite] = None
-        self.hp: Optional[HeaderProtection] = None
+        self.aead: AEAD | None = None
+        self.cipher_suite: CipherSuite | None = None
+        self.hp: HeaderProtection | None = None
         self.key_phase = key_phase
-        self.secret: Optional[bytes] = None
-        self.version: Optional[int] = None
+        self.secret: bytes | None = None
+        self.version: int | None = None
         self._setup_cb = setup_cb
         self._teardown_cb = teardown_cb
 

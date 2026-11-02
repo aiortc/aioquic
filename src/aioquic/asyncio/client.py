@@ -1,7 +1,8 @@
 import asyncio
 import socket
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Callable, Optional, cast
+from typing import cast
 
 from ..quic.configuration import QuicConfiguration
 from ..quic.connection import NetworkAddress, QuicConnection, QuicTokenHandler
@@ -16,11 +17,11 @@ async def connect(
     host: str,
     port: int,
     *,
-    configuration: Optional[QuicConfiguration] = None,
-    create_protocol: Optional[Callable] = QuicConnectionProtocol,
-    session_ticket_handler: Optional[SessionTicketHandler] = None,
-    stream_handler: Optional[QuicStreamHandler] = None,
-    token_handler: Optional[QuicTokenHandler] = None,
+    configuration: QuicConfiguration | None = None,
+    create_protocol: Callable | None = QuicConnectionProtocol,
+    session_ticket_handler: SessionTicketHandler | None = None,
+    stream_handler: QuicStreamHandler | None = None,
+    token_handler: QuicTokenHandler | None = None,
     wait_connected: bool = True,
     local_port: int = 0,
 ) -> AsyncGenerator[QuicConnectionProtocol, None]:

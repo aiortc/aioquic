@@ -4,7 +4,7 @@ import io
 import os
 import time
 from collections.abc import Callable, Iterable, Iterator
-from typing import Any, Optional
+from typing import Any
 from unittest import TestCase, skipIf
 
 from aioquic import tls
@@ -89,7 +89,7 @@ class SessionTicketStore:
     def add(self, ticket: tls.SessionTicket) -> None:
         self.tickets[ticket.ticket] = ticket
 
-    def pop(self, label: bytes) -> Optional[tls.SessionTicket]:
+    def pop(self, label: bytes) -> tls.SessionTicket | None:
         return self.tickets.pop(label, None)
 
 
@@ -250,7 +250,7 @@ def disable_packet_pacing(connection: QuicConnection) -> None:
         def __init__(self) -> None:
             super().__init__(max_datagram_size=SMALLEST_MAX_DATAGRAM_SIZE)
 
-        def next_send_time(self, now: float) -> Optional[float]:
+        def next_send_time(self, now: float) -> float | None:
             return None
 
     connection._loss._pacer = DummyPacketPacer()
@@ -462,7 +462,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
         connection_id: QuicConnectionId,
         frame_type: int,
         data: bytes,
-        max_total_bytes: Optional[int] = None,
+        max_total_bytes: int | None = None,
     ) -> bytes:
         """
         Build a datagram with which the client probes a new path, using a
@@ -2776,7 +2776,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self,
         client: QuicConnection,
         server: QuicConnection,
-        alpn_protocol: Optional[str] = None,
+        alpn_protocol: str | None = None,
     ) -> None:
         """
         Check handshake completed.
@@ -6036,8 +6036,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client = create_standalone_client(self)
 
         def preferred_address(
-            ipv4_address: Optional[tuple[str, int]] = None,
-            ipv6_address: Optional[tuple[str, int]] = None,
+            ipv4_address: tuple[str, int] | None = None,
+            ipv6_address: tuple[str, int] | None = None,
         ) -> QuicPreferredAddress:
             return QuicPreferredAddress(
                 ipv4_address=ipv4_address,

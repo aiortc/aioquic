@@ -3,7 +3,6 @@ import ipaddress
 import os
 from dataclasses import dataclass
 from enum import Enum, IntEnum
-from typing import Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -91,7 +90,7 @@ class QuicProtocolVersion(IntEnum):
 
 @dataclass
 class QuicHeader:
-    version: Optional[int]
+    version: int | None
     "The protocol version. Only present in long header packets."
 
     packet_type: QuicPacketType
@@ -179,7 +178,7 @@ def pretty_protocol_version(version: int) -> str:
     return f"0x{version:08x} ({version_name})"
 
 
-def pull_quic_header(buf: Buffer, host_cid_length: Optional[int] = None) -> QuicHeader:
+def pull_quic_header(buf: Buffer, host_cid_length: int | None = None) -> QuicHeader:
     packet_start = buf.tell()
 
     version = None
@@ -340,8 +339,8 @@ def encode_quic_version_negotiation(
 
 @dataclass
 class QuicPreferredAddress:
-    ipv4_address: Optional[tuple[str, int]]
-    ipv6_address: Optional[tuple[str, int]]
+    ipv4_address: tuple[str, int] | None
+    ipv6_address: tuple[str, int] | None
     connection_id: bytes
     stateless_reset_token: bytes
 
@@ -354,26 +353,26 @@ class QuicVersionInformation:
 
 @dataclass
 class QuicTransportParameters:
-    original_destination_connection_id: Optional[bytes] = None
-    max_idle_timeout: Optional[int] = None
-    stateless_reset_token: Optional[bytes] = None
-    max_udp_payload_size: Optional[int] = None
-    initial_max_data: Optional[int] = None
-    initial_max_stream_data_bidi_local: Optional[int] = None
-    initial_max_stream_data_bidi_remote: Optional[int] = None
-    initial_max_stream_data_uni: Optional[int] = None
-    initial_max_streams_bidi: Optional[int] = None
-    initial_max_streams_uni: Optional[int] = None
-    ack_delay_exponent: Optional[int] = None
-    max_ack_delay: Optional[int] = None
-    disable_active_migration: Optional[bool] = False
-    preferred_address: Optional[QuicPreferredAddress] = None
-    active_connection_id_limit: Optional[int] = None
-    initial_source_connection_id: Optional[bytes] = None
-    retry_source_connection_id: Optional[bytes] = None
-    version_information: Optional[QuicVersionInformation] = None
-    max_datagram_frame_size: Optional[int] = None
-    quantum_readiness: Optional[bytes] = None
+    original_destination_connection_id: bytes | None = None
+    max_idle_timeout: int | None = None
+    stateless_reset_token: bytes | None = None
+    max_udp_payload_size: int | None = None
+    initial_max_data: int | None = None
+    initial_max_stream_data_bidi_local: int | None = None
+    initial_max_stream_data_bidi_remote: int | None = None
+    initial_max_stream_data_uni: int | None = None
+    initial_max_streams_bidi: int | None = None
+    initial_max_streams_uni: int | None = None
+    ack_delay_exponent: int | None = None
+    max_ack_delay: int | None = None
+    disable_active_migration: bool | None = False
+    preferred_address: QuicPreferredAddress | None = None
+    active_connection_id_limit: int | None = None
+    initial_source_connection_id: bytes | None = None
+    retry_source_connection_id: bytes | None = None
+    version_information: QuicVersionInformation | None = None
+    max_datagram_frame_size: int | None = None
+    quantum_readiness: bytes | None = None
 
 
 PARAMS = {

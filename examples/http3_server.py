@@ -6,7 +6,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from email.utils import formatdate
-from typing import Any, Optional, Union, cast
+from typing import Any, cast
 
 import aioquic
 import wsproto
@@ -33,7 +33,7 @@ except ImportError:
     uvloop = None
 
 AsgiApplication = Callable
-HttpConnection = Union[H0Connection, H3Connection]
+HttpConnection = H0Connection | H3Connection
 
 SERVER_NAME = "aioquic/" + aioquic.__version__
 
@@ -141,7 +141,7 @@ class WebSocketHandler:
         self.scope = scope
         self.stream_id = stream_id
         self.transmit = transmit
-        self.websocket: Optional[wsproto.Connection] = None
+        self.websocket: wsproto.Connection | None = None
 
     def http_event_received(self, event: H3Event) -> None:
         if isinstance(event, DataReceived) and not self.closed:
@@ -320,14 +320,14 @@ class WebTransportHandler:
         self.transmit()
 
 
-Handler = Union[HttpRequestHandler, WebSocketHandler, WebTransportHandler]
+Handler = HttpRequestHandler | WebSocketHandler | WebTransportHandler
 
 
 class HttpServerProtocol(QuicConnectionProtocol):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._handlers: dict[int, Handler] = {}
-        self._http: Optional[HttpConnection] = None
+        self._http: HttpConnection | None = None
 
     def http_event_received(self, event: H3Event) -> None:
         if isinstance(event, HeadersReceived) and event.stream_id not in self._handlers:
@@ -474,7 +474,7 @@ class SessionTicketStore:
     def add(self, ticket: SessionTicket) -> None:
         self.tickets[ticket.ticket] = ticket
 
-    def pop(self, label: bytes) -> Optional[SessionTicket]:
+    def pop(self, label: bytes) -> SessionTicket | None:
         return self.tickets.pop(label, None)
 
 

@@ -6,7 +6,7 @@ import socket
 import weakref
 from array import array
 from collections.abc import AsyncGenerator, Callable
-from typing import Any, Optional
+from typing import Any
 from unittest import TestCase, skipIf
 from unittest.mock import MagicMock, patch
 
@@ -43,7 +43,7 @@ dropped_sockets: weakref.WeakSet[socket.socket] = weakref.WeakSet()
 
 
 def sendto_with_loss(
-    self: socket.socket, data: bytes, addr: Optional[NetworkAddress] = None
+    self: socket.socket, data: bytes, addr: NetworkAddress | None = None
 ) -> None:
     """
     Simulate 25% packet loss, without dropping two datagrams in a row from the
@@ -67,7 +67,7 @@ class SessionTicketStore:
     def add(self, ticket: SessionTicket) -> None:
         self.tickets[ticket.ticket] = ticket
 
-    def pop(self, label: bytes) -> Optional[SessionTicket]:
+    def pop(self, label: bytes) -> SessionTicket | None:
         return self.tickets.pop(label, None)
 
 
@@ -89,10 +89,10 @@ class HighLevelTest(TestCase):
         self,
         *,
         port: int,
-        host: Optional[str] = None,
-        cadata: Optional[bytes] = None,
-        cafile: Optional[str] = SERVER_CACERTFILE,
-        configuration: Optional[QuicConfiguration] = None,
+        host: str | None = None,
+        cadata: bytes | None = None,
+        cafile: str | None = SERVER_CACERTFILE,
+        configuration: QuicConfiguration | None = None,
         request: bytes | bytearray | memoryview = b"ping",
         **kwargs: Any,
     ) -> bytes:
@@ -125,7 +125,7 @@ class HighLevelTest(TestCase):
     @contextlib.asynccontextmanager
     async def run_server(
         self,
-        configuration: Optional[QuicConfiguration] = None,
+        configuration: QuicConfiguration | None = None,
         host: str = "::",
         stream_handler: QuicStreamHandler = handle_stream,
         **kwargs: Any,
@@ -393,7 +393,7 @@ class HighLevelTest(TestCase):
         """
 
         def create_protocol(
-            quic: QuicConnection, stream_handler: Optional[QuicStreamHandler] = None
+            quic: QuicConnection, stream_handler: QuicStreamHandler | None = None
         ) -> QuicConnectionProtocol:
             protocol = QuicConnectionProtocol(quic, stream_handler=stream_handler)
             protocol._quic._original_destination_connection_id = None
@@ -415,7 +415,7 @@ class HighLevelTest(TestCase):
         """
 
         def create_protocol(
-            quic: QuicConnection, stream_handler: Optional[QuicStreamHandler] = None
+            quic: QuicConnection, stream_handler: QuicStreamHandler | None = None
         ) -> QuicConnectionProtocol:
             protocol = QuicConnectionProtocol(quic, stream_handler=stream_handler)
             protocol._quic._retry_source_connection_id = None
