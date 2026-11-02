@@ -62,6 +62,6 @@ class QuicFileLoggerTest(TestCase):
             filepath = os.path.join(dirpath, "0000000000000000.qlog")
             self.assertTrue(os.path.exists(filepath))
 
-            with open(filepath, "r") as fp:
+            with open(filepath) as fp:
                 data = json.load(fp)
             self.assertEqual(data, SINGLE_TRACE)
