@@ -510,7 +510,7 @@ class QuicPacketRecovery:
                     return True
         return False
 
-    def _log_metrics_updated(self, log_rtt=False) -> None:
+    def _log_metrics_updated(self, log_rtt: bool = False) -> None:
         data: dict[str, Any] = self._cc.get_log_data()
 
         if log_rtt:

@@ -212,7 +212,9 @@ class QuicServer(asyncio.DatagramProtocol):
         if protocol is not None:
             protocol.datagram_received(data, addr)
 
-    def _connection_id_issued(self, cid: bytes, protocol: QuicConnectionProtocol):
+    def _connection_id_issued(
+        self, cid: bytes, protocol: QuicConnectionProtocol
+    ) -> None:
         self._protocols[cid] = protocol
 
     def _connection_id_retired(
@@ -221,7 +223,7 @@ class QuicServer(asyncio.DatagramProtocol):
         assert self._protocols[cid] == protocol
         del self._protocols[cid]
 
-    def _connection_terminated(self, protocol: QuicConnectionProtocol):
+    def _connection_terminated(self, protocol: QuicConnectionProtocol) -> None:
         for cid, proto in list(self._protocols.items()):
             if proto == protocol:
                 del self._protocols[cid]

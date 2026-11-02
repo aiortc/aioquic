@@ -64,7 +64,7 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         )
         self.transmit()
 
-    def connect(self, addr: NetworkAddress, transmit=True) -> None:
+    def connect(self, addr: NetworkAddress, transmit: bool = True) -> None:
         """
         Initiate the TLS handshake.
 
@@ -259,14 +259,14 @@ class QuicStreamAdapter(asyncio.Transport):
         self.protocol._quic.send_stream_data(self.stream_id, bytes(data))
         self.protocol._transmit_soon()
 
-    def write_eof(self):
+    def write_eof(self) -> None:
         if self._closing:
             return
         self._closing = True
         self.protocol._quic.send_stream_data(self.stream_id, b"", end_stream=True)
         self.protocol._transmit_soon()
 
-    def close(self):
+    def close(self) -> None:
         if self.can_write_eof():
             self.write_eof()
         else:

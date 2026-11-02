@@ -52,7 +52,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["tests.*"]
+module = ["aioquic.*", "tests.*"]
 disallow_untyped_defs = true
 
 [tool.ruff.lint]

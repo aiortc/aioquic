@@ -651,7 +651,7 @@ class QuicConnection:
 
         return ret
 
-    def get_next_available_stream_id(self, is_unidirectional=False) -> int:
+    def get_next_available_stream_id(self, is_unidirectional: bool = False) -> int:
         """
         Return the stream ID for the next stream created by this endpoint.
         """
@@ -4098,8 +4098,8 @@ class QuicConnection:
             )
 
     def _write_ping_frame(
-        self, builder: QuicPacketBuilder, uids: list[int] = [], comment=""
-    ):
+        self, builder: QuicPacketBuilder, uids: list[int] = [], comment: str = ""
+    ) -> None:
         builder.start_frame(
             QuicFrameType.PING,
             capacity=PING_FRAME_CAPACITY,
