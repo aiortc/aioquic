@@ -1,4 +1,3 @@
-import binascii
 import contextlib
 import copy
 from collections import deque
@@ -1387,9 +1386,7 @@ class H3ConnectionTest(TestCase):
                         data=encode_frame(
                             FrameType.PUSH_PROMISE,
                             encode_uint_var(push_id)
-                            + binascii.unhexlify(
-                                "0000d1d75086a0e41d139d0951866075d6b9108f"
-                            ),
+                            + bytes.fromhex("0000d1d75086a0e41d139d0951866075d6b9108f"),
                         ),
                         end_stream=False,
                     )
@@ -2387,7 +2384,7 @@ class H3ConnectionTest(TestCase):
         h3_client.handle_event(
             StreamDataReceived(
                 stream_id=3,
-                data=binascii.unhexlify(
+                data=bytes.fromhex(
                     "0004170150000680020000074064091040bcc0000000faceb00c"
                 ),
                 end_stream=False,
@@ -2401,13 +2398,13 @@ class H3ConnectionTest(TestCase):
         )
         h3_client.handle_event(
             StreamDataReceived(
-                stream_id=0, data=binascii.unhexlify("01040280d910"), end_stream=False
+                stream_id=0, data=bytes.fromhex("01040280d910"), end_stream=False
             )
         )
         h3_client.handle_event(
             StreamDataReceived(
                 stream_id=0,
-                data=binascii.unhexlify(
+                data=bytes.fromhex(
                     "00408d796f752072656163686564206d766673742e6e65742c20726561636820"
                     "746865202f6563686f20656e64706f696e7420666f7220616e206563686f2072"
                     "6573706f6e7365207175657279202f3c6e756d6265723e20656e64706f696e74"
@@ -2421,7 +2418,7 @@ class H3ConnectionTest(TestCase):
             h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=7,
-                    data=binascii.unhexlify(
+                    data=bytes.fromhex(
                         "3fe101c696d07abe941094cb6d0a08017d403971966e32ca98b46f"
                     ),
                     end_stream=False,
@@ -2479,7 +2476,7 @@ class H3ConnectionTest(TestCase):
             h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=0,
-                    data=binascii.unhexlify("01030000d90507000381d1d71011"),
+                    data=bytes.fromhex("01030000d90507000381d1d71011"),
                     end_stream=True,
                 )
             ),
@@ -2497,7 +2494,7 @@ class H3ConnectionTest(TestCase):
             h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=3,
-                    data=binascii.unhexlify("023fe11fc086a0e41d139d09c1866075d6b9108f"),
+                    data=bytes.fromhex("023fe11fc086a0e41d139d09c1866075d6b9108f"),
                     end_stream=False,
                 )
             ),
@@ -2548,9 +2545,7 @@ class H3ConnectionTest(TestCase):
             h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=0,
-                    data=binascii.unhexlify(
-                        "01030000d90507000381d1d71011000568656c6c6f"
-                    ),
+                    data=bytes.fromhex("01030000d90507000381d1d71011000568656c6c6f"),
                     end_stream=True,
                 )
             ),
@@ -2568,7 +2563,7 @@ class H3ConnectionTest(TestCase):
             h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=3,
-                    data=binascii.unhexlify("023fe11fc086a0e41d139d09c1866075d6b9108f"),
+                    data=bytes.fromhex("023fe11fc086a0e41d139d09c1866075d6b9108f"),
                     end_stream=False,
                 )
             ),
@@ -2613,7 +2608,7 @@ class H3ConnectionTest(TestCase):
         h3_client.handle_event(
             StreamDataReceived(
                 stream_id=3,
-                data=binascii.unhexlify(
+                data=bytes.fromhex(
                     "0004170150000680020000074064091040bcc0000000faceb00c"
                 ),
                 end_stream=False,
@@ -2627,7 +2622,7 @@ class H3ConnectionTest(TestCase):
         )
         h3_client.handle_event(
             StreamDataReceived(
-                stream_id=0, data=binascii.unhexlify("01040280d910"), end_stream=False
+                stream_id=0, data=bytes.fromhex("01040280d910"), end_stream=False
             )
         )
         self.assertTrue(h3_client._stream[0].blocked)
@@ -2654,7 +2649,7 @@ class H3ConnectionTest(TestCase):
             h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=7,
-                    data=binascii.unhexlify(
+                    data=bytes.fromhex(
                         "3fe101c696d07abe941094cb6d0a08017d403971966e32ca98b46f"
                     ),
                     end_stream=False,
@@ -2684,7 +2679,7 @@ class H3ConnectionTest(TestCase):
         )
         h3_server.handle_event(
             StreamDataReceived(
-                stream_id=0, data=binascii.unhexlify("01040280d910"), end_stream=False
+                stream_id=0, data=bytes.fromhex("01040280d910"), end_stream=False
             )
         )
         self.assertTrue(h3_server._stream[0].blocked)
@@ -2706,7 +2701,7 @@ class H3ConnectionTest(TestCase):
             h3_server.handle_event(
                 StreamDataReceived(
                     stream_id=6,
-                    data=binascii.unhexlify(
+                    data=bytes.fromhex(
                         "3fe101c696d07abe941094cb6d0a08017d403971966e32ca98b46f"
                     ),
                     end_stream=False,
@@ -2726,7 +2721,7 @@ class H3ConnectionTest(TestCase):
         h3_client.handle_event(
             StreamDataReceived(
                 stream_id=3,
-                data=binascii.unhexlify(
+                data=bytes.fromhex(
                     "0004170150000680020000074064091040bcc0000000faceb00c"
                 ),
                 end_stream=False,
@@ -2743,7 +2738,7 @@ class H3ConnectionTest(TestCase):
             h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=0,
-                    data=binascii.unhexlify(
+                    data=bytes.fromhex(
                         "011b0000d95696d07abe941094cb6d0a08017d403971966e32ca98b46f"
                     ),
                     end_stream=False,
@@ -2765,7 +2760,7 @@ class H3ConnectionTest(TestCase):
             h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=0,
-                    data=binascii.unhexlify(
+                    data=bytes.fromhex(
                         "00408d796f752072656163686564206d766673742e6e65742c20726561636820"
                         "746865202f6563686f20656e64706f696e7420666f7220616e206563686f2072"
                         "6573706f6e7365207175657279202f3c6e756d6265723e20656e64706f696e74"
@@ -2791,7 +2786,7 @@ class H3ConnectionTest(TestCase):
         self.assertEqual(
             h3_client.handle_event(
                 StreamDataReceived(
-                    stream_id=0, data=binascii.unhexlify("0103028010"), end_stream=True
+                    stream_id=0, data=bytes.fromhex("0103028010"), end_stream=True
                 )
             ),
             [],
@@ -2801,7 +2796,7 @@ class H3ConnectionTest(TestCase):
             h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=7,
-                    data=binascii.unhexlify("6af2b20f49564d833505b38294e7"),
+                    data=bytes.fromhex("6af2b20f49564d833505b38294e7"),
                     end_stream=False,
                 )
             ),

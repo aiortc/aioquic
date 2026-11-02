@@ -1,4 +1,3 @@
-import binascii
 import contextlib
 import io
 import os
@@ -3607,7 +3606,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_receive_datagram_garbage(self) -> None:
         client = create_standalone_client(self)
 
-        datagram = binascii.unhexlify("c00000000080")
+        datagram = bytes.fromhex("c00000000080")
         client.receive_datagram(datagram, SERVER_ADDR, now=time.time())
 
     def test_receive_datagram_reserved_bits_non_zero(self) -> None:
@@ -3741,7 +3740,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client.receive_datagram(
             encode_quic_retry(
                 version=client._version,
-                source_cid=binascii.unhexlify("85abb547bf28be97"),
+                source_cid=bytes.fromhex("85abb547bf28be97"),
                 destination_cid=client.host_cid,
                 original_destination_cid=client._peer_cid.cid,
                 retry_token=bytes(16),
@@ -3768,7 +3767,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 client.receive_datagram(
                     encode_quic_retry(
                         version=client._version,
-                        source_cid=binascii.unhexlify("85abb547bf28be97"),
+                        source_cid=bytes.fromhex("85abb547bf28be97"),
                         destination_cid=client.host_cid,
                         original_destination_cid=peer_cid,
                         retry_token=bytes(16),
@@ -3794,7 +3793,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             client.receive_datagram(
                 encode_quic_retry(
                     version=client._version,
-                    source_cid=binascii.unhexlify("85abb547bf28be97"),
+                    source_cid=bytes.fromhex("85abb547bf28be97"),
                     destination_cid=client.host_cid,
                     original_destination_cid=client._peer_cid.cid,
                     retry_token=b"",
@@ -3836,8 +3835,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
             client.receive_datagram(
                 encode_quic_retry(
                     version=client._version,
-                    source_cid=binascii.unhexlify("85abb547bf28be97"),
-                    destination_cid=binascii.unhexlify("c98343fe8f5f0ff4"),
+                    source_cid=bytes.fromhex("85abb547bf28be97"),
+                    destination_cid=bytes.fromhex("c98343fe8f5f0ff4"),
                     original_destination_cid=client._peer_cid.cid,
                     retry_token=bytes(16),
                 ),
@@ -3857,7 +3856,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             client.receive_datagram(
                 encode_quic_retry(
                     version=client._version,
-                    source_cid=binascii.unhexlify("85abb547bf28be97"),
+                    source_cid=bytes.fromhex("85abb547bf28be97"),
                     destination_cid=client.host_cid,
                     original_destination_cid=client._peer_cid.cid,
                     retry_token=bytes(16),
@@ -3988,7 +3987,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client._handle_connection_close_frame(
             client_receive_context(client),
             QuicFrameType.APPLICATION_CLOSE,
-            Buffer(data=binascii.unhexlify("0008676f6f6462798200")),
+            Buffer(data=bytes.fromhex("0008676f6f6462798200")),
         )
 
         self.assertEqual(
@@ -4467,10 +4466,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
             client._handle_new_token_frame(
                 client_receive_context(client),
                 QuicFrameType.NEW_TOKEN,
-                Buffer(data=binascii.unhexlify("080102030405060708")),
+                Buffer(data=bytes.fromhex("080102030405060708")),
             )
 
-        self.assertEqual(new_token, binascii.unhexlify("0102030405060708"))
+        self.assertEqual(new_token, bytes.fromhex("0102030405060708"))
 
     def test_handle_new_token_frame_from_client(self) -> None:
         with client_and_server() as (client, server):
@@ -4479,7 +4478,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 server._handle_new_token_frame(
                     client_receive_context(client),
                     QuicFrameType.NEW_TOKEN,
-                    Buffer(data=binascii.unhexlify("080102030405060708")),
+                    Buffer(data=bytes.fromhex("080102030405060708")),
                 )
             self.assertEqual(cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION)
             self.assertEqual(cm.exception.frame_type, QuicFrameType.NEW_TOKEN)
@@ -4911,7 +4910,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 client._handle_reset_stream_frame(
                     client_receive_context(client),
                     QuicFrameType.RESET_STREAM,
-                    Buffer(data=binascii.unhexlify("021100")),
+                    Buffer(data=bytes.fromhex("021100")),
                 )
             self.assertEqual(cm.exception.error_code, QuicErrorCode.STREAM_STATE_ERROR)
             self.assertEqual(cm.exception.frame_type, QuicFrameType.RESET_STREAM)
@@ -5561,13 +5560,11 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self,
     ) -> None:
         client = create_standalone_client(self)
-        client._remote_initial_source_connection_id = binascii.unhexlify(
-            "0011223344556677"
-        )
+        client._remote_initial_source_connection_id = bytes.fromhex("0011223344556677")
 
         data = encode_transport_parameters(
             QuicTransportParameters(
-                initial_source_connection_id=binascii.unhexlify("1122334455667788"),
+                initial_source_connection_id=bytes.fromhex("1122334455667788"),
                 original_destination_connection_id=client.original_destination_connection_id,
             )
         )

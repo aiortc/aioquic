@@ -1,5 +1,4 @@
 import asyncio
-import binascii
 import contextlib
 import random
 import socket
@@ -555,7 +554,7 @@ class HighLevelTest(TestCase):
             port=0,
             configuration=configuration,
         )
-        server.datagram_received(binascii.unhexlify("c00000000080"), ("1.2.3.4", 1234))
+        server.datagram_received(bytes.fromhex("c00000000080"), ("1.2.3.4", 1234))
         server.close()
 
     @asynctest

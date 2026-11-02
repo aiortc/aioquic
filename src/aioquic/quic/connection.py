@@ -1,4 +1,3 @@
-import binascii
 import ipaddress
 import logging
 import os
@@ -126,7 +125,7 @@ def is_version_compatible(from_version: int, to_version: int) -> bool:
 
 
 def dump_cid(cid: bytes) -> str:
-    return binascii.hexlify(cid).decode("ascii")
+    return cid.hex()
 
 
 def get_epoch(packet_type: QuicPacketType) -> tls.Epoch:

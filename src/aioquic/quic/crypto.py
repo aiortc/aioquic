@@ -1,4 +1,3 @@
-import binascii
 from collections.abc import Callable
 
 from .._crypto import AEAD, CryptoError, HeaderProtection
@@ -15,8 +14,8 @@ CIPHER_SUITES = {
     CipherSuite.CHACHA20_POLY1305_SHA256: (b"chacha20", b"chacha20-poly1305"),
 }
 INITIAL_CIPHER_SUITE = CipherSuite.AES_128_GCM_SHA256
-INITIAL_SALT_VERSION_1 = binascii.unhexlify("38762cf7f55934b34d179ae6a4c80cadccbb7f0a")
-INITIAL_SALT_VERSION_2 = binascii.unhexlify("0dede3def700a6db819381be6e269dcbf9bd2ed9")
+INITIAL_SALT_VERSION_1 = bytes.fromhex("38762cf7f55934b34d179ae6a4c80cadccbb7f0a")
+INITIAL_SALT_VERSION_2 = bytes.fromhex("0dede3def700a6db819381be6e269dcbf9bd2ed9")
 SAMPLE_SIZE = 16
 
 

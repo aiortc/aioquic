@@ -1,4 +1,3 @@
-import binascii
 from unittest import TestCase
 
 from aioquic.buffer import Buffer, BufferReadError
@@ -61,7 +60,7 @@ class PacketTest(TestCase):
         self.assertEqual(header.version, QuicProtocolVersion.VERSION_1)
         self.assertEqual(header.packet_type, QuicPacketType.INITIAL)
         self.assertEqual(header.packet_length, 1200)
-        self.assertEqual(header.destination_cid, binascii.unhexlify("8394c8f03e515708"))
+        self.assertEqual(header.destination_cid, bytes.fromhex("8394c8f03e515708"))
         self.assertEqual(header.source_cid, b"")
         self.assertEqual(header.token, b"")
         self.assertEqual(header.integrity_tag, b"")
@@ -79,7 +78,7 @@ class PacketTest(TestCase):
         self.assertEqual(header.version, QuicProtocolVersion.VERSION_2)
         self.assertEqual(header.packet_type, QuicPacketType.INITIAL)
         self.assertEqual(header.packet_length, 1200)
-        self.assertEqual(header.destination_cid, binascii.unhexlify("8394c8f03e515708"))
+        self.assertEqual(header.destination_cid, bytes.fromhex("8394c8f03e515708"))
         self.assertEqual(header.source_cid, b"")
         self.assertEqual(header.token, b"")
         self.assertEqual(header.integrity_tag, b"")
@@ -92,7 +91,7 @@ class PacketTest(TestCase):
         self.assertEqual(header.packet_type, QuicPacketType.INITIAL)
         self.assertEqual(header.packet_length, 135)
         self.assertEqual(header.destination_cid, b"")
-        self.assertEqual(header.source_cid, binascii.unhexlify("f067a5502a4262b5"))
+        self.assertEqual(header.source_cid, bytes.fromhex("f067a5502a4262b5"))
         self.assertEqual(header.token, b"")
         self.assertEqual(header.integrity_tag, b"")
         self.assertEqual(buf.tell(), 18)
@@ -104,16 +103,16 @@ class PacketTest(TestCase):
         self.assertEqual(header.packet_type, QuicPacketType.INITIAL)
         self.assertEqual(header.packet_length, 135)
         self.assertEqual(header.destination_cid, b"")
-        self.assertEqual(header.source_cid, binascii.unhexlify("f067a5502a4262b5"))
+        self.assertEqual(header.source_cid, bytes.fromhex("f067a5502a4262b5"))
         self.assertEqual(header.token, b"")
         self.assertEqual(header.integrity_tag, b"")
         self.assertEqual(buf.tell(), 18)
 
     def test_pull_retry_v1(self) -> None:
         # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.4
-        original_destination_cid = binascii.unhexlify("8394c8f03e515708")
+        original_destination_cid = bytes.fromhex("8394c8f03e515708")
 
-        data = binascii.unhexlify(
+        data = bytes.fromhex(
             "ff000000010008f067a5502a4262b5746f6b656e04a265ba2eff4d829058fb3f0f2496ba"
         )
         buf = Buffer(data=data)
@@ -122,10 +121,10 @@ class PacketTest(TestCase):
         self.assertEqual(header.packet_type, QuicPacketType.RETRY)
         self.assertEqual(header.packet_length, 36)
         self.assertEqual(header.destination_cid, b"")
-        self.assertEqual(header.source_cid, binascii.unhexlify("f067a5502a4262b5"))
+        self.assertEqual(header.source_cid, bytes.fromhex("f067a5502a4262b5"))
         self.assertEqual(header.token, b"token")
         self.assertEqual(
-            header.integrity_tag, binascii.unhexlify("04a265ba2eff4d829058fb3f0f2496ba")
+            header.integrity_tag, bytes.fromhex("04a265ba2eff4d829058fb3f0f2496ba")
         )
         self.assertEqual(buf.tell(), 36)
 
@@ -151,9 +150,9 @@ class PacketTest(TestCase):
 
     def test_pull_retry_v2(self) -> None:
         # https://datatracker.ietf.org/doc/html/rfc9369#appendix-A.4
-        original_destination_cid = binascii.unhexlify("8394c8f03e515708")
+        original_destination_cid = bytes.fromhex("8394c8f03e515708")
 
-        data = binascii.unhexlify(
+        data = bytes.fromhex(
             "cf6b3343cf0008f067a5502a4262b5746f6b656ec8646ce8bfe33952d955543665dcc7b6"
         )
         buf = Buffer(data=data)
@@ -162,10 +161,10 @@ class PacketTest(TestCase):
         self.assertEqual(header.packet_type, QuicPacketType.RETRY)
         self.assertEqual(header.packet_length, 36)
         self.assertEqual(header.destination_cid, b"")
-        self.assertEqual(header.source_cid, binascii.unhexlify("f067a5502a4262b5"))
+        self.assertEqual(header.source_cid, bytes.fromhex("f067a5502a4262b5"))
         self.assertEqual(header.token, b"token")
         self.assertEqual(
-            header.integrity_tag, binascii.unhexlify("c8646ce8bfe33952d955543665dcc7b6")
+            header.integrity_tag, bytes.fromhex("c8646ce8bfe33952d955543665dcc7b6")
         )
         self.assertEqual(buf.tell(), 36)
 
@@ -190,7 +189,7 @@ class PacketTest(TestCase):
         self.assertEqual(encoded, data)
 
     def test_pull_version_negotiation(self) -> None:
-        data = binascii.unhexlify(
+        data = bytes.fromhex(
             "ea00000000089aac5a49ba87a84908f92f4336fa951ba14547471600000001"
         )
 
@@ -199,8 +198,8 @@ class PacketTest(TestCase):
         self.assertEqual(header.version, QuicProtocolVersion.NEGOTIATION)
         self.assertEqual(header.packet_type, QuicPacketType.VERSION_NEGOTIATION)
         self.assertEqual(header.packet_length, 31)
-        self.assertEqual(header.destination_cid, binascii.unhexlify("9aac5a49ba87a849"))
-        self.assertEqual(header.source_cid, binascii.unhexlify("f92f4336fa951ba1"))
+        self.assertEqual(header.destination_cid, bytes.fromhex("9aac5a49ba87a849"))
+        self.assertEqual(header.source_cid, bytes.fromhex("f92f4336fa951ba1"))
         self.assertEqual(header.token, b"")
         self.assertEqual(header.integrity_tag, b"")
         self.assertEqual(
@@ -219,7 +218,7 @@ class PacketTest(TestCase):
 
     def test_pull_long_header_dcid_too_long(self) -> None:
         buf = Buffer(
-            data=binascii.unhexlify(
+            data=bytes.fromhex(
                 "c6ff0000161500000000000000000000000000000000000000000000004"
                 "01c514f99ec4bbf1f7a30f9b0c94fef717f1c1d07fec24c99a864da7ede"
             )
@@ -230,7 +229,7 @@ class PacketTest(TestCase):
 
     def test_pull_long_header_scid_too_long(self) -> None:
         buf = Buffer(
-            data=binascii.unhexlify(
+            data=bytes.fromhex(
                 "c2ff0000160015000000000000000000000000000000000000000000004"
                 "01cfcee99ec4bbf1f7a30f9b0c9417b8c263cdd8cc972a4439d68a46320"
             )
@@ -251,14 +250,12 @@ class PacketTest(TestCase):
             pull_quic_header(buf, host_cid_length=8)
 
     def test_pull_short_header(self) -> None:
-        buf = Buffer(
-            data=binascii.unhexlify("5df45aa7b59c0e1ad6e668f5304cd4fd1fb3799327")
-        )
+        buf = Buffer(data=bytes.fromhex("5df45aa7b59c0e1ad6e668f5304cd4fd1fb3799327"))
         header = pull_quic_header(buf, host_cid_length=8)
         self.assertEqual(header.version, None)
         self.assertEqual(header.packet_type, QuicPacketType.ONE_RTT)
         self.assertEqual(header.packet_length, 21)
-        self.assertEqual(header.destination_cid, binascii.unhexlify("f45aa7b59c0e1ad6"))
+        self.assertEqual(header.destination_cid, bytes.fromhex("f45aa7b59c0e1ad6"))
         self.assertEqual(header.source_cid, b"")
         self.assertEqual(header.token, b"")
         self.assertEqual(header.integrity_tag, b"")
@@ -275,7 +272,7 @@ class ParamsTest(TestCase):
     maxDiff = None
 
     def test_params(self) -> None:
-        data = binascii.unhexlify(
+        data = bytes.fromhex(
             "010267100210cc2fd6e7d97a53ab5be85b28d75c8008030247e404048005fff"
             "a05048000ffff06048000ffff0801060a01030b0119"
         )
@@ -306,7 +303,7 @@ class ParamsTest(TestCase):
         self.assertEqual(len(buf.data), len(data))
 
     def test_params_disable_active_migration(self) -> None:
-        data = binascii.unhexlify("0c00")
+        data = bytes.fromhex("0c00")
 
         # parse
         buf = Buffer(data=data)
@@ -319,7 +316,7 @@ class ParamsTest(TestCase):
         self.assertEqual(buf.data, data)
 
     def test_params_max_ack_delay(self) -> None:
-        data = binascii.unhexlify("0b010a")
+        data = bytes.fromhex("0b010a")
 
         # parse
         buf = Buffer(data=data)
@@ -332,13 +329,13 @@ class ParamsTest(TestCase):
         self.assertEqual(buf.data, data)
 
     def test_params_max_ack_delay_length_mismatch(self) -> None:
-        buf = Buffer(data=binascii.unhexlify("0b020a"))
+        buf = Buffer(data=bytes.fromhex("0b020a"))
         with self.assertRaises(ValueError) as cm:
             pull_quic_transport_parameters(buf)
         self.assertEqual(str(cm.exception), "Transport parameter length does not match")
 
     def test_params_preferred_address(self) -> None:
-        data = binascii.unhexlify(
+        data = bytes.fromhex(
             "0d3b8ba27b8611532400890200000000f03c91fffe69a45411531262c4518d6"
             "3013f0c287ed3573efa9095603746b2e02d45480ba6643e5c6e7d48ecb4"
         )
@@ -364,7 +361,7 @@ class ParamsTest(TestCase):
         self.assertEqual(buf.data, data)
 
     def test_params_unknown(self) -> None:
-        data = binascii.unhexlify("8000ff000100")
+        data = bytes.fromhex("8000ff000100")
 
         # parse
         buf = Buffer(data=data)
@@ -372,7 +369,7 @@ class ParamsTest(TestCase):
         self.assertEqual(params, QuicTransportParameters())
 
     def test_params_version_information(self) -> None:
-        data = binascii.unhexlify("110c00000001000000016b3343cf")
+        data = bytes.fromhex("110c00000001000000016b3343cf")
 
         # parse
         buf = Buffer(data=data)
@@ -396,7 +393,7 @@ class ParamsTest(TestCase):
         self.assertEqual(buf.data, data)
 
     def test_params_version_information_available_version_0(self) -> None:
-        buf = Buffer(data=binascii.unhexlify("11080000000100000000"))
+        buf = Buffer(data=bytes.fromhex("11080000000100000000"))
         with self.assertRaises(ValueError) as cm:
             pull_quic_transport_parameters(buf)
         self.assertEqual(
@@ -404,7 +401,7 @@ class ParamsTest(TestCase):
         )
 
     def test_params_version_information_chosen_version_0(self) -> None:
-        buf = Buffer(data=binascii.unhexlify("110400000000"))
+        buf = Buffer(data=bytes.fromhex("110400000000"))
         with self.assertRaises(ValueError) as cm:
             pull_quic_transport_parameters(buf)
         self.assertEqual(
@@ -412,19 +409,19 @@ class ParamsTest(TestCase):
         )
 
     def test_params_version_information_length_not_divisible_by_four(self) -> None:
-        buf = Buffer(data=binascii.unhexlify("11050000000100"))
+        buf = Buffer(data=bytes.fromhex("11050000000100"))
         with self.assertRaises(ValueError) as cm:
             pull_quic_transport_parameters(buf)
         self.assertEqual(str(cm.exception), "Transport parameter length does not match")
 
     def test_params_version_information_truncated(self) -> None:
-        buf = Buffer(data=binascii.unhexlify("110800000000"))
+        buf = Buffer(data=bytes.fromhex("110800000000"))
         with self.assertRaises(ValueError) as cm:
             pull_quic_transport_parameters(buf)
         self.assertEqual(str(cm.exception), "Read out of bounds")
 
     def test_preferred_address_ipv4_only(self) -> None:
-        data = binascii.unhexlify(
+        data = bytes.fromhex(
             "8ba27b8611530000000000000000000000000000000000001262c4518d63013"
             "f0c287ed3573efa9095603746b2e02d45480ba6643e5c6e7d48ecb4"
         )
@@ -464,7 +461,7 @@ class ParamsTest(TestCase):
                 )
 
     def test_preferred_address_ipv6_only(self) -> None:
-        data = binascii.unhexlify(
+        data = bytes.fromhex(
             "0000000000002400890200000000f03c91fffe69a45411531262c4518d63013"
             "f0c287ed3573efa9095603746b2e02d45480ba6643e5c6e7d48ecb4"
         )
