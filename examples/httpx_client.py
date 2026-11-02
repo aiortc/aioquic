@@ -194,8 +194,10 @@ async def main(
         # print speed
         octets = len(response.content)
         logger.info(
-            "Received %d bytes in %.1f s (%.3f Mbps)"
-            % (octets, elapsed, octets * 8 / elapsed / 1000000)
+            "Received %d bytes in %.1f s (%.3f Mbps)",
+            octets,
+            elapsed,
+            octets * 8 / elapsed / 1000000,
         )
 
         # output response
@@ -270,7 +272,7 @@ if __name__ == "__main__":
     )
 
     if args.output_dir is not None and not os.path.isdir(args.output_dir):
-        raise Exception("%s is not a directory" % args.output_dir)
+        raise Exception(f"{args.output_dir} is not a directory")
 
     # prepare configuration
     configuration = QuicConfiguration(is_client=True, alpn_protocols=H3_ALPN)

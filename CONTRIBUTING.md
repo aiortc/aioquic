@@ -62,8 +62,8 @@ Avoid duplicating code. Before adding a helper, look for an existing one
 that can be reused or extended, and factor out logic that would otherwise
 be copied.
 
-Use f-strings in new code, even where nearby code uses `%` formatting.
-Logger calls are the exception: they keep lazy `%` arguments.
+Use f-strings for string formatting. Logger calls are the exception:
+they keep lazy `%` arguments.
 
 Insert new functions, methods, `.pyi` stubs and `test_*` methods in
 alphabetical order rather than appending them. Do not reorder existing

@@ -82,7 +82,7 @@ async def main(
         client = cast(DnsClientProtocol, client)
         logger.debug("Sending DNS query")
         answer = await client.query(query_name, query_type)
-        logger.info("Received DNS answer\n%s" % answer)
+        logger.info("Received DNS answer\n%s", answer)
 
 
 if __name__ == "__main__":

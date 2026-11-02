@@ -202,9 +202,7 @@ async def test_http_0(server: Server, configuration: QuicConfiguration) -> None:
         protocol = cast(HttpClient, protocol)
 
         # perform HTTP request
-        events = await protocol.get(
-            "https://{}:{}{}".format(server.host, server.port, server.path)
-        )
+        events = await protocol.get(f"https://{server.host}:{server.port}{server.path}")
         if events and isinstance(events[0], HeadersReceived):
             server.result |= Result.D
 
@@ -224,9 +222,7 @@ async def test_http_3(server: Server, configuration: QuicConfiguration) -> None:
         protocol = cast(HttpClient, protocol)
 
         # perform HTTP request
-        events = await protocol.get(
-            "https://{}:{}{}".format(server.host, server.port, server.path)
-        )
+        events = await protocol.get(f"https://{server.host}:{server.port}{server.path}")
         if events and isinstance(events[0], HeadersReceived):
             server.result |= Result.D
             server.result |= Result.three
@@ -234,7 +230,7 @@ async def test_http_3(server: Server, configuration: QuicConfiguration) -> None:
         # perform more HTTP requests to use QPACK dynamic tables
         for i in range(2):
             events = await protocol.get(
-                "https://{}:{}{}".format(server.host, server.port, server.path)
+                f"https://{server.host}:{server.port}{server.path}"
             )
         if events and isinstance(events[0], HeadersReceived):
             http = cast(H3Connection, protocol._http)
@@ -259,9 +255,7 @@ async def test_http_3(server: Server, configuration: QuicConfiguration) -> None:
         # check push support
         if server.push_path is not None:
             protocol.pushes.clear()
-            await protocol.get(
-                "https://{}:{}{}".format(server.host, server.port, server.push_path)
-            )
+            await protocol.get(f"https://{server.host}:{server.port}{server.push_path}")
             await asyncio.sleep(0.5)
             for push_id, events in protocol.pushes.items():
                 if (
@@ -441,7 +435,7 @@ async def test_throughput(server: Server, configuration: QuicConfiguration) -> N
 
     for size in [5000000, 10000000]:
         path = server.throughput_path % {"size": size}
-        print("Testing %d bytes download: %s" % (size, path))
+        print(f"Testing {size} bytes download: {path}")
 
         # perform HTTP request over TCP
         start = time.time()
@@ -467,7 +461,7 @@ async def test_throughput(server: Server, configuration: QuicConfiguration) -> N
             protocol = cast(HttpClient, protocol)
 
             http_events = await protocol.get(
-                "https://{}:{}{}".format(server.host, server.port, path)
+                f"https://{server.host}:{server.port}{path}"
             )
             quic_elapsed = time.time() - start
             quic_octets = 0
@@ -476,8 +470,8 @@ async def test_throughput(server: Server, configuration: QuicConfiguration) -> N
                     quic_octets += len(http_event.data)
         assert quic_octets == size, "HTTP/QUIC response size mismatch"
 
-        print(" - HTTP/TCP  completed in %.3f s" % tcp_elapsed)
-        print(" - HTTP/QUIC completed in %.3f s" % quic_elapsed)
+        print(f" - HTTP/TCP  completed in {tcp_elapsed:.3f} s")
+        print(f" - HTTP/QUIC completed in {quic_elapsed:.3f} s")
 
         if quic_elapsed > 1.1 * tcp_elapsed:
             failures += 1
@@ -492,7 +486,7 @@ async def test_throughput(server: Server, configuration: QuicConfiguration) -> N
 def print_result(server: Server) -> None:
     result = str(server.result).replace("three", "3")
     result = result[0:8] + " " + result[8:16] + " " + result[16:]
-    print("%s%s%s" % (server.name, " " * (20 - len(server.name)), result))
+    print(f"{server.name:<20}{result}")
 
 
 async def main(
@@ -506,7 +500,7 @@ async def main(
         if server.structured_logging:
             server.result |= Result.L
         for test_name, test_func in tests:
-            print("\n=== %s %s ===\n" % (server.name, test_name))
+            print(f"\n=== {server.name} {test_name} ===\n")
             configuration = QuicConfiguration(
                 alpn_protocols=H3_ALPN + H0_ALPN,
                 is_client=True,

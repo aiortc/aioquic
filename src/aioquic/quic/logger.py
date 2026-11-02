@@ -309,7 +309,7 @@ class QuicFileLogger(QuicLogger):
 
     def __init__(self, path: str) -> None:
         if not os.path.isdir(path):
-            raise ValueError("QUIC log output directory '%s' does not exist" % path)
+            raise ValueError(f"QUIC log output directory '{path}' does not exist")
         self.path = path
         super().__init__()
 
