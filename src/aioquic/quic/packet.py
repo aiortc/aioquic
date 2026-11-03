@@ -372,6 +372,7 @@ class QuicTransportParameters:
     version_information: QuicVersionInformation | None = None
     max_datagram_frame_size: int | None = None
     quantum_readiness: bytes | None = None
+    reset_stream_at: bytes | None = None
 
 
 PARAMS = {
@@ -397,6 +398,7 @@ PARAMS = {
     # extensions
     0x0020: ("max_datagram_frame_size", int),
     0x0C37: ("quantum_readiness", bytes),
+    0x1D: ("reset_stream_at", bytes),
 }
 
 
@@ -557,6 +559,7 @@ class QuicFrameType(IntEnum):
     TRANSPORT_CLOSE = 0x1C
     APPLICATION_CLOSE = 0x1D
     HANDSHAKE_DONE = 0x1E
+    RESET_STREAM_AT = 0x24
     DATAGRAM = 0x30
     DATAGRAM_WITH_LENGTH = 0x31
 
