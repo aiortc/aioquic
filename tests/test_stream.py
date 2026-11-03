@@ -3,7 +3,7 @@ from unittest import TestCase
 from aioquic.quic.events import StreamDataReceived, StreamReset
 from aioquic.quic.packet import QuicErrorCode, QuicStreamFrame
 from aioquic.quic.packet_builder import QuicDeliveryState
-from aioquic.quic.stream import FinalSizeError, QuicStream
+from aioquic.quic.stream import FinalSizeError, QuicStream, StreamStateError
 
 
 class QuicStreamTest(TestCase):
@@ -292,6 +292,62 @@ class QuicStreamTest(TestCase):
             stream.receiver.handle_reset(final_size=4),
             StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
         )
+
+    def test_receiver_reset_at_error_code_cannot_change(self) -> None:
+        stream = QuicStream(stream_id=0)
+        stream.receiver.handle_reset_at(
+            error_code=QuicErrorCode.INTERNAL_ERROR, final_size=4, reliable_size=2
+        )
+        with self.assertRaises(StreamStateError):
+            stream.receiver.handle_reset_at(
+                error_code=QuicErrorCode.NO_ERROR, final_size=4, reliable_size=1
+            )
+        with self.assertRaises(StreamStateError):
+            stream.receiver.handle_reset(
+                error_code=QuicErrorCode.NO_ERROR, final_size=4
+            )
+
+    def test_receiver_reset_at_uses_smallest_reliable_size(self) -> None:
+        stream = QuicStream(stream_id=0)
+        stream.receiver.handle_reset_at(
+            error_code=QuicErrorCode.INTERNAL_ERROR, final_size=8, reliable_size=6
+        )
+        stream.receiver.handle_reset_at(
+            error_code=QuicErrorCode.INTERNAL_ERROR, final_size=8, reliable_size=3
+        )
+        self.assertEqual(
+            stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"012")),
+            StreamDataReceived(data=b"012", end_stream=False, stream_id=0),
+        )
+        self.assertEqual(
+            stream.receiver.take_reset_event(),
+            StreamReset(error_code=QuicErrorCode.INTERNAL_ERROR, stream_id=0),
+        )
+
+    def test_receiver_reset_at_waits_for_reliable_data(self) -> None:
+        stream = QuicStream(stream_id=0)
+        self.assertIsNone(
+            stream.receiver.handle_reset_at(
+                error_code=QuicErrorCode.INTERNAL_ERROR,
+                final_size=8,
+                reliable_size=5,
+            )
+        )
+
+        # Out-of-order data is buffered until the reliable prefix is complete.
+        self.assertIsNone(
+            stream.receiver.handle_frame(QuicStreamFrame(offset=5, data=b"567"))
+        )
+        self.assertIsNone(stream.receiver.take_reset_event())
+        self.assertEqual(
+            stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"01234")),
+            StreamDataReceived(data=b"01234567", end_stream=False, stream_id=0),
+        )
+        self.assertEqual(
+            stream.receiver.take_reset_event(),
+            StreamReset(error_code=QuicErrorCode.INTERNAL_ERROR, stream_id=0),
+        )
+        self.assertTrue(stream.receiver.is_finished)
 
     def test_receiver_reset_below_received_data(self) -> None:
         stream = QuicStream(stream_id=0)
@@ -801,6 +857,49 @@ class QuicStreamTest(TestCase):
         # A reset is requested, which has no effect.
         stream.sender.reset(QuicErrorCode.NO_ERROR)
         self.assertFalse(stream.sender.reset_pending)
+
+    def test_sender_reset_at_preserves_sent_final_size(self) -> None:
+        stream = QuicStream()
+        stream.sender.write(b"abcdefgh", end_stream=True)
+        frame = stream.sender.get_frame(8)
+        self.assertTrue(frame.fin)
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 4)
+        self.assertEqual(stream.sender.get_reset_frame().final_size, 8)
+        stream.sender.on_data_delivery(QuicDeliveryState.LOST, 0, 8, True)
+        self.assertEqual(list(stream.sender._pending), [range(0, 4)])
+
+    def test_sender_reset_at_reduces_reliable_size(self) -> None:
+        stream = QuicStream()
+        stream.sender.write(b"abcdefgh")
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 6)
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 3)
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 5)
+        self.assertEqual(stream.sender.reset_reliable_size, 3)
+        self.assertEqual(list(stream.sender._pending), [range(0, 3)])
+
+    def test_sender_reset_at_retransmits_reliable_prefix(self) -> None:
+        stream = QuicStream()
+        stream.sender.write(b"abcdefghij")
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 4)
+        self.assertEqual(list(stream.sender._pending), [range(0, 4)])
+
+        self.assertEqual(
+            stream.sender.get_frame(8),
+            QuicStreamFrame(data=b"abcd", fin=False, offset=0),
+        )
+        stream.sender.on_data_delivery(QuicDeliveryState.LOST, 0, 4, False)
+        self.assertEqual(list(stream.sender._pending), [range(0, 4)])
+        self.assertEqual(
+            stream.sender.get_frame(8),
+            QuicStreamFrame(data=b"abcd", fin=False, offset=0),
+        )
+
+        reset = stream.sender.get_reset_frame()
+        self.assertEqual(reset.final_size, 4)
+        stream.sender.on_reset_delivery(QuicDeliveryState.ACKED, 4)
+        self.assertFalse(stream.sender.is_finished)
+        stream.sender.on_data_delivery(QuicDeliveryState.ACKED, 0, 4, False)
+        self.assertTrue(stream.sender.is_finished)
 
     def test_sender_reset_lost(self) -> None:
         stream = QuicStream()

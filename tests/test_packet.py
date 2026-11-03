@@ -360,6 +360,15 @@ class ParamsTest(TestCase):
         push_quic_transport_parameters(buf, params)
         self.assertEqual(buf.data, data)
 
+    def test_params_reset_stream_at(self) -> None:
+        data = bytes.fromhex("1d00")
+        params = pull_quic_transport_parameters(Buffer(data=data))
+        self.assertEqual(params.reset_stream_at, b"")
+
+        buf = Buffer(capacity=len(data))
+        push_quic_transport_parameters(buf, params)
+        self.assertEqual(buf.data, data)
+
     def test_params_unknown(self) -> None:
         data = bytes.fromhex("8000ff000100")
 

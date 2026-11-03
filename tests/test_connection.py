@@ -66,7 +66,7 @@ SERVER_PREFERRED_ADDRESS = QuicPreferredAddress(
     stateless_reset_token=bytes(16),
 )
 SPOOFED_ADDR = ("6.7.8.9", 1234)
-SERVER_INITIAL_DATAGRAM_SIZES = [1200, 1162]
+SERVER_INITIAL_DATAGRAM_SIZES = [1200, 1164]
 
 HANDSHAKE_COMPLETED_EVENTS = [
     events.HandshakeCompleted,
@@ -861,14 +861,45 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             now = self.advance_by_tick(now)
             client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
             self.assertEqual(
-                client._loss.congestion_window - client._loss.bytes_in_flight, 684
+                client._loss.congestion_window - client._loss.bytes_in_flight, 690
             )
             items = client.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [1200, 580])
+            self.assertEqual(datagram_sizes(items), [1200, 586])
             self.assertAlmostEqual(client.get_timer(), 0.604)
             self.assertSentPackets(client, [0, 1, 12])
             self.assertEvents(
                 client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
+            )
+
+    def test_connect_with_0rtt_reset_stream_at(self) -> None:
+        """Check RESET_STREAM_AT can be used in 0-RTT with remembered support."""
+        client_ticket, ticket_store = self.create_session_ticket()
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            handshake=False,
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+        ) as (client, server):
+            self.watch_timers(client, server)
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            self.assertTrue(client._remote_reset_stream_at)
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, b"hello")
+            client.reset_stream_at(stream_id, QuicErrorCode.INTERNAL_ERROR, 5)
+            items = client.datagrams_to_send(now=now)
+            self.assertTrue(items)
+
+            now = self.advance_by_tick(now)
+            for data, addr in items:
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+            self.assertEvents(
+                server,
+                [
+                    events.ProtocolNegotiated,
+                    events.StreamDataReceived,
+                    events.StreamReset,
+                ],
             )
 
     def test_connect_with_0rtt_without_loss(self) -> None:
@@ -1225,6 +1256,53 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             self.assertAlmostEqual(client.get_timer(), 60.575)  # idle timeout
             self.assertSentPackets(client, [0, 0, 0])
 
+    def test_connect_with_lost_reset_stream_at(self) -> None:
+        """Check a lost RESET_STREAM_AT is retransmitted (draft section 4)."""
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            client.send_stream_data(0, b"hello")
+            client.reset_stream_at(0, QuicErrorCode.INTERNAL_ERROR, 5)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [36, 32])
+            self.assertAlmostEqual(client.get_timer(), 0.625)
+            self.assertSentPackets(client, [0, 0, 3])
+            self.assertEvents(client, [])
+
+            # The server receives the reliable data, but the reset packet is lost.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertEvents(server, [events.StreamDataReceived])
+            self.assertAlmostEqual(server.get_timer(), 0.4)
+            self.assertSentPackets(server, [0, 0, 0])
+            ack_items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(ack_items), [32])
+            self.assertAlmostEqual(server.get_timer(), 60.4)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [])
+
+            # The client acknowledges the data packet, leaving RESET_STREAM_AT
+            # outstanding until its PTO causes a retransmission.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(ack_items[0][0], SERVER_ADDR, now=now)
+            self.assertAlmostEqual(client.get_timer(), 0.5875)
+            self.assertSentPackets(client, [0, 0, 1])
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            retransmit_items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(retransmit_items), [33])
+            self.assertAlmostEqual(client.get_timer(), 1.0625)
+            self.assertSentPackets(client, [0, 0, 1])
+            self.assertEvents(client, [])
+
+            # The retransmitted reset is received and acknowledged by the server.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(retransmit_items[0][0], CLIENT_ADDR, now=now)
+            self.assertEvents(server, [events.StreamReset])
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
+            self.assertSentPackets(server, [0, 0, 1])
+
     def test_connect_with_lost_server_encrypted_extensions(self) -> None:
         """
         Check the client acknowledges the server's HANDSHAKE packets even if the
@@ -1367,7 +1445,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             server.receive_datagram(ack_items[0][0], CLIENT_ADDR, now=now)
             server.receive_datagram(ping_items[0][0], CLIENT_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [1162])
+            self.assertEqual(datagram_sizes(items), [1164])
             self.assertAlmostEqual(server.get_timer(), 0.65)
             self.assertSentPackets(server, [0, 1, 0])
             self.assertEvents(server, [])
@@ -1435,7 +1513,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
             server.send_stream_data(3, bytes(20000))
             items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [1200, 1200, 1155, 45])
+            self.assertEqual(datagram_sizes(items), [1200, 1200, 1157, 43])
             self.assertAlmostEqual(server.get_timer(), 60.05)  # idle timeout
             self.assertSentPackets(server, [1, 3, 1])
             self.assertEvents(server, [events.ProtocolNegotiated])
@@ -1457,19 +1535,19 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             now = self.advance_by_tick(now)
             server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [1200] * 10 + [1110])
+            self.assertEqual(datagram_sizes(items), [1200] * 10 + [1114])
             self.assertAlmostEqual(server.get_timer(), 0.1625)
             self.assertSentPackets(server, [0, 1, 12])
             self.assertEvents(server, [])
-            self.assertEqual(server._loss.bytes_in_flight, 14355)
-            self.assertEqual(server._loss.congestion_window, 14355)
+            self.assertEqual(server._loss.bytes_in_flight, 14357)
+            self.assertEqual(server._loss.congestion_window, 14357)
 
             # Server's loss timer fires, it declares the HANDSHAKE packet lost
             # and resends its data although the congestion window is full.
             now = self.advance_to_timer(now, server)
             server.handle_timer(now=now)
-            self.assertEqual(server._loss.bytes_in_flight, 13155)
-            self.assertEqual(server._loss.congestion_window, 7177)
+            self.assertEqual(server._loss.bytes_in_flight, 13157)
+            self.assertEqual(server._loss.congestion_window, 7178)
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [1200])
             self.assertAlmostEqual(server.get_timer(), 0.4125)
@@ -1796,7 +1874,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             self.assertAlmostEqual(server.get_timer(), 60.05)
             self.assertSentPackets(server, [1, 1, 0])
             self.assertEqual(network_path.bytes_received, 1200)
-            self.assertEqual(network_path.bytes_sent, 3562)
+            self.assertEqual(network_path.bytes_sent, 3564)
 
             # Client's PTO fires, it retransmits INITIAL which is lost.
             now = self.advance_to_timer(now, client)
@@ -1817,7 +1895,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             now = self.advance_by_tick(now)
             server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
             items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [1200, 1164])
+            self.assertEqual(datagram_sizes(items), [1200, 1166])
             self.assertAlmostEqual(server.get_timer(), 1.85)
             self.assertSentPackets(server, [1, 2, 0])
             self.assertEqual(network_path.bytes_received, 2400)
@@ -2347,7 +2425,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             server.send_stream_data(1, bytes(30000))
             server_items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(server_items), [1200] * 4)
-            self.assertAlmostEqual(server.get_timer(), 0.40822425)
+            self.assertAlmostEqual(server.get_timer(), 0.4082231206742959)
             self.assertSentPackets(server, [0, 0, 4])
 
             # Server receives the PING without the budget it brings, so it cannot
@@ -2356,7 +2434,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             server._network_paths[0].bytes_sent += 3 * 29
             items = server.datagrams_to_send(now=now)
             self.assertEqual(datagram_sizes(items), [])
-            self.assertAlmostEqual(server.get_timer(), 0.40822425)
+            self.assertAlmostEqual(server.get_timer(), 0.4082231206742959)
             self.assertEvents(server, [])
 
             # Server's pacing timer fires, but the ACK still has no room and comes
@@ -4831,6 +4909,84 @@ class QuicConnectionTest(QuicConnectionTestCase):
         )
         self.assertEqual(buf.tell(), 10)
 
+    def test_handle_reset_stream_at_reliable_size_exceeds_final_size(self) -> None:
+        with client_and_server() as (client, server):
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_at_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM_AT,
+                    Buffer(
+                        data=encode_uint_var(0)
+                        + encode_uint_var(QuicErrorCode.NO_ERROR)
+                        + encode_uint_var(1)
+                        + encode_uint_var(2)
+                    ),
+                )
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.FRAME_ENCODING_ERROR
+            )
+
+    def test_handle_reset_stream_at_flow_control(self) -> None:
+        with client_and_server() as (client, server):
+            client.send_stream_data(0, b"hello")
+            consume_events(client)
+            used = client._local_max_data.used
+            frame_data = (
+                encode_uint_var(0)
+                + encode_uint_var(QuicErrorCode.NO_ERROR)
+                + encode_uint_var(8)
+                + encode_uint_var(5)
+            )
+
+            client._handle_reset_stream_at_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM_AT,
+                Buffer(data=frame_data),
+            )
+            self.assertEqual(client._local_max_data.used, used + 8)
+
+            # Repeated reset information does not charge the same final size twice.
+            client._handle_reset_stream_at_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM_AT,
+                Buffer(data=frame_data),
+            )
+            self.assertEqual(client._local_max_data.used, used + 8)
+
+    def test_handle_reset_stream_at_waits_for_reliable_data(self) -> None:
+        with client_and_server() as (client, server):
+            consume_events(client)
+            stream_id = 1
+            frame_data = (
+                encode_uint_var(stream_id)
+                + encode_uint_var(QuicErrorCode.INTERNAL_ERROR)
+                + encode_uint_var(8)
+                + encode_uint_var(5)
+            )
+            client._handle_reset_stream_at_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM_AT,
+                Buffer(data=frame_data),
+            )
+            self.assertIsNone(client.next_event())
+
+            client._handle_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.STREAM_BASE | 6,
+                Buffer(
+                    data=encode_uint_var(stream_id)
+                    + encode_uint_var(0)
+                    + encode_uint_var(5)
+                    + b"hello"
+                ),
+            )
+            data_event = client.next_event()
+            reset_event = client.next_event()
+            assert isinstance(data_event, events.StreamDataReceived)
+            self.assertEqual(data_event.data, b"hello")
+            assert isinstance(reset_event, events.StreamReset)
+            self.assertEqual(reset_event.error_code, QuicErrorCode.INTERNAL_ERROR)
+
     def test_handle_reset_stream_frame(self) -> None:
         stream_id = 0
         with client_and_server() as (client, server):
@@ -5553,6 +5709,44 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
         self.assertEqual(
             cm.exception.reason_phrase, "Could not parse QUIC transport parameters"
+        )
+
+    def test_parse_transport_parameters_reset_stream_at(self) -> None:
+        client = create_standalone_client(self)
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                original_destination_connection_id=(
+                    client.original_destination_connection_id
+                ),
+                reset_stream_at=b"",
+            )
+        )
+        client._parse_transport_parameters(data)
+        self.assertTrue(client._remote_reset_stream_at)
+
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                original_destination_connection_id=(
+                    client.original_destination_connection_id
+                ),
+            )
+        )
+        client._parse_transport_parameters(data)
+        self.assertFalse(client._remote_reset_stream_at)
+
+        client = create_standalone_client(self)
+        data = encode_transport_parameters(
+            QuicTransportParameters(
+                original_destination_connection_id=(
+                    client.original_destination_connection_id
+                ),
+                reset_stream_at=b"invalid",
+            )
+        )
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(data)
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
 
     def test_parse_transport_parameters_with_bad_ack_delay_exponent(self) -> None:
@@ -6444,6 +6638,40 @@ class QuicConnectionTest(QuicConnectionTestCase):
             # client resets stream
             client.reset_stream(0, QuicErrorCode.NO_ERROR)
             self.assertEqual(roundtrip(client, server), (1, 1))
+
+    def test_send_reset_stream_at(self) -> None:
+        with client_and_server() as (client, server):
+            consume_events(client)
+            consume_events(server)
+            self.assertTrue(client._remote_reset_stream_at)
+            client.send_stream_data(0, b"hello world")
+            client.reset_stream_at(0, QuicErrorCode.INTERNAL_ERROR, 5)
+            roundtrip_until_done(client, server)
+
+            data_event = server.next_event()
+            reset_event = server.next_event()
+            assert isinstance(data_event, events.StreamDataReceived)
+            self.assertEqual(data_event.data, b"hello")
+            self.assertFalse(data_event.end_stream)
+            assert isinstance(reset_event, events.StreamReset)
+            self.assertEqual(reset_event.error_code, QuicErrorCode.INTERNAL_ERROR)
+
+            # The server can also send RESET_STREAM_AT on the bidirectional stream.
+            server.send_stream_data(0, b"response")
+            server.reset_stream_at(0, QuicErrorCode.NO_ERROR, 6)
+            roundtrip_until_done(server, client)
+            data_event = client.next_event()
+            reset_event = client.next_event()
+            assert isinstance(data_event, events.StreamDataReceived)
+            self.assertEqual(data_event.data, b"respon")
+            assert isinstance(reset_event, events.StreamReset)
+            self.assertEqual(reset_event.error_code, QuicErrorCode.NO_ERROR)
+
+    def test_send_reset_stream_at_requires_peer_support(self) -> None:
+        with client_and_server() as (client, server):
+            client._remote_reset_stream_at = False
+            with self.assertRaises(RuntimeError):
+                client.reset_stream_at(0, QuicErrorCode.NO_ERROR, 0)
 
     def test_send_stop_sending(self) -> None:
         with client_and_server() as (client, server):
