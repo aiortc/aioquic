@@ -4857,6 +4857,114 @@ class QuicConnectionTest(QuicConnectionTestCase):
             )
             self.assertEqual(client._local_max_data.used, used + 8)
 
+    def test_handle_reset_stream_at_logs_frame(self) -> None:
+        with client_and_server() as (client, server):
+            context = client_receive_context(client)
+            client._handle_reset_stream_at_frame(
+                context,
+                QuicFrameType.RESET_STREAM_AT,
+                Buffer(
+                    data=encode_uint_var(1)
+                    + encode_uint_var(QuicErrorCode.INTERNAL_ERROR)
+                    + encode_uint_var(4)
+                    + encode_uint_var(2)
+                ),
+            )
+            self.assertEqual(
+                context.quic_logger_frames,
+                [
+                    {
+                        "error_code": int(QuicErrorCode.INTERNAL_ERROR),
+                        "final_size": 4,
+                        "frame_type": "reset_stream_at",
+                        "reliable_size": 2,
+                        "stream_id": 1,
+                    }
+                ],
+            )
+
+    def test_handle_reset_stream_at_rejects_changed_error_code(self) -> None:
+        with client_and_server() as (client, server):
+            first_frame = (
+                encode_uint_var(1)
+                + encode_uint_var(QuicErrorCode.NO_ERROR)
+                + encode_uint_var(4)
+                + encode_uint_var(0)
+            )
+            client._handle_reset_stream_at_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM_AT,
+                Buffer(data=first_frame),
+            )
+            changed_frame = (
+                encode_uint_var(1)
+                + encode_uint_var(QuicErrorCode.INTERNAL_ERROR)
+                + encode_uint_var(4)
+                + encode_uint_var(0)
+            )
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_at_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM_AT,
+                    Buffer(data=changed_frame),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.STREAM_STATE_ERROR)
+
+    def test_handle_reset_stream_at_rejects_changed_final_size(self) -> None:
+        with client_and_server() as (client, server):
+            first_frame = (
+                encode_uint_var(1)
+                + encode_uint_var(QuicErrorCode.NO_ERROR)
+                + encode_uint_var(4)
+                + encode_uint_var(0)
+            )
+            client._handle_reset_stream_at_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM_AT,
+                Buffer(data=first_frame),
+            )
+            changed_frame = (
+                encode_uint_var(1)
+                + encode_uint_var(QuicErrorCode.NO_ERROR)
+                + encode_uint_var(5)
+                + encode_uint_var(0)
+            )
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_at_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM_AT,
+                    Buffer(data=changed_frame),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.FINAL_SIZE_ERROR)
+
+    def test_handle_reset_stream_at_rejects_flow_control_limits(self) -> None:
+        with client_and_server() as (client, server):
+            frame_data = (
+                encode_uint_var(1)
+                + encode_uint_var(QuicErrorCode.NO_ERROR)
+                + encode_uint_var(2)
+                + encode_uint_var(1)
+            )
+            stream = client._get_or_create_stream(QuicFrameType.RESET_STREAM_AT, 1)
+            stream.max_stream_data_local = 1
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_at_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM_AT,
+                    Buffer(data=frame_data),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.FLOW_CONTROL_ERROR)
+
+            stream.max_stream_data_local = UINT_VAR_MAX
+            client._local_max_data.value = 1
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_at_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM_AT,
+                    Buffer(data=frame_data),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.FLOW_CONTROL_ERROR)
+
     def test_handle_reset_stream_at_waits_for_reliable_data(self) -> None:
         with client_and_server() as (client, server):
             consume_events(client)
@@ -6550,6 +6658,13 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(data_event.data, b"respon")
             assert isinstance(reset_event, events.StreamReset)
             self.assertEqual(reset_event.error_code, QuicErrorCode.NO_ERROR)
+
+    def test_send_reset_stream_at_discarded_stream(self) -> None:
+        with client_and_server() as (client, server):
+            client._local_next_stream_id_bidi = 4
+            self.assertNotIn(0, client._streams)
+            client.reset_stream_at(0, QuicErrorCode.NO_ERROR, 0)
+            self.assertNotIn(0, client._streams)
 
     def test_send_reset_stream_at_requires_peer_support(self) -> None:
         with client_and_server() as (client, server):
