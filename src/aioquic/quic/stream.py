@@ -150,8 +150,7 @@ class QuicStreamReceiver:
             self.highest_offset = final_size
 
         self._reset_error_code = error_code
-        if self._reset_at_reliable_size is None:
-            self._reset_at_reliable_size = 0
+        self._reset_at_reliable_size = 0
 
         # if we were already done receiving, there is nothing to report
         if self.is_finished:
@@ -460,7 +459,9 @@ class QuicStreamSender:
     def reset_at(self, error_code: int, reliable_size: int) -> None:
         if reliable_size < 0 or reliable_size > UINT_VAR_MAX:
             raise ValueError("reliable_size is outside the QUIC variable integer range")
-        if self._reset_error_code is not None or self.is_finished:
+        if self.is_finished:
+            return
+        if self._reset_error_code is not None:
             if self._reset_reliable_size is not None:
                 if reliable_size < self._reset_reliable_size:
                     self._reset_reliable_size = reliable_size
