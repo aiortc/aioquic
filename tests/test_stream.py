@@ -517,6 +517,7 @@ class QuicStreamTest(TestCase):
     def test_sender_data(self) -> None:
         stream = QuicStream()
         self.assertEqual(stream.sender.next_offset, 0)
+        self.assertEqual(stream.sender.reset_final_size, 0)
 
         # nothing to send yet
         frame = stream.sender.get_frame(8)
@@ -542,6 +543,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(frame.offset, 8)
         self.assertEqual(list(stream.sender._pending), [])
         self.assertEqual(stream.sender.next_offset, 16)
+        self.assertEqual(stream.sender.reset_final_size, 16)
 
         # nothing more to send
         frame = stream.sender.get_frame(8)
@@ -934,6 +936,20 @@ class QuicStreamTest(TestCase):
         stream.sender.reset(QuicErrorCode.NO_ERROR)
         self.assertFalse(stream.sender.reset_pending)
 
+    def test_sender_reset_after_reset_at_reduces_final_size_before_frame_sent(
+        self,
+    ) -> None:
+        stream = QuicStream()
+        stream.sender.write(b"abcdef")
+        stream.sender.get_frame(3)
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 5)
+        self.assertEqual(stream.sender.reset_final_size, 5)
+
+        stream.sender.reset(QuicErrorCode.NO_ERROR)
+        self.assertEqual(stream.sender.reset_reliable_size, 0)
+        self.assertEqual(stream.sender.reset_final_size, 3)
+        self.assertEqual(stream.sender.get_reset_frame().final_size, 3)
+
     def test_sender_reset_after_reset_at_reduces_reliable_size_to_zero(self) -> None:
         stream = QuicStream()
         stream.sender.write(b"data")
@@ -941,7 +957,7 @@ class QuicStreamTest(TestCase):
         stream.sender.reset(QuicErrorCode.NO_ERROR)
         self.assertEqual(stream.sender.reset_reliable_size, 0)
         self.assertTrue(stream.sender.reset_pending)
-        self.assertEqual(stream.sender.get_reset_frame().final_size, 3)
+        self.assertEqual(stream.sender.get_reset_frame().final_size, 0)
 
     def test_sender_reset_at_after_reset_has_no_effect(self) -> None:
         stream = QuicStream()
@@ -972,6 +988,17 @@ class QuicStreamTest(TestCase):
         stream.sender.on_reset_delivery(QuicDeliveryState.ACKED, 4)
         self.assertFalse(stream.sender.is_finished)
         self.assertTrue(stream.sender.reset_pending)
+
+    def test_sender_reset_at_reducing_reliable_size_before_frame_preserves_final_size(
+        self,
+    ) -> None:
+        stream = QuicStream()
+        stream.sender.write(b"abcdef")
+        stream.sender.get_frame(3)
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 5)
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 2)
+        self.assertEqual(stream.sender.reset_final_size, 3)
+        self.assertEqual(stream.sender.get_reset_frame().final_size, 3)
 
     def test_sender_reset_at_preserves_sent_final_size(self) -> None:
         stream = QuicStream()

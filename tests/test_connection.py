@@ -6693,6 +6693,52 @@ class QuicConnectionTest(QuicConnectionTestCase):
             client.reset_stream_at(0, QuicErrorCode.NO_ERROR, 0)
             self.assertNotIn(0, client._streams)
 
+    def test_send_reset_stream_at_reduces_final_size_before_frame_sent(self) -> None:
+        with client_and_server() as (client, server):
+            client.send_stream_data(0, b"abcdef")
+            stream = client._streams[0]
+            stream.max_stream_data_remote = 3
+            client.datagrams_to_send(now=time.time())
+            self.assertEqual(stream.sender.highest_offset, 3)
+
+            client.reset_stream_at(0, QuicErrorCode.INTERNAL_ERROR, 5)
+            stream.max_stream_data_remote = 4
+            client.datagrams_to_send(now=time.time())
+            self.assertEqual(stream.sender.highest_offset, 4)
+            sent_frame_types = [
+                frame["frame_type"]
+                for event in client.configuration.quic_logger.to_dict()["traces"][0][
+                    "events"
+                ]
+                if event["name"] == "transport:packet_sent"
+                for frame in event["data"]["frames"]
+            ]
+            self.assertNotIn("reset_stream_at", sent_frame_types)
+
+            client.reset_stream(0, QuicErrorCode.NO_ERROR)
+            client.datagrams_to_send(now=time.time())
+            reset_at_frames = [
+                frame
+                for event in client.configuration.quic_logger.to_dict()["traces"][0][
+                    "events"
+                ]
+                if event["name"] == "transport:packet_sent"
+                for frame in event["data"]["frames"]
+                if frame["frame_type"] == "reset_stream_at"
+            ]
+            self.assertEqual(
+                reset_at_frames,
+                [
+                    {
+                        "error_code": QuicErrorCode.INTERNAL_ERROR,
+                        "final_size": 4,
+                        "frame_type": "reset_stream_at",
+                        "reliable_size": 0,
+                        "stream_id": 0,
+                    }
+                ],
+            )
+
     def test_send_reset_stream_at_requires_peer_support(self) -> None:
         with client_and_server() as (client, server):
             client._remote_reset_stream_at = False

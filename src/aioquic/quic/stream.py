@@ -267,6 +267,7 @@ class QuicStreamSender:
         self._pending_eof = False
         self._reset_error_code: int | None = None
         self._reset_final_size: int | None = None
+        self._reset_frame_sent = False
         self._reset_reliable_size: int | None = None
         self._reset_acked = False
         self._stream_id = stream_id
@@ -355,6 +356,7 @@ class QuicStreamSender:
 
     def get_reset_frame(self) -> QuicResetStreamFrame:
         self.reset_pending = False
+        self._reset_frame_sent = True
         return QuicResetStreamFrame(
             error_code=self._reset_error_code,
             final_size=self.reset_final_size,
@@ -449,12 +451,15 @@ class QuicStreamSender:
         if self._reset_error_code is None and not self.is_finished:
             self._reset_error_code = error_code
             self._reset_final_size = self.highest_offset
+            self._reset_frame_sent = False
             self.reset_pending = True
 
             # Prevent any more data from being sent or re-sent.
             self.buffer_is_empty = True
         elif self._reset_reliable_size is not None and not self.is_finished:
             self._reset_reliable_size = 0
+            if not self._reset_frame_sent:
+                self._reset_final_size = self.highest_offset
             self._reset_acked = False
             self._pending.subtract(0, UINT_VAR_MAX + 1)
             self._pending_eof = False
@@ -470,6 +475,8 @@ class QuicStreamSender:
             if self._reset_reliable_size is not None:
                 if reliable_size < self._reset_reliable_size:
                     self._reset_reliable_size = reliable_size
+                    if not self._reset_frame_sent:
+                        self._reset_final_size = max(self.highest_offset, reliable_size)
                     self._reset_acked = False
                     self._pending.subtract(reliable_size, UINT_VAR_MAX + 1)
                 self.reset_pending = True

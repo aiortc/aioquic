@@ -55,7 +55,6 @@ from .recovery import MAX_ACK_RANGES, QuicPacketRecovery, QuicPacketSpace
 from .stream import (
     FinalSizeError,
     QuicStream,
-    ReliableSizeError,
     StreamFinishedError,
     StreamStateError,
 )
@@ -1234,7 +1233,8 @@ class QuicConnection:
 
         This method has no effect if a reset has already been triggered either by a
         call to :meth:`reset_stream` or by the reception of a STOP_SENDING frame, or
-        if all the stream's data has already been acknowledged.
+        if all the stream's data has already been acknowledged. After
+        :meth:`reset_stream_at`, it lowers the reliable size to zero.
 
         .. aioquic_transmit::
 
@@ -2620,12 +2620,6 @@ class QuicConnection:
                 error_code=error_code,
                 final_size=final_size,
                 reliable_size=reliable_size,
-            )
-        except ReliableSizeError as exc:
-            raise QuicConnectionError(
-                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
-                frame_type=frame_type,
-                reason_phrase=str(exc),
             )
         except (FinalSizeError, StreamStateError) as exc:
             raise QuicConnectionError(
