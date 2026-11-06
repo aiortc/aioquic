@@ -14,6 +14,10 @@ class FinalSizeError(Exception):
     pass
 
 
+class ReliableSizeError(Exception):
+    pass
+
+
 class StreamFinishedError(Exception):
     pass
 
@@ -165,7 +169,7 @@ class QuicStreamReceiver:
         self, *, final_size: int, reliable_size: int, error_code: int
     ) -> events.StreamReset | None:
         if reliable_size > final_size:
-            raise FinalSizeError("Reliable size exceeds final size")
+            raise ReliableSizeError("Reliable size exceeds final size")
         if self._final_size is not None and final_size != self._final_size:
             raise FinalSizeError("Cannot change final size")
         if self._reset_error_code is not None and error_code != self._reset_error_code:
@@ -262,6 +266,7 @@ class QuicStreamSender:
         self._pending = RangeSet()
         self._pending_eof = False
         self._reset_error_code: int | None = None
+        self._reset_final_size: int | None = None
         self._reset_reliable_size: int | None = None
         self._reset_acked = False
         self._stream_id = stream_id
@@ -284,7 +289,9 @@ class QuicStreamSender:
 
     @property
     def reset_final_size(self) -> int:
-        return max(self.highest_offset, self._reset_reliable_size or 0)
+        if self._reset_final_size is not None:
+            return self._reset_final_size
+        return self.highest_offset
 
     def get_frame(
         self, max_size: int, max_offset: int | None = None
@@ -350,10 +357,7 @@ class QuicStreamSender:
         self.reset_pending = False
         return QuicResetStreamFrame(
             error_code=self._reset_error_code,
-            final_size=max(
-                self.highest_offset,
-                self._reset_reliable_size or 0,
-            ),
+            final_size=self.reset_final_size,
             stream_id=self._stream_id,
         )
 
@@ -444,6 +448,7 @@ class QuicStreamSender:
         """
         if self._reset_error_code is None and not self.is_finished:
             self._reset_error_code = error_code
+            self._reset_final_size = self.highest_offset
             self.reset_pending = True
 
             # Prevent any more data from being sent or re-sent.
@@ -473,6 +478,7 @@ class QuicStreamSender:
             raise ValueError("reliable_size exceeds stream data written")
         self._reset_error_code = error_code
         self._reset_reliable_size = reliable_size
+        self._reset_final_size = max(self.highest_offset, reliable_size)
         self.reset_pending = True
         self.buffer_is_empty = reliable_size <= self._buffer_start
         self._pending_eof = False
