@@ -4,7 +4,12 @@ from aioquic.buffer import UINT_VAR_MAX
 from aioquic.quic.events import StreamDataReceived, StreamReset
 from aioquic.quic.packet import QuicErrorCode, QuicStreamFrame
 from aioquic.quic.packet_builder import QuicDeliveryState
-from aioquic.quic.stream import FinalSizeError, QuicStream, StreamStateError
+from aioquic.quic.stream import (
+    FinalSizeError,
+    QuicStream,
+    ReliableSizeError,
+    StreamStateError,
+)
 
 
 class QuicStreamTest(TestCase):
@@ -334,7 +339,7 @@ class QuicStreamTest(TestCase):
 
     def test_receiver_reset_at_rejects_invalid_final_size(self) -> None:
         stream = QuicStream(stream_id=0)
-        with self.assertRaises(FinalSizeError):
+        with self.assertRaises(ReliableSizeError):
             stream.receiver.handle_reset_at(
                 error_code=QuicErrorCode.NO_ERROR,
                 final_size=1,
@@ -936,7 +941,7 @@ class QuicStreamTest(TestCase):
         stream.sender.reset(QuicErrorCode.NO_ERROR)
         self.assertEqual(stream.sender.reset_reliable_size, 0)
         self.assertTrue(stream.sender.reset_pending)
-        self.assertEqual(stream.sender.get_reset_frame().final_size, 0)
+        self.assertEqual(stream.sender.get_reset_frame().final_size, 3)
 
     def test_sender_reset_at_after_reset_has_no_effect(self) -> None:
         stream = QuicStream()
@@ -986,6 +991,17 @@ class QuicStreamTest(TestCase):
         stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 5)
         self.assertEqual(stream.sender.reset_reliable_size, 3)
         self.assertEqual(list(stream.sender._pending), [range(0, 3)])
+
+    def test_sender_reset_at_reducing_reliable_size_preserves_final_size(self) -> None:
+        stream = QuicStream()
+        stream.sender.write(b"abcdef")
+        stream.sender.get_frame(3)
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 5)
+        self.assertEqual(stream.sender.get_reset_frame().final_size, 5)
+
+        stream.sender.reset_at(QuicErrorCode.INTERNAL_ERROR, 2)
+        self.assertEqual(stream.sender.reset_final_size, 5)
+        self.assertEqual(stream.sender.get_reset_frame().final_size, 5)
 
     def test_sender_reset_at_rejects_invalid_reliable_size(self) -> None:
         stream = QuicStream()

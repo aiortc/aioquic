@@ -52,7 +52,13 @@ from .packet_builder import (
     QuicPacketBuilderStop,
 )
 from .recovery import MAX_ACK_RANGES, QuicPacketRecovery, QuicPacketSpace
-from .stream import FinalSizeError, QuicStream, StreamFinishedError, StreamStateError
+from .stream import (
+    FinalSizeError,
+    QuicStream,
+    ReliableSizeError,
+    StreamFinishedError,
+    StreamStateError,
+)
 
 logger = logging.getLogger("quic")
 
@@ -2615,6 +2621,12 @@ class QuicConnection:
                 final_size=final_size,
                 reliable_size=reliable_size,
             )
+        except ReliableSizeError as exc:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
         except (FinalSizeError, StreamStateError) as exc:
             raise QuicConnectionError(
                 error_code=(
@@ -3877,11 +3889,7 @@ class QuicConnection:
                     )
                     can_send_reset = stream.sender.reset_pending and (
                         stream.sender.reset_reliable_size is None
-                        or (
-                            stream.sender.highest_offset
-                            >= stream.sender.reset_reliable_size
-                            and stream.sender.reset_final_size <= max_stream_offset
-                        )
+                        or stream.sender.reset_final_size <= max_stream_offset
                     )
                     if can_send_reset:
                         # RESET_STREAM or RESET_STREAM_AT.
