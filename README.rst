@@ -56,7 +56,7 @@ A lot of effort has gone into writing an extensive test suite for the
 Features
 --------
 
-- minimal TLS 1.3 implementation conforming with `RFC 8446`_
+- minimal TLS 1.3 implementation conforming with `RFC 9846`_
 - QUIC stack conforming with `RFC 9000`_ (QUIC v1) and `RFC 9369`_ (QUIC v2)
    * IPv4 and IPv6 support
    * connection migration and NAT rebinding
@@ -110,7 +110,7 @@ License
 .. _QUIC implementations: https://github.com/quicwg/base-drafts/wiki/Implementations
 .. _cryptography: https://cryptography.io/
 .. _BSD license: https://aioquic.readthedocs.io/en/latest/license.html
-.. _RFC 8446: https://datatracker.ietf.org/doc/html/rfc8446
+.. _RFC 9846: https://datatracker.ietf.org/doc/html/rfc9846
 .. _RFC 9000: https://datatracker.ietf.org/doc/html/rfc9000
 .. _RFC 9114: https://datatracker.ietf.org/doc/html/rfc9114
 .. _RFC 9220: https://datatracker.ietf.org/doc/html/rfc9220

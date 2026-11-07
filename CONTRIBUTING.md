@@ -23,7 +23,7 @@ Work on a branch and open a pull request against `main`.
 
 **RFCs are the authority.** When fixing a bug or implementing new code,
 ground the implementation in the relevant RFC sections (e.g. RFC 9000,
-9001, 9002, 8446, 9114) and read the actual text rather than relying on
+9001, 9002, 9846, 9114) and read the actual text rather than relying on
 memory. Note where a MUST, SHOULD or MAY applies, and justify behaviour
 changes, in comments and commit messages, by the RFC alone.
 
