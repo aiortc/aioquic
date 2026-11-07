@@ -112,6 +112,22 @@ def create_buffers() -> dict[tls.Epoch, Buffer]:
     }
 
 
+def create_session_ticket() -> SessionTicket:
+    """
+    Create an AES_256_GCM_SHA384 session ticket, valid for an hour.
+    """
+    now = datetime.datetime.now(datetime.UTC)
+    return SessionTicket(
+        age_add=0,
+        cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
+        not_valid_after=now + datetime.timedelta(hours=1),
+        not_valid_before=now,
+        resumption_secret=bytes(48),
+        server_name="localhost",
+        ticket=b"ticket",
+    )
+
+
 def merge_buffers(buffers: dict[tls.Epoch, Buffer]) -> bytes:
     return b"".join(x.data for x in buffers.values())
 
@@ -142,6 +158,25 @@ def modify_server_hello(data: bytes, **changes: Any) -> bytes:
     output = Buffer(capacity=len(data) + 64)
     push_server_hello(output, hello)
     return output.data + data[buf.tell() :]
+
+
+def rename_client_hello_extension(data: bytes, extension_type: int) -> bytes:
+    """
+    Rename an extension of the ClientHello at the start of `data` to a GREASE
+    type, which the server ignores.
+    """
+    buf = Buffer(data=data)
+    buf.seek(4 + 2 + 32)  # handshake header, legacy version, random
+    tls.pull_opaque(buf, 1)  # legacy_session_id
+    tls.pull_opaque(buf, 2)  # cipher_suites
+    tls.pull_opaque(buf, 1)  # legacy_compression_methods
+    end = buf.pull_uint16() + buf.tell()
+    while buf.tell() < end:
+        start = buf.tell()
+        if buf.pull_uint16() == extension_type:
+            return data[:start] + b"\xfa\xfa" + data[start + 2 :]
+        tls.pull_opaque(buf, 2)
+    raise ValueError(f"ClientHello has no extension {extension_type}")
 
 
 def reset_buffers(buffers: dict[tls.Epoch, Buffer]) -> None:
@@ -549,35 +584,42 @@ class ContextTest(TestCase):
             ),
         )
 
-    def test_server_no_key_share(self) -> None:
-        client = self.create_client()
-        server = self.create_server()
-
-        # Send client hello, renaming the key share extension, which comes first.
+    def _server_fail_hello(
+        self,
+        client: Context,
+        server: Context,
+        missing_extension: tls.ExtensionType | None = None,
+    ) -> None:
+        # Send client hello, optionally without one of its extensions.
         client_buf = create_buffers()
         client.handle_message(b"", client_buf)
+        self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
         server_input = merge_buffers(client_buf)
-        hello = pull_client_hello(Buffer(data=server_input))
-        offset = (
-            4  # handshake header
-            + 2  # legacy version
-            + 32  # random
-            + 1
-            + len(hello.legacy_session_id)
-            + 2
-            + 2 * len(hello.cipher_suites)
-            + 1
-            + len(hello.legacy_compression_methods)
-            + 2  # extensions length
-        )
-        self.assertEqual(server_input[offset : offset + 2], b"\x00\x33")
-        server_input = server_input[:offset] + b"\xfa\xfa" + server_input[offset + 2 :]
+        if missing_extension is not None:
+            server_input = rename_client_hello_extension(
+                server_input, missing_extension
+            )
+        reset_buffers(client_buf)
 
-        with self.assertRaises(tls.AlertMissingExtension) as cm:
-            server.handle_message(server_input, create_buffers())
-        self.assertEqual(str(cm.exception), "ClientHello has no key share")
+        # Handle client hello.
+        server_buf = create_buffers()
+        server.handle_message(server_input, server_buf)
 
-    def test_server_invalid_key_share(self) -> None:
+    def test_server_bad_hello_compression_methods(self) -> None:
+        for compression_methods in [[tls.CompressionMethod.NULL, 1], [1]]:
+            with self.subTest(compression_methods):
+                client = self.create_client()
+                client._legacy_compression_methods = compression_methods
+                server = self.create_server()
+
+                with self.assertRaises(tls.AlertIllegalParameter) as cm:
+                    self._server_fail_hello(client, server)
+                self.assertEqual(
+                    str(cm.exception),
+                    "ClientHello has a compression method other than null",
+                )
+
+    def test_server_bad_hello_invalid_key_share(self) -> None:
         client = self.create_client()
         client._supported_groups = [tls.Group.SECP256R1]
         server = self.create_server()
@@ -594,7 +636,7 @@ class ContextTest(TestCase):
             server.handle_message(server_input, create_buffers())
         self.assertEqual(str(cm.exception), "ClientHello has an invalid key share")
 
-    def test_server_invalid_key_share_x25519_all_zero(self) -> None:
+    def test_server_bad_hello_invalid_key_share_x25519_all_zero(self) -> None:
         client = self.create_client()
         client._supported_groups = [tls.Group.X25519]
         server = self.create_server()
@@ -612,6 +654,146 @@ class ContextTest(TestCase):
         with self.assertRaises(tls.AlertIllegalParameter) as cm:
             server.handle_message(server_input, create_buffers())
         self.assertEqual(str(cm.exception), "ClientHello has an invalid key share")
+
+    def test_server_bad_hello_missing_extension(self) -> None:
+        """
+        A ClientHello without a PSK must send the extensions for (EC)DHE key
+        exchange and signature algorithms (RFC 9846 section 9.2).
+        """
+        for extension_type, message in [
+            (tls.ExtensionType.KEY_SHARE, "ClientHello has no key share"),
+            (
+                tls.ExtensionType.SIGNATURE_ALGORITHMS,
+                "ClientHello has no signature algorithms",
+            ),
+            (tls.ExtensionType.SUPPORTED_GROUPS, "ClientHello has no supported groups"),
+        ]:
+            with self.subTest(extension_type.name):
+                client = self.create_client()
+                server = self.create_server()
+
+                with self.assertRaises(tls.AlertMissingExtension) as cm:
+                    self._server_fail_hello(
+                        client, server, missing_extension=extension_type
+                    )
+                self.assertEqual(str(cm.exception), message)
+
+    def test_server_bad_hello_missing_psk_key_exchange_modes(self) -> None:
+        """
+        A ClientHello offering a PSK must send its key exchange modes
+        (RFC 9846 section 4.3.9).
+        """
+        client = self.create_client()
+        client.session_ticket = create_session_ticket()
+        server = self.create_server()
+
+        with self.assertRaises(tls.AlertMissingExtension) as cm:
+            self._server_fail_hello(
+                client,
+                server,
+                missing_extension=tls.ExtensionType.PSK_KEY_EXCHANGE_MODES,
+            )
+        self.assertEqual(str(cm.exception), "ClientHello has no PSK key exchange modes")
+
+    def test_server_bad_hello_psk_binder(self) -> None:
+        ticket = create_session_ticket()
+        client = self.create_client()
+        client.session_ticket = ticket
+        server = self.create_server()
+        server.get_session_ticket_cb = lambda label: ticket
+
+        # Send client hello, tampering with the PSK binder, which comes last.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        server_input = merge_buffers(client_buf)[:-4] + bytes(4)
+
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            server.handle_message(server_input, create_buffers())
+        self.assertEqual(str(cm.exception), "ClientHello has an invalid PSK binder")
+
+    def test_server_bad_hello_rsa_pkcs1_signature(self) -> None:
+        """
+        RSASSA-PKCS1-v1_5 cannot be used in CertificateVerify (RFC 9846 section
+        4.3.3).
+        """
+        for signature_algorithm in [
+            tls.SignatureAlgorithm.RSA_PKCS1_SHA1,
+            tls.SignatureAlgorithm.RSA_PKCS1_SHA256,
+            tls.SignatureAlgorithm.RSA_PKCS1_SHA384,
+        ]:
+            with self.subTest(signature_algorithm.name):
+                client = self.create_client()
+                client._signature_algorithms = [signature_algorithm]
+                server = self.create_server()
+
+                with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+                    self._server_fail_hello(client, server)
+                self.assertEqual(
+                    str(cm.exception),
+                    "ClientHello has no supported signature algorithm",
+                )
+
+    def test_server_bad_hello_unsupported_alpn_protocol(self) -> None:
+        client = self.create_client(alpn_protocols=["hq-interop"])
+        server = self.create_server(alpn_protocols=["h3"])
+
+        with self.assertRaises(tls.AlertNoApplicationProtocol) as cm:
+            self._server_fail_hello(client, server)
+        self.assertEqual(str(cm.exception), "ClientHello has no common ALPN protocol")
+
+    def test_server_bad_hello_unsupported_cipher_suite(self) -> None:
+        client = self.create_client(cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256])
+
+        server = self.create_server(cipher_suites=[tls.CipherSuite.AES_256_GCM_SHA384])
+
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            self._server_fail_hello(client, server)
+        self.assertEqual(str(cm.exception), "ClientHello has no supported cipher suite")
+
+    def test_server_bad_hello_unsupported_group(self) -> None:
+        client = self.create_client()
+        client._supported_groups = [tls.Group.GREASE]
+
+        server = self.create_server()
+
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            self._server_fail_hello(client, server)
+        self.assertEqual(str(cm.exception), "ClientHello has no supported key share")
+
+    def test_server_bad_hello_unsupported_group_by_server(self) -> None:
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP256R1]
+
+        server = self.create_server()
+        server._supported_groups = [tls.Group.SECP384R1]
+
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            self._server_fail_hello(client, server)
+        self.assertEqual(str(cm.exception), "ClientHello has no supported key share")
+
+    def test_server_bad_hello_unsupported_signature_algorithm(self) -> None:
+        client = self.create_client()
+        client._signature_algorithms = [tls.SignatureAlgorithm.ED448]
+
+        server = self.create_server()
+
+        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
+            self._server_fail_hello(client, server)
+        self.assertEqual(
+            str(cm.exception), "ClientHello has no supported signature algorithm"
+        )
+
+    def test_server_bad_hello_unsupported_version(self) -> None:
+        client = self.create_client()
+        client._supported_versions = [tls.TLS_VERSION_1_2]
+
+        server = self.create_server()
+
+        with self.assertRaises(tls.AlertProtocolVersion) as cm:
+            self._server_fail_hello(client, server)
+        self.assertEqual(
+            str(cm.exception), "ClientHello has no supported protocol version"
+        )
 
     def test_server_malformed_certificate(self) -> None:
         certificate, private_key = generate_rsa_certificate(
@@ -649,68 +831,6 @@ class ContextTest(TestCase):
         server.state = State.SERVER_POST_HANDSHAKE
         with self.assertRaises(tls.AlertUnexpectedMessage):
             server.handle_message(b"\x00\x00\x00\x00", create_buffers())
-
-    def _server_fail_hello(self, client: Context, server: Context) -> None:
-        # Send client hello.
-        client_buf = create_buffers()
-        client.handle_message(b"", client_buf)
-        self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
-        server_input = merge_buffers(client_buf)
-        reset_buffers(client_buf)
-
-        # Handle client hello.
-        server_buf = create_buffers()
-        server.handle_message(server_input, server_buf)
-
-    def test_server_unsupported_cipher_suite(self) -> None:
-        client = self.create_client(cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256])
-
-        server = self.create_server(cipher_suites=[tls.CipherSuite.AES_256_GCM_SHA384])
-
-        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
-            self._server_fail_hello(client, server)
-        self.assertEqual(str(cm.exception), "No supported cipher suite")
-
-    def test_server_unsupported_group(self) -> None:
-        client = self.create_client()
-        client._supported_groups = [tls.Group.GREASE]
-
-        server = self.create_server()
-
-        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
-            self._server_fail_hello(client, server)
-        self.assertEqual(str(cm.exception), "No supported key share")
-
-    def test_server_unsupported_group_by_server(self) -> None:
-        client = self.create_client()
-        client._supported_groups = [tls.Group.SECP256R1]
-
-        server = self.create_server()
-        server._supported_groups = [tls.Group.SECP384R1]
-
-        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
-            self._server_fail_hello(client, server)
-        self.assertEqual(str(cm.exception), "No supported key share")
-
-    def test_server_unsupported_signature_algorithm(self) -> None:
-        client = self.create_client()
-        client._signature_algorithms = [tls.SignatureAlgorithm.ED448]
-
-        server = self.create_server()
-
-        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
-            self._server_fail_hello(client, server)
-        self.assertEqual(str(cm.exception), "No supported signature algorithm")
-
-    def test_server_unsupported_version(self) -> None:
-        client = self.create_client()
-        client._supported_versions = [tls.TLS_VERSION_1_2]
-
-        server = self.create_server()
-
-        with self.assertRaises(tls.AlertProtocolVersion) as cm:
-            self._server_fail_hello(client, server)
-        self.assertEqual(str(cm.exception), "No supported protocol version")
 
     def test_server_bad_finished_verify_data(self) -> None:
         client = self.create_client()
@@ -983,14 +1103,6 @@ class ContextTest(TestCase):
         self.assertEqual(client.alpn_negotiated, "hq-interop")
         self.assertEqual(server.alpn_negotiated, "hq-interop")
 
-    def test_handshake_with_alpn_fail(self) -> None:
-        client = self.create_client(alpn_protocols=["hq-interop"])
-        server = self.create_server(alpn_protocols=["h3"])
-
-        with self.assertRaises(tls.AlertNoApplicationProtocol) as cm:
-            self._handshake(client, server)
-        self.assertEqual(str(cm.exception), "No common ALPN protocols")
-
     def test_handshake_with_alpn_fail_client_not_offered(self) -> None:
         client = self.create_client(alpn_protocols=["hq-interop"])
         server = self.create_server(alpn_protocols=["hq-interop"])
@@ -1009,36 +1121,6 @@ class ContextTest(TestCase):
         with self.assertRaises(tls.AlertNoApplicationProtocol) as cm:
             self._handshake(client, server)
         self.assertEqual(str(cm.exception), "No common ALPN protocols")
-
-    def test_handshake_with_rsa_pkcs1_sha1_signature(self) -> None:
-        client = self.create_client()
-        client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PKCS1_SHA1]
-        server = self.create_server()
-
-        # RSASSA-PKCS1-v1_5 cannot be used in CertificateVerify.
-        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
-            self._handshake(client, server)
-        self.assertEqual(str(cm.exception), "No supported signature algorithm")
-
-    def test_handshake_with_rsa_pkcs1_sha256_signature(self) -> None:
-        client = self.create_client()
-        client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PKCS1_SHA256]
-        server = self.create_server()
-
-        # RSASSA-PKCS1-v1_5 cannot be used in CertificateVerify.
-        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
-            self._handshake(client, server)
-        self.assertEqual(str(cm.exception), "No supported signature algorithm")
-
-    def test_handshake_with_rsa_pkcs1_sha384_signature(self) -> None:
-        client = self.create_client()
-        client._signature_algorithms = [tls.SignatureAlgorithm.RSA_PKCS1_SHA384]
-        server = self.create_server()
-
-        # RSASSA-PKCS1-v1_5 cannot be used in CertificateVerify.
-        with self.assertRaises(tls.AlertHandshakeFailure) as cm:
-            self._handshake(client, server)
-        self.assertEqual(str(cm.exception), "No supported signature algorithm")
 
     def test_handshake_with_rsa_pss_rsae_sha256_signature(self) -> None:
         client = self.create_client()
@@ -1214,31 +1296,6 @@ class ContextTest(TestCase):
 
             self._resume(client, server)
 
-        def second_handshake_bad_binder() -> None:
-            client = self.create_client()
-            client.session_ticket = client_tickets[0]
-
-            server = self.create_server()
-            server.get_session_ticket_cb = server_get_ticket
-
-            # send client hello with pre_shared_key
-            client_buf = create_buffers()
-            client.handle_message(b"", client_buf)
-            self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
-            server_input = merge_buffers(client_buf)
-            self.assertClientHello(server_input)
-            reset_buffers(client_buf)
-
-            # tamper with binder
-            server_input = server_input[:-4] + bytes(4)
-
-            # handle client hello
-            # send server hello, encrypted extensions, finished
-            server_buf = create_buffers()
-            with self.assertRaises(tls.AlertHandshakeFailure) as cm:
-                server.handle_message(server_input, server_buf)
-            self.assertEqual(str(cm.exception), "PSK validation failed")
-
         def second_handshake_bad_pre_shared_key() -> None:
             client = self.create_client()
             client.session_ticket = client_tickets[0]
@@ -1257,7 +1314,6 @@ class ContextTest(TestCase):
 
         first_handshake()
         second_handshake()
-        second_handshake_bad_binder()
         second_handshake_bad_pre_shared_key()
 
     def test_session_ticket_large(self) -> None:
@@ -1611,7 +1667,10 @@ class TlsTest(TestCase):
         buf.seek(0)
         with self.assertRaises(tls.AlertIllegalParameter) as cm:
             pull_client_hello(buf)
-        self.assertEqual(str(cm.exception), "PreSharedKey is not the last extension")
+        self.assertEqual(
+            str(cm.exception),
+            "ClientHello has a pre_shared_key which is not the last extension",
+        )
 
     def test_pull_client_hello_with_sni(self) -> None:
         buf = Buffer(data=load("tls_client_hello_with_sni.bin"))
