@@ -228,14 +228,14 @@ def verify_certificate(
     cafile: str | None = None,
     capath: str | None = None,
 ) -> None:
-    # verify dates
+    # Verify the validity period.
     now = utcnow()
     if now < certificate.not_valid_before_utc:
         raise AlertCertificateExpired("Certificate is not valid yet")
     if now > certificate.not_valid_after_utc:
         raise AlertCertificateExpired("Certificate is no longer valid")
 
-    # verify subject
+    # Verify the subject.
     if server_name is not None:
         try:
             ipaddress.ip_address(server_name)
@@ -254,16 +254,15 @@ def verify_certificate(
                     certificate, server_name
                 )
 
-        except ValueError as exc:
-            # The certificate's extensions are only parsed when accessed.
-            raise AlertBadCertificate(
-                "Certificate extensions could not be parsed"
-            ) from exc
         except (
             service_identity.CertificateError,
             service_identity.VerificationError,
         ) as exc:
-            patterns = service_identity.cryptography.extract_patterns(certificate)
+            try:
+                patterns = service_identity.cryptography.extract_patterns(certificate)
+            except service_identity.CertificateError:
+                # The certificate has an invalid pattern, which exc describes.
+                patterns = []
             if len(patterns) == 0:
                 errmsg = str(exc)
             elif len(patterns) == 1:
@@ -275,8 +274,14 @@ def verify_certificate(
                 )
 
             raise AlertBadCertificate(errmsg) from exc
+        except Exception as exc:
+            # The certificate's extensions are only parsed when accessed, and
+            # cryptography has no common class for its parsing errors.
+            raise AlertBadCertificate(
+                "Certificate extensions could not be parsed"
+            ) from exc
 
-    # load CAs
+    # Load the trusted CAs.
     store = crypto.X509Store()
 
     if cadata is None and cafile is None and capath is None:
@@ -290,14 +295,17 @@ def verify_certificate(
     if cafile is not None or capath is not None:
         store.load_locations(cafile, capath)
 
-    # verify certificate chain
-    store_ctx = crypto.X509StoreContext(
-        store,
-        crypto.X509.from_cryptography(certificate),
-        [crypto.X509.from_cryptography(cert) for cert in chain],
-    )
+    # Verify the certificate chain.
     try:
+        # OpenSSL parses certificates more strictly than cryptography.
+        store_ctx = crypto.X509StoreContext(
+            store,
+            crypto.X509.from_cryptography(certificate),
+            [crypto.X509.from_cryptography(cert) for cert in chain],
+        )
         store_ctx.verify_certificate()
+    except crypto.Error as exc:
+        raise AlertBadCertificate("Certificate could not be parsed") from exc
     except crypto.X509StoreContextError as exc:
         raise AlertBadCertificate(exc.args[0])
 
@@ -2299,7 +2307,8 @@ class Context:
 
     def _set_peer_certificate(self, certificate: Certificate) -> None:
         # A certificate which cannot be parsed is corrupt, which calls for
-        # a bad_certificate alert (RFC 9846 section 6.2).
+        # a bad_certificate alert (RFC 9846 section 6.2). cryptography has no
+        # common class for its parsing errors.
         try:
             self._peer_certificate = x509.load_der_x509_certificate(
                 certificate.certificates[0][0]
@@ -2308,7 +2317,7 @@ class Context:
                 x509.load_der_x509_certificate(certificate.certificates[i][0])
                 for i in range(1, len(certificate.certificates))
             ]
-        except ValueError as exc:
+        except Exception as exc:
             raise AlertBadCertificate("Certificate could not be parsed") from exc
 
     def _set_state(self, state: State) -> None:

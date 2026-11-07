@@ -46,7 +46,7 @@ from aioquic.tls import (
 )
 from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from .utils import (
@@ -532,6 +532,24 @@ class ContextTest(TestCase):
                 ),
             ),
             tls.AlertBadCertificate("Certificate has an invalid key"),
+        )
+
+    def test_client_invalid_certificate_version(self) -> None:
+        configuration = QuicConfiguration(is_client=False)
+        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        certificate_data = configuration.certificate.public_bytes(
+            serialization.Encoding.DER
+        )
+
+        self.handshake_with_client_input_corruption(
+            # Replace the certificate's version, v3, with an undefined one.
+            lambda x: x.replace(
+                certificate_data,
+                certificate_data.replace(
+                    bytes.fromhex("a003020102"), bytes.fromhex("a003020142")
+                ),
+            ),
+            tls.AlertBadCertificate("Certificate could not be parsed"),
         )
 
     def test_client_malformed_certificate(self) -> None:
@@ -2200,6 +2218,39 @@ class TlsTest(TestCase):
 
 
 class VerifyCertificateTest(TestCase):
+    def assertVerifyFails(
+        self,
+        certificate: x509.Certificate,
+        expected_exception: tls.Alert,
+        **kwargs: Any,
+    ) -> None:
+        with self.assertRaises(expected_exception.__class__) as cm:
+            self._verify(certificate, **kwargs)
+        self.assertEqual(str(cm.exception), str(expected_exception))
+
+    def _verify(
+        self,
+        certificate: x509.Certificate,
+        *,
+        now: datetime.datetime | None = None,
+        server_name: str | None = None,
+        trusted: x509.Certificate | None = None,
+    ) -> None:
+        """
+        Verify `certificate` at `now`, by default the start of its validity
+        period, trusting `trusted`, by default the certificate itself.
+        """
+        if now is None:
+            now = certificate.not_valid_before_utc
+        if trusted is None:
+            trusted = certificate
+        with patch("aioquic.tls.utcnow", return_value=now):
+            verify_certificate(
+                cadata=trusted.public_bytes(serialization.Encoding.PEM),
+                certificate=certificate,
+                server_name=server_name,
+            )
+
     def test_verify_certificate_chain(self) -> None:
         with open(SERVER_CERTFILE, "rb") as fp:
             certificate = load_pem_x509_certificates(fp.read())[0]
@@ -2220,6 +2271,23 @@ class VerifyCertificateTest(TestCase):
                 certificate=certificate,
                 server_name="localhost",
             )
+
+    def test_verify_certificate_chain_malformed(self) -> None:
+        certificate, _ = generate_ec_certificate(common_name="example.com")
+
+        # Make the subject's UTF8String invalid, which cryptography accepts
+        # but OpenSSL does not.
+        malformed = x509.load_der_x509_certificate(
+            certificate.public_bytes(serialization.Encoding.DER).replace(
+                b"\x0c\x0bexample.com", b"\x0c\x0b\xffxample.com"
+            )
+        )
+
+        self.assertVerifyFails(
+            malformed,
+            tls.AlertBadCertificate("Certificate could not be parsed"),
+            trusted=certificate,
+        )
 
     def test_verify_certificate_chain_self_signed(self) -> None:
         certificate, _ = generate_ec_certificate(
@@ -2251,149 +2319,150 @@ class VerifyCertificateTest(TestCase):
         certificate, _ = generate_ec_certificate(
             alternative_names=["example.com"], common_name="example.com"
         )
-        cadata = certificate.public_bytes(serialization.Encoding.PEM)
+        second = datetime.timedelta(seconds=1)
 
-        #  too early
-        with patch("aioquic.tls.utcnow") as mock_utcnow:
-            mock_utcnow.return_value = (
-                certificate.not_valid_before_utc - datetime.timedelta(seconds=1)
-            )
-            with self.assertRaises(tls.AlertCertificateExpired) as cm:
-                verify_certificate(
-                    cadata=cadata, certificate=certificate, server_name="example.com"
-                )
-            self.assertEqual(str(cm.exception), "Certificate is not valid yet")
+        # Too early.
+        self.assertVerifyFails(
+            certificate,
+            tls.AlertCertificateExpired("Certificate is not valid yet"),
+            now=certificate.not_valid_before_utc - second,
+            server_name="example.com",
+        )
 
-        # valid
-        with patch("aioquic.tls.utcnow") as mock_utcnow:
-            mock_utcnow.return_value = certificate.not_valid_before_utc
-            verify_certificate(
-                cadata=cadata, certificate=certificate, server_name="example.com"
-            )
+        # Valid.
+        self._verify(certificate, server_name="example.com")
+        self._verify(
+            certificate, now=certificate.not_valid_after_utc, server_name="example.com"
+        )
 
-        with patch("aioquic.tls.utcnow") as mock_utcnow:
-            mock_utcnow.return_value = certificate.not_valid_after_utc
-            verify_certificate(
-                cadata=cadata, certificate=certificate, server_name="example.com"
-            )
-
-        # too late
-        with patch("aioquic.tls.utcnow") as mock_utcnow:
-            mock_utcnow.return_value = (
-                certificate.not_valid_after_utc + datetime.timedelta(seconds=1)
-            )
-            with self.assertRaises(tls.AlertCertificateExpired) as cm:
-                verify_certificate(
-                    cadata=cadata, certificate=certificate, server_name="example.com"
-                )
-            self.assertEqual(str(cm.exception), "Certificate is no longer valid")
+        # Too late.
+        self.assertVerifyFails(
+            certificate,
+            tls.AlertCertificateExpired("Certificate is no longer valid"),
+            now=certificate.not_valid_after_utc + second,
+            server_name="example.com",
+        )
 
     def test_verify_subject_no_subjaltname(self) -> None:
         certificate, _ = generate_ec_certificate(common_name="example.com")
-        cadata = certificate.public_bytes(serialization.Encoding.PEM)
 
-        with patch("aioquic.tls.utcnow") as mock_utcnow:
-            mock_utcnow.return_value = certificate.not_valid_before_utc
+        self.assertVerifyFails(
+            certificate,
+            tls.AlertBadCertificate(
+                "Certificate does not contain any `subjectAltName`s."
+            ),
+            server_name="example.com",
+        )
 
-            # certificates with no SubjectAltName are rejected
-            with self.assertRaises(tls.AlertBadCertificate) as cm:
-                verify_certificate(
-                    cadata=cadata, certificate=certificate, server_name="example.com"
-                )
-            self.assertEqual(
-                str(cm.exception), "Certificate does not contain any `subjectAltName`s."
+    def test_verify_subject_with_duplicate_extension(self) -> None:
+        certificate, _ = generate_ec_certificate(
+            alternative_names=["example.com"],
+            common_name="example.com",
+            extensions=[
+                x509.UnrecognizedExtension(x509.ObjectIdentifier("2.5.29.99"), b"")
+            ],
+        )
+
+        # Turn the unrecognized extension into a second subjectAltName, which is
+        # only rejected once the extensions are accessed.
+        duplicate = x509.load_der_x509_certificate(
+            certificate.public_bytes(serialization.Encoding.DER).replace(
+                bytes.fromhex("0603551d63"), bytes.fromhex("0603551d11")
             )
+        )
+
+        self.assertVerifyFails(
+            duplicate,
+            tls.AlertBadCertificate("Certificate extensions could not be parsed"),
+            server_name="example.com",
+            trusted=certificate,
+        )
+
+    def test_verify_subject_with_invalid_dns_pattern(self) -> None:
+        # The subjectAltName has a dNSName containing a NUL byte.
+        certificate, _ = generate_ec_certificate(
+            common_name="example.com",
+            extensions=[
+                x509.UnrecognizedExtension(
+                    x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME,
+                    bytes.fromhex("30058203610062"),
+                )
+            ],
+        )
+
+        self.assertVerifyFails(
+            certificate,
+            tls.AlertBadCertificate("Invalid DNS pattern b'a\\x00b'."),
+            server_name="example.com",
+        )
 
     def test_verify_subject_with_malformed_extension(self) -> None:
-        key = ec.generate_private_key(ec.SECP256R1())
-        name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "example.com")])
-        now = datetime.datetime.now(datetime.UTC)
-        certificate = (
-            x509.CertificateBuilder()
-            .subject_name(name)
-            .issuer_name(name)
-            .public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now)
-            .not_valid_after(now + datetime.timedelta(days=10))
-            # The extension's value is not valid DER, but the certificate is
-            # only rejected once its extensions are accessed.
-            .add_extension(
-                x509.UnrecognizedExtension(
-                    x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME, b"\xff\xff"
-                ),
-                critical=False,
-            )
-            .sign(key, hashes.SHA256())
-        )
-        cadata = certificate.public_bytes(serialization.Encoding.PEM)
-
-        with patch("aioquic.tls.utcnow") as mock_utcnow:
-            mock_utcnow.return_value = certificate.not_valid_before_utc
-
-            with self.assertRaises(tls.AlertBadCertificate) as cm:
-                verify_certificate(
-                    cadata=cadata, certificate=certificate, server_name="example.com"
+        # The certificate is only rejected once its extensions are accessed.
+        for desc, value in [
+            ("invalid DER", "ffff"),
+            # cryptography does not support x400Address.
+            ("x400Address", "3002a300"),
+            # A directoryName whose commonName is a BIT STRING.
+            ("directoryName", "3010a40e300c310a30080603550403030100"),
+        ]:
+            with self.subTest(desc):
+                certificate, _ = generate_ec_certificate(
+                    common_name="example.com",
+                    extensions=[
+                        x509.UnrecognizedExtension(
+                            x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME,
+                            bytes.fromhex(value),
+                        )
+                    ],
                 )
-            self.assertEqual(
-                str(cm.exception), "Certificate extensions could not be parsed"
-            )
+
+                self.assertVerifyFails(
+                    certificate,
+                    tls.AlertBadCertificate(
+                        "Certificate extensions could not be parsed"
+                    ),
+                    server_name="example.com",
+                )
 
     def test_verify_subject_with_subjaltname(self) -> None:
         certificate, _ = generate_ec_certificate(
             alternative_names=["*.example.com", "example.com"],
             common_name="example.com",
         )
-        cadata = certificate.public_bytes(serialization.Encoding.PEM)
 
-        with patch("aioquic.tls.utcnow") as mock_utcnow:
-            mock_utcnow.return_value = certificate.not_valid_before_utc
+        # Valid.
+        self._verify(certificate, server_name="example.com")
+        self._verify(certificate, server_name="test.example.com")
 
-            # valid
-            verify_certificate(
-                cadata=cadata, certificate=certificate, server_name="example.com"
-            )
-            verify_certificate(
-                cadata=cadata, certificate=certificate, server_name="test.example.com"
-            )
-
-            # invalid
-            with self.assertRaises(tls.AlertBadCertificate) as cm:
-                verify_certificate(
-                    cadata=cadata, certificate=certificate, server_name="acme.com"
-                )
-            self.assertEqual(
-                str(cm.exception),
+        # Invalid.
+        self.assertVerifyFails(
+            certificate,
+            tls.AlertBadCertificate(
                 "hostname 'acme.com' doesn't match either of "
                 "DNSPattern(pattern=b'*.example.com'), "
-                "DNSPattern(pattern=b'example.com')",
-            )
+                "DNSPattern(pattern=b'example.com')"
+            ),
+            server_name="acme.com",
+        )
 
     def test_verify_subject_with_subjaltname_ipaddress(self) -> None:
         certificate, _ = generate_ec_certificate(
             alternative_names=["1.2.3.4"],
             common_name="1.2.3.4",
         )
-        cadata = certificate.public_bytes(serialization.Encoding.PEM)
 
-        with patch("aioquic.tls.utcnow") as mock_utcnow:
-            mock_utcnow.return_value = certificate.not_valid_before_utc
+        # Valid.
+        self._verify(certificate, server_name="1.2.3.4")
 
-            # valid
-            verify_certificate(
-                cadata=cadata, certificate=certificate, server_name="1.2.3.4"
-            )
-
-            # invalid
-            with self.assertRaises(tls.AlertBadCertificate) as cm:
-                verify_certificate(
-                    cadata=cadata, certificate=certificate, server_name="8.8.8.8"
-                )
-            self.assertEqual(
-                str(cm.exception),
+        # Invalid.
+        self.assertVerifyFails(
+            certificate,
+            tls.AlertBadCertificate(
                 "hostname '8.8.8.8' doesn't match "
-                "IPAddressPattern(pattern=IPv4Address('1.2.3.4'))",
-            )
+                "IPAddressPattern(pattern=IPv4Address('1.2.3.4'))"
+            ),
+            server_name="8.8.8.8",
+        )
 
     def test_pull_greased_alpn_list(self) -> None:
         """Test pulling a list alpns with an ASCII item, an undecodable binary value
