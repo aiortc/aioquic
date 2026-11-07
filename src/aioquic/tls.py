@@ -136,6 +136,10 @@ class AlertUnsupportedCertificate(Alert):
     description = AlertDescription.unsupported_certificate
 
 
+class AlertUnsupportedExtension(Alert):
+    description = AlertDescription.unsupported_extension
+
+
 class Direction(Enum):
     DECRYPT = 0
     ENCRYPT = 1
@@ -1708,6 +1712,16 @@ class Context:
         # (RFC 8446 section 9.2).
         if peer_hello.key_share is None:
             raise AlertMissingExtension("ServerHello has no key share")
+
+        # Every extension a ServerHello may carry has been parsed, so any other one
+        # is either in the wrong message or unsolicited (RFC 8446 section 4.2).
+        if any(
+            extension_type in list(ExtensionType)
+            for extension_type, _ in peer_hello.other_extensions
+        ):
+            raise AlertIllegalParameter("ServerHello has a prohibited extension")
+        if peer_hello.other_extensions:
+            raise AlertUnsupportedExtension("ServerHello has an unsolicited extension")
 
         # select key schedule
         if peer_hello.pre_shared_key is not None:
