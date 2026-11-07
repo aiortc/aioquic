@@ -1384,7 +1384,7 @@ class Context:
         self._peer_certificate: x509.Certificate | None = None
         self._peer_certificate_chain: list[x509.Certificate] = []
         self._psk_key_exchange_mode: int | None = None
-        self._receive_buffer = b""
+        self._receive_buffer = bytearray()
         self._session_resumed = False
         self._enc_key: bytes | None = None
         self._dec_key: bytes | None = None
@@ -1417,6 +1417,8 @@ class Context:
             self._client_send_hello(output_buf[Epoch.INITIAL])
             return
 
+        # A bytearray appends and drops data in place, which keeps reassembly
+        # linear in the amount of data received.
         self._receive_buffer += input_data
         while len(self._receive_buffer) >= 4:
             # determine message length
@@ -1428,8 +1430,8 @@ class Context:
             # check message is complete
             if len(self._receive_buffer) < message_length:
                 break
-            message = self._receive_buffer[:message_length]
-            self._receive_buffer = self._receive_buffer[message_length:]
+            message = bytes(self._receive_buffer[:message_length])
+            del self._receive_buffer[:message_length]
 
             # process the message
             try:
