@@ -1727,15 +1727,20 @@ class Context:
         if peer_hello.other_extensions:
             raise AlertUnsupportedExtension("ServerHello has an unsolicited extension")
 
-        # select key schedule
+        # If the server accepted our PSK, keep its key schedule. The server may
+        # select any cipher suite with the PSK's hash (RFC 9846 section 4.3.11):
+        # the key schedule only depends on the hash, but traffic keys are for the
+        # selected cipher suite.
         if peer_hello.pre_shared_key is not None:
             if (
                 self._key_schedule_psk is None
                 or peer_hello.pre_shared_key != 0
-                or cipher_suite != self._key_schedule_psk.cipher_suite
+                or cipher_suite_hash(cipher_suite).name
+                != self._key_schedule_psk.algorithm.name
             ):
                 raise AlertIllegalParameter
             self.key_schedule = self._key_schedule_psk
+            self.key_schedule.cipher_suite = cipher_suite
             self._session_resumed = True
         else:
             self.key_schedule = self._key_schedule_proxy.select(cipher_suite)

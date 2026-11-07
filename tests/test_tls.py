@@ -1127,6 +1127,47 @@ class ContextTest(TestCase):
         except UnsupportedAlgorithm as exc:
             self.skipTest(str(exc))
 
+    def _resume(self, client: Context, server: Context) -> None:
+        """
+        Perform a handshake in which the server resumes the client's session.
+        """
+        client_input = self._resume_server_flight(client, server)
+
+        # Handle server hello, encrypted extensions, finished.
+        #
+        # Send finished.
+        client_buf = create_buffers()
+        client.handle_message(client_input, client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+        self.assertTrue(client.session_resumed)
+
+        # Handle finished.
+        server.handle_message(merge_buffers(client_buf), create_buffers())
+        self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
+
+        # Check keys match.
+        self.assertEqual(client._dec_key, server._enc_key)
+        self.assertEqual(client._enc_key, server._dec_key)
+
+    def _resume_server_flight(self, client: Context, server: Context) -> bytes:
+        """
+        Send the client's ClientHello with its session ticket, and return the
+        server's first flight, in which it resumes the session.
+        """
+        # Send client hello with pre_shared_key.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
+
+        # Handle client hello.
+        #
+        # Send server hello, encrypted extensions, finished.
+        server_buf = create_buffers()
+        server.handle_message(merge_buffers(client_buf), server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
+        self.assertTrue(server.session_resumed)
+        return merge_buffers(server_buf)
+
     def test_session_ticket(self) -> None:
         client_tickets: list[SessionTicket] = []
         server_tickets: list[SessionTicket] = []
@@ -1171,50 +1212,7 @@ class ContextTest(TestCase):
             server = self.create_server()
             server.get_session_ticket_cb = server_get_ticket
 
-            # Send client hello with pre_shared_key.
-            client_buf = create_buffers()
-            client.handle_message(b"", client_buf)
-            self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
-            server_input = merge_buffers(client_buf)
-            self.assertClientHello(server_input)
-            reset_buffers(client_buf)
-
-            # Handle client hello.
-            #
-            # Send server hello, encrypted extensions, finished.
-            server_buf = create_buffers()
-            server.handle_message(server_input, server_buf)
-            self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
-            client_input = merge_buffers(server_buf)
-            self.assertEqual(len(client_input), 275)
-            reset_buffers(server_buf)
-
-            # Handle server hello, encrypted extensions, certificate,
-            # certificate verify, finished.
-            #
-            # Send finished.
-            client.handle_message(client_input, client_buf)
-            self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
-            server_input = merge_buffers(client_buf)
-            self.assertEqual(len(server_input), 52)
-            reset_buffers(client_buf)
-
-            # Handle finished.
-            #
-            # Send new_session_ticket.
-            server.handle_message(server_input, server_buf)
-            self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
-            client_input = merge_buffers(server_buf)
-            self.assertEqual(len(client_input), 0)
-            reset_buffers(server_buf)
-
-            # check keys match
-            self.assertEqual(client._dec_key, server._enc_key)
-            self.assertEqual(client._enc_key, server._dec_key)
-
-            # check session resumption was used
-            self.assertTrue(client.session_resumed)
-            self.assertTrue(server.session_resumed)
+            self._resume(client, server)
 
         def second_handshake_bad_binder() -> None:
             client = self.create_client()
@@ -1248,31 +1246,14 @@ class ContextTest(TestCase):
             server = self.create_server()
             server.get_session_ticket_cb = server_get_ticket
 
-            # send client hello with pre_shared_key
-            client_buf = create_buffers()
-            client.handle_message(b"", client_buf)
-            self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
-            server_input = merge_buffers(client_buf)
-            self.assertClientHello(server_input)
-            reset_buffers(client_buf)
+            # Tamper with the selected identity, as we only offered one.
+            client_input = modify_server_hello(
+                self._resume_server_flight(client, server), pre_shared_key=1
+            )
 
-            # handle client hello
-            # send server hello, encrypted extensions, finished
-            server_buf = create_buffers()
-            server.handle_message(server_input, server_buf)
-            self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
-
-            # tamper with pre_share_key index
-            buf = server_buf[tls.Epoch.INITIAL]
-            buf.seek(buf.tell() - 1)
-            buf.push_uint8(1)
-            client_input = merge_buffers(server_buf)
-            self.assertEqual(len(client_input), 275)
-            reset_buffers(server_buf)
-
-            # handle server hello and bomb
+            # Handle server hello and abort.
             with self.assertRaises(tls.AlertIllegalParameter):
-                client.handle_message(client_input, client_buf)
+                client.handle_message(client_input, create_buffers())
 
         first_handshake()
         second_handshake()
@@ -1293,40 +1274,87 @@ class ContextTest(TestCase):
         self._handshake(client, server)
         ticket = dataclasses.replace(client_tickets[0], ticket=bytes(range(256)) * 8)
 
-        # Send client hello with pre_shared_key.
+        # Resume, which requires the server to validate the binder.
         client = self.create_client()
         client.session_ticket = ticket
-        client_buf = create_buffers()
-        client.handle_message(b"", client_buf)
-        self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
-        server_input = merge_buffers(client_buf)
-        reset_buffers(client_buf)
-
-        # Handle client hello, which requires the binder to be valid.
-        #
-        # Send server hello, encrypted extensions, finished.
         server = self.create_server()
         server.get_session_ticket_cb = lambda label: ticket
-        server_buf = create_buffers()
-        server.handle_message(server_input, server_buf)
-        self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
-        client_input = merge_buffers(server_buf)
-        reset_buffers(server_buf)
+        self._resume(client, server)
 
-        # Handle server hello, encrypted extensions, finished.
-        #
-        # Send finished.
-        client.handle_message(client_input, client_buf)
-        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
-        server_input = merge_buffers(client_buf)
+    def _create_other_cipher_suite_contexts(
+        self, client_cipher_suites: list[tls.CipherSuite]
+    ) -> tuple[Context, Context]:
+        """
+        Create a client with an AES_128_GCM_SHA256 session ticket, and a server
+        which only supports CHACHA20_POLY1305_SHA256.
+        """
+        now = datetime.datetime.now(datetime.UTC)
+        ticket = SessionTicket(
+            age_add=0,
+            cipher_suite=tls.CipherSuite.AES_128_GCM_SHA256,
+            not_valid_after=now + datetime.timedelta(hours=1),
+            not_valid_before=now,
+            resumption_secret=bytes(32),
+            server_name="localhost",
+            ticket=b"ticket",
+        )
+        client = self.create_client(cipher_suites=client_cipher_suites)
+        client.session_ticket = ticket
 
-        # Handle finished.
-        server.handle_message(server_input, server_buf)
-        self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
+        # The PSK is associated with SHA-256, so the server may accept it with
+        # CHACHA20_POLY1305_SHA256. Our server requires the ticket's cipher suite,
+        # so it is given the ticket with that cipher suite.
+        server = self.create_server(
+            cipher_suites=[tls.CipherSuite.CHACHA20_POLY1305_SHA256]
+        )
+        server.get_session_ticket_cb = lambda label: dataclasses.replace(
+            ticket, cipher_suite=tls.CipherSuite.CHACHA20_POLY1305_SHA256
+        )
+        return client, server
 
-        # Check session resumption was used.
-        self.assertTrue(client.session_resumed)
-        self.assertTrue(server.session_resumed)
+    def test_session_ticket_other_cipher_suite_same_hash(self) -> None:
+        """
+        A client accepts resumption with a cipher suite other than the ticket's
+        when it has the same hash (RFC 9846 section 4.3.11).
+        """
+        client, server = self._create_other_cipher_suite_contexts(
+            [
+                tls.CipherSuite.AES_128_GCM_SHA256,
+                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
+            ]
+        )
+        self._resume(client, server)
+
+        # Check session resumption used CHACHA20_POLY1305_SHA256.
+        self.assertEqual(
+            client.key_schedule.cipher_suite, tls.CipherSuite.CHACHA20_POLY1305_SHA256
+        )
+        self.assertEqual(
+            server.key_schedule.cipher_suite, tls.CipherSuite.CHACHA20_POLY1305_SHA256
+        )
+
+    def test_session_ticket_other_cipher_suite_other_hash(self) -> None:
+        """
+        A client rejects resumption with a cipher suite whose hash is not the
+        ticket's (RFC 9846 section 4.3.11).
+        """
+        client, server = self._create_other_cipher_suite_contexts(
+            [
+                tls.CipherSuite.AES_128_GCM_SHA256,
+                tls.CipherSuite.AES_256_GCM_SHA384,
+                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
+            ]
+        )
+
+        # Tamper with the ServerHello to select AES_256_GCM_SHA384.
+        client_input = modify_server_hello(
+            self._resume_server_flight(client, server),
+            cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
+        )
+
+        # Handle server hello and abort.
+        with self.assertRaises(tls.AlertIllegalParameter):
+            client.handle_message(client_input, create_buffers())
 
 
 class TlsTest(TestCase):
