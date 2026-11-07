@@ -3540,7 +3540,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
             def patched_initialize(peer_cid: bytes) -> None:
                 real_initialize(peer_cid)
-                client.tls._supported_versions = [tls.TLS_VERSION_1_3_DRAFT_28]
+                client.tls._supported_versions = [tls.TLS_VERSION_1_2]
 
             client._initialize = patched_initialize  # type: ignore[method-assign]
 
