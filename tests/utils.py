@@ -326,12 +326,6 @@ def generate_rsa_certificate(
     )
 
 
-def load(name: str) -> bytes:
-    path = os.path.join(os.path.dirname(__file__), name)
-    with open(path, "rb") as fp:
-        return fp.read()
-
-
 # Generate the default certificates in a temporary directory, which is removed
 # when the interpreter exits.
 _CERTIFICATE_DIRECTORY = tempfile.TemporaryDirectory()

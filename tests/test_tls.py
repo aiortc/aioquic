@@ -13,23 +13,18 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.tls import (
     Certificate,
     CertificateRequest,
-    CertificateVerify,
     ClientHello,
     Context,
-    EncryptedExtensions,
-    Finished,
     NewSessionTicket,
     ServerHello,
     SessionTicket,
     State,
     load_pem_x509_certificates,
     pull_block,
-    pull_certificate,
     pull_certificate_request,
     pull_certificate_verify,
     pull_client_hello,
     pull_encrypted_extensions,
-    pull_finished,
     pull_new_session_ticket,
     pull_server_hello,
     pull_server_name,
@@ -37,8 +32,6 @@ from aioquic.tls import (
     push_certificate_request,
     push_certificate_verify,
     push_client_hello,
-    push_encrypted_extensions,
-    push_finished,
     push_new_session_ticket,
     push_server_hello,
     push_server_name,
@@ -59,34 +52,11 @@ from .utils import (
     generate_ed448_certificate,
     generate_ed25519_certificate,
     generate_rsa_certificate,
-    load,
 )
 
-CERTIFICATE_DATA = load("tls_certificate.bin")[11:-2]
-CERTIFICATE_VERIFY_SIGNATURE = load("tls_certificate_verify.bin")[-384:]
-
-CLIENT_QUIC_TRANSPORT_PARAMETERS = bytes.fromhex(
-    "ff0000110031000500048010000000060004801000000007000480100000000"
-    "4000481000000000100024258000800024064000a00010a"
-)
-
-SERVER_QUIC_TRANSPORT_PARAMETERS = bytes.fromhex(
-    "ff00001104ff000011004500050004801000000006000480100000000700048"
-    "010000000040004810000000001000242580002001000000000000000000000"
-    "000000000000000800024064000a00010a"
-)
-
-SERVER_QUIC_TRANSPORT_PARAMETERS_2 = bytes.fromhex(
-    "0057000600048000ffff000500048000ffff00020010c5ac410fbdd4fe6e2c1"
-    "42279f231e8e0000a000103000400048005fffa000b000119000100026710ff"
-    "42000c5c067f27e39321c63e28e7c90003000247e40008000106"
-)
-
-SERVER_QUIC_TRANSPORT_PARAMETERS_3 = bytes.fromhex(
-    "0054000200100dcb50a442513295b4679baf04cb5effff8a0009c8afe72a6397"
-    "255407000600048000ffff0008000106000400048005fffa000500048000ffff"
-    "0003000247e4000a000103000100026710000b000119"
-)
+# TLS treats the QUIC transport parameters as opaque data.
+CLIENT_QUIC_TRANSPORT_PARAMETERS = b"client transport parameters"
+SERVER_QUIC_TRANSPORT_PARAMETERS = b"server transport parameters"
 
 
 class BufferTest(TestCase):
@@ -187,8 +157,8 @@ def reset_buffers(buffers: dict[tls.Epoch, Buffer]) -> None:
 class ContextTest(TestCase):
     def assertClientHello(self, data: bytes) -> None:
         self.assertEqual(data[0], tls.HandshakeType.CLIENT_HELLO)
-        self.assertGreaterEqual(len(data), 189)
-        self.assertLessEqual(len(data), 564)
+        self.assertGreaterEqual(len(data), 161)
+        self.assertLessEqual(len(data), 536)
 
     def create_client(
         self,
@@ -904,8 +874,8 @@ class ContextTest(TestCase):
         server.handle_message(server_input, server_buf)
         self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
         client_input = merge_buffers(server_buf)
-        self.assertGreaterEqual(len(client_input), 587)
-        self.assertLessEqual(len(client_input), 2316)
+        self.assertGreaterEqual(len(client_input), 534)
+        self.assertLessEqual(len(client_input), 2263)
 
         reset_buffers(server_buf)
 
@@ -1022,8 +992,8 @@ class ContextTest(TestCase):
         server.handle_message(server_input, server_buf)
         self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
         client_input = merge_buffers(server_buf)
-        self.assertGreaterEqual(len(client_input), 587)
-        self.assertLessEqual(len(client_input), 2316)
+        self.assertGreaterEqual(len(client_input), 534)
+        self.assertLessEqual(len(client_input), 2263)
 
         reset_buffers(server_buf)
 
@@ -1080,8 +1050,8 @@ class ContextTest(TestCase):
         server.handle_message(server_input, server_buf)
         self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
         client_input = merge_buffers(server_buf)
-        self.assertGreaterEqual(len(client_input), 587)
-        self.assertLessEqual(len(client_input), 2316)
+        self.assertGreaterEqual(len(client_input), 534)
+        self.assertLessEqual(len(client_input), 2263)
 
         reset_buffers(server_buf)
 
@@ -1484,194 +1454,18 @@ class TlsTest(TestCase):
                 buf.pull_bytes(1)
         self.assertEqual(str(cm.exception), "extra bytes at the end of a block")
 
-    def test_pull_client_hello(self) -> None:
-        buf = Buffer(data=load("tls_client_hello.bin"))
-        hello = pull_client_hello(buf)
-        self.assertTrue(buf.eof())
+    def test_pull_certificate_request_with_unknown_extension(self) -> None:
+        certificate_request = CertificateRequest(
+            request_context=b"context",
+            signature_algorithms=[tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256],
+            other_extensions=[(0xFAFA, b"grease")],
+        )
+        buf = Buffer(capacity=1024)
+        push_certificate_request(buf, certificate_request)
 
         self.assertEqual(
-            hello.random,
-            bytes.fromhex(
-                "18b2b23bf3e44b5d52ccfe7aecbc5ff14eadc3d349fabf804d71f165ae76e7d5"
-            ),
+            pull_certificate_request(Buffer(data=buf.data)), certificate_request
         )
-        self.assertEqual(
-            hello.legacy_session_id,
-            bytes.fromhex(
-                "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
-            ),
-        )
-        self.assertEqual(
-            hello.cipher_suites,
-            [
-                tls.CipherSuite.AES_256_GCM_SHA384,
-                tls.CipherSuite.AES_128_GCM_SHA256,
-                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
-            ],
-        )
-        self.assertEqual(hello.legacy_compression_methods, [tls.CompressionMethod.NULL])
-
-        # extensions
-        self.assertEqual(hello.alpn_protocols, None)
-        self.assertEqual(
-            hello.key_share,
-            [
-                (
-                    tls.Group.SECP256R1,
-                    bytes.fromhex(
-                        "047bfea344467535054263b75def60cffa82405a211b68d1eb8d1d944e67aef8"
-                        "93c7665a5473d032cfaf22a73da28eb4aacae0017ed12557b5791f98a1e84f15"
-                        "b0"
-                    ),
-                )
-            ],
-        )
-        self.assertEqual(
-            hello.psk_key_exchange_modes, [tls.PskKeyExchangeMode.PSK_DHE_KE]
-        )
-        self.assertEqual(hello.server_name, None)
-        self.assertEqual(
-            hello.signature_algorithms,
-            [
-                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
-                tls.SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA1,
-            ],
-        )
-        self.assertEqual(hello.supported_groups, [tls.Group.SECP256R1])
-        self.assertEqual(
-            hello.supported_versions,
-            [
-                tls.TLS_VERSION_1_3,
-                tls.TLS_VERSION_1_3_DRAFT_28,
-                tls.TLS_VERSION_1_3_DRAFT_27,
-                tls.TLS_VERSION_1_3_DRAFT_26,
-            ],
-        )
-
-        self.assertEqual(
-            hello.other_extensions,
-            [
-                (
-                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
-                    CLIENT_QUIC_TRANSPORT_PARAMETERS,
-                )
-            ],
-        )
-
-    def test_pull_client_hello_with_alpn(self) -> None:
-        buf = Buffer(data=load("tls_client_hello_with_alpn.bin"))
-        hello = pull_client_hello(buf)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            hello.random,
-            bytes.fromhex(
-                "ed575c6fbd599c4dfaabd003dca6e860ccdb0e1782c1af02e57bf27cb6479b76"
-            ),
-        )
-        self.assertEqual(hello.legacy_session_id, b"")
-        self.assertEqual(
-            hello.cipher_suites,
-            [
-                tls.CipherSuite.AES_128_GCM_SHA256,
-                tls.CipherSuite.AES_256_GCM_SHA384,
-                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
-                tls.CipherSuite.EMPTY_RENEGOTIATION_INFO_SCSV,
-            ],
-        )
-        self.assertEqual(hello.legacy_compression_methods, [tls.CompressionMethod.NULL])
-
-        # extensions
-        self.assertEqual(hello.alpn_protocols, ["h3-19"])
-        self.assertEqual(hello.early_data, False)
-        self.assertEqual(
-            hello.key_share,
-            [
-                (
-                    tls.Group.SECP256R1,
-                    bytes.fromhex(
-                        "048842315c437bb0ce2929c816fee4e942ec5cb6db6a6b9bf622680188ebb0d4"
-                        "b652e69033f71686aa01cbc79155866e264c9f33f45aa16b0dfa10a222e3a669"
-                        "22"
-                    ),
-                )
-            ],
-        )
-        self.assertEqual(
-            hello.psk_key_exchange_modes, [tls.PskKeyExchangeMode.PSK_DHE_KE]
-        )
-        self.assertEqual(hello.server_name, "cloudflare-quic.com")
-        self.assertEqual(
-            hello.signature_algorithms,
-            [
-                tls.SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
-                tls.SignatureAlgorithm.ECDSA_SECP384R1_SHA384,
-                tls.SignatureAlgorithm.ECDSA_SECP521R1_SHA512,
-                tls.SignatureAlgorithm.ED25519,
-                tls.SignatureAlgorithm.ED448,
-                tls.SignatureAlgorithm.RSA_PSS_PSS_SHA256,
-                tls.SignatureAlgorithm.RSA_PSS_PSS_SHA384,
-                tls.SignatureAlgorithm.RSA_PSS_PSS_SHA512,
-                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
-                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA384,
-                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA512,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA384,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA512,
-            ],
-        )
-        self.assertEqual(
-            hello.supported_groups,
-            [
-                tls.Group.SECP256R1,
-                tls.Group.X25519,
-                tls.Group.SECP384R1,
-                tls.Group.SECP521R1,
-            ],
-        )
-        self.assertEqual(hello.supported_versions, [tls.TLS_VERSION_1_3])
-
-        # serialize
-        buf = Buffer(1000)
-        push_client_hello(buf, hello)
-        self.assertEqual(len(buf.data), len(load("tls_client_hello_with_alpn.bin")))
-
-    def test_pull_client_hello_with_psk(self) -> None:
-        buf = Buffer(data=load("tls_client_hello_with_psk.bin"))
-        hello = pull_client_hello(buf)
-
-        self.assertEqual(hello.early_data, True)
-        self.assertEqual(
-            hello.pre_shared_key,
-            tls.OfferedPsks(
-                identities=[
-                    (
-                        bytes.fromhex(
-                            "fab3dc7d79f35ea53e9adf21150e601591a750b80cde0cd167fef6e0cdbc032a"
-                            "c4161fc5c5b66679de49524bd5624c50d71ba3e650780a4bfe402d6a06a00525"
-                            "0b5dc52085233b69d0dd13924cc5c713a396784ecafc59f5ea73c1585d79621b"
-                            "8a94e4f2291b17427d5185abf4a994fca74ee7a7f993a950c71003fc7cf8"
-                        ),
-                        2067156378,
-                    )
-                ],
-                binders=[
-                    bytes.fromhex(
-                        "1788ad43fdff37cfc628f24b6ce7c8c76180705380da17da32811b5bae4e78"
-                        "d7aaaf65a9b713872f2bb28818ca1a6b01"
-                    )
-                ],
-            ),
-        )
-
-        self.assertTrue(buf.eof())
-
-        # serialize
-        buf = Buffer(1000)
-        push_client_hello(buf, hello)
-        self.assertEqual(buf.data, load("tls_client_hello_with_psk.bin"))
 
     def test_pull_client_hello_with_psk_and_other_extension(self) -> None:
         buf = Buffer(capacity=1000)
@@ -1688,27 +1482,14 @@ class TlsTest(TestCase):
 
         # Write a ClientHello with an extension *after* PSK.
         hello = ClientHello(
-            random=bytes.fromhex(
-                "18b2b23bf3e44b5d52ccfe7aecbc5ff14eadc3d349fabf804d71f165ae76e7d5"
-            ),
-            legacy_session_id=bytes.fromhex(
-                "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
-            ),
-            cipher_suites=[tls.CipherSuite.AES_256_GCM_SHA384],
+            random=bytes(32),
+            legacy_session_id=b"",
+            cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256],
             legacy_compression_methods=[tls.CompressionMethod.NULL],
-            key_share=[
-                (
-                    tls.Group.SECP256R1,
-                    bytes.fromhex(
-                        "047bfea344467535054263b75def60cffa82405a211b68d1eb8d1d944e67aef8"
-                        "93c7665a5473d032cfaf22a73da28eb4aacae0017ed12557b5791f98a1e84f15"
-                        "b0"
-                    ),
-                )
-            ],
+            key_share=[],
             psk_key_exchange_modes=[tls.PskKeyExchangeMode.PSK_DHE_KE],
-            signature_algorithms=[tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256],
-            supported_groups=[tls.Group.SECP256R1],
+            signature_algorithms=[],
+            supported_groups=[],
             supported_versions=[tls.TLS_VERSION_1_3],
             other_extensions=[
                 (
@@ -1716,7 +1497,7 @@ class TlsTest(TestCase):
                     psk_buf.data,
                 ),
                 (
-                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
+                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
                     CLIENT_QUIC_TRANSPORT_PARAMETERS,
                 ),
             ],
@@ -1732,405 +1513,58 @@ class TlsTest(TestCase):
             "ClientHello has a pre_shared_key which is not the last extension",
         )
 
-    def test_pull_client_hello_with_sni(self) -> None:
-        buf = Buffer(data=load("tls_client_hello_with_sni.bin"))
-        hello = pull_client_hello(buf)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            hello.random,
-            bytes.fromhex(
-                "987d8934140b0a42cc5545071f3f9f7f61963d7b6404eb674c8dbe513604346b"
-            ),
-        )
-        self.assertEqual(
-            hello.legacy_session_id,
-            bytes.fromhex(
-                "26b19bdd30dbf751015a3a16e13bd59002dfe420b799d2a5cd5e11b8fa7bcb66"
-            ),
-        )
-        self.assertEqual(
-            hello.cipher_suites,
-            [
-                tls.CipherSuite.AES_256_GCM_SHA384,
-                tls.CipherSuite.AES_128_GCM_SHA256,
-                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
-            ],
-        )
-        self.assertEqual(hello.legacy_compression_methods, [tls.CompressionMethod.NULL])
-
-        # extensions
-        self.assertEqual(hello.alpn_protocols, None)
-        self.assertEqual(
-            hello.key_share,
-            [
-                (
-                    tls.Group.SECP256R1,
-                    bytes.fromhex(
-                        "04b62d70f907c814cd65d0f73b8b991f06b70c77153f548410a191d2b19764a2"
-                        "ecc06065a480efa9e1f10c8da6e737d5bfc04be3f773e20a0c997f51b5621280"
-                        "40"
-                    ),
-                )
-            ],
-        )
-        self.assertEqual(
-            hello.psk_key_exchange_modes, [tls.PskKeyExchangeMode.PSK_DHE_KE]
-        )
-        self.assertEqual(hello.server_name, "cloudflare-quic.com")
-        self.assertEqual(
-            hello.signature_algorithms,
-            [
-                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
-                tls.SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA1,
-            ],
-        )
-        self.assertEqual(hello.supported_groups, [tls.Group.SECP256R1])
-        self.assertEqual(
-            hello.supported_versions,
-            [
-                tls.TLS_VERSION_1_3,
-                tls.TLS_VERSION_1_3_DRAFT_28,
-                tls.TLS_VERSION_1_3_DRAFT_27,
-                tls.TLS_VERSION_1_3_DRAFT_26,
-            ],
-        )
-
-        self.assertEqual(
-            hello.other_extensions,
-            [
-                (
-                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
-                    CLIENT_QUIC_TRANSPORT_PARAMETERS,
-                )
-            ],
-        )
-
-        # serialize
-        buf = Buffer(1000)
-        push_client_hello(buf, hello)
-        self.assertEqual(buf.data, load("tls_client_hello_with_sni.bin"))
-
     def test_pull_client_hello_with_unexpected_version(self) -> None:
-        buf = Buffer(data=corrupt_hello_version(load("tls_client_hello.bin")))
+        buf = Buffer(capacity=1024)
+        push_client_hello(
+            buf,
+            ClientHello(
+                random=bytes(32),
+                legacy_session_id=b"",
+                cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256],
+                legacy_compression_methods=[tls.CompressionMethod.NULL],
+                key_share=[],
+                signature_algorithms=[],
+                supported_groups=[],
+                supported_versions=[tls.TLS_VERSION_1_3],
+            ),
+        )
+
         with self.assertRaises(tls.AlertDecodeError) as cm:
-            pull_client_hello(buf)
+            pull_client_hello(Buffer(data=corrupt_hello_version(buf.data)))
         self.assertEqual(str(cm.exception), "ClientHello version is not 1.2")
 
-    def test_push_client_hello(self) -> None:
-        hello = ClientHello(
-            random=bytes.fromhex(
-                "18b2b23bf3e44b5d52ccfe7aecbc5ff14eadc3d349fabf804d71f165ae76e7d5"
-            ),
-            legacy_session_id=bytes.fromhex(
-                "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
-            ),
-            cipher_suites=[
-                tls.CipherSuite.AES_256_GCM_SHA384,
-                tls.CipherSuite.AES_128_GCM_SHA256,
-                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
-            ],
-            legacy_compression_methods=[tls.CompressionMethod.NULL],
-            key_share=[
-                (
-                    tls.Group.SECP256R1,
-                    bytes.fromhex(
-                        "047bfea344467535054263b75def60cffa82405a211b68d1eb8d1d944e67aef8"
-                        "93c7665a5473d032cfaf22a73da28eb4aacae0017ed12557b5791f98a1e84f15"
-                        "b0"
-                    ),
-                )
-            ],
-            psk_key_exchange_modes=[tls.PskKeyExchangeMode.PSK_DHE_KE],
-            signature_algorithms=[
-                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
-                tls.SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA1,
-            ],
-            supported_groups=[tls.Group.SECP256R1],
-            supported_versions=[
-                tls.TLS_VERSION_1_3,
-                tls.TLS_VERSION_1_3_DRAFT_28,
-                tls.TLS_VERSION_1_3_DRAFT_27,
-                tls.TLS_VERSION_1_3_DRAFT_26,
-            ],
-            other_extensions=[
-                (
-                    tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
-                    CLIENT_QUIC_TRANSPORT_PARAMETERS,
-                )
-            ],
-        )
-
-        buf = Buffer(1000)
-        push_client_hello(buf, hello)
-        self.assertEqual(buf.data, load("tls_client_hello.bin"))
-
-    def test_pull_server_hello(self) -> None:
-        buf = Buffer(data=load("tls_server_hello.bin"))
-        hello = pull_server_hello(buf)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            hello.random,
-            bytes.fromhex(
-                "ada85271d19680c615ea7336519e3fdf6f1e26f3b1075ee1de96ffa8884e8280"
-            ),
-        )
-        self.assertEqual(
-            hello.legacy_session_id,
-            bytes.fromhex(
-                "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
-            ),
-        )
-        self.assertEqual(hello.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384)
-        self.assertEqual(hello.compression_method, tls.CompressionMethod.NULL)
-        self.assertEqual(
-            hello.key_share,
-            (
-                tls.Group.SECP256R1,
-                bytes.fromhex(
-                    "048b27d0282242d84b7fcc02a9c4f13eca0329e3c7029aa34a33794e6e7ba189"
-                    "5cca1c503bf0378ac6937c354912116ff3251026bca1958d7f387316c83ae6cf"
-                    "b2"
-                ),
-            ),
-        )
-        self.assertEqual(hello.pre_shared_key, None)
-        self.assertEqual(hello.supported_version, tls.TLS_VERSION_1_3)
-
-    def test_pull_server_hello_with_psk(self) -> None:
-        buf = Buffer(data=load("tls_server_hello_with_psk.bin"))
-        hello = pull_server_hello(buf)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            hello.random,
-            bytes.fromhex(
-                "ccbaaf04fc1bd5143b2cc6b97520cf37d91470dbfc8127131a7bf0f941e3a137"
-            ),
-        )
-        self.assertEqual(
-            hello.legacy_session_id,
-            bytes.fromhex(
-                "9483e7e895d0f4cec17086b0849601c0632662cd764e828f2f892f4c4b7771b0"
-            ),
-        )
-        self.assertEqual(hello.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384)
-        self.assertEqual(hello.compression_method, tls.CompressionMethod.NULL)
-        self.assertEqual(
-            hello.key_share,
-            (
-                tls.Group.SECP256R1,
-                bytes.fromhex(
-                    "0485d7cecbebfc548fc657bf51b8e8da842a4056b164a27f7702ca318c16e488"
-                    "18b6409593b15c6649d6f459387a53128b164178adc840179aad01d36ce95d62"
-                    "76"
-                ),
-            ),
-        )
-        self.assertEqual(hello.pre_shared_key, 0)
-        self.assertEqual(hello.supported_version, tls.TLS_VERSION_1_3)
-
-        # serialize
-        buf = Buffer(1000)
-        push_server_hello(buf, hello)
-        self.assertEqual(buf.data, load("tls_server_hello_with_psk.bin"))
-
     def test_pull_server_hello_with_unexpected_version(self) -> None:
-        buf = Buffer(data=corrupt_hello_version(load("tls_server_hello.bin")))
+        buf = Buffer(capacity=1024)
+        push_server_hello(
+            buf,
+            ServerHello(
+                random=bytes(32),
+                legacy_session_id=b"",
+                cipher_suite=tls.CipherSuite.AES_128_GCM_SHA256,
+                compression_method=tls.CompressionMethod.NULL,
+                supported_version=tls.TLS_VERSION_1_3,
+            ),
+        )
+
         with self.assertRaises(tls.AlertDecodeError) as cm:
-            pull_server_hello(buf)
+            pull_server_hello(Buffer(data=corrupt_hello_version(buf.data)))
         self.assertEqual(str(cm.exception), "ServerHello version is not 1.2")
 
-    def test_pull_server_hello_with_unknown_extension(self) -> None:
-        buf = Buffer(data=load("tls_server_hello_with_unknown_extension.bin"))
-        hello = pull_server_hello(buf)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            hello,
-            ServerHello(
-                random=bytes.fromhex(
-                    "ada85271d19680c615ea7336519e3fdf6f1e26f3b1075ee1de96ffa8884e8280"
-                ),
-                legacy_session_id=bytes.fromhex(
-                    "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
-                ),
-                cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
-                compression_method=tls.CompressionMethod.NULL,
-                key_share=(
-                    tls.Group.SECP256R1,
-                    bytes.fromhex(
-                        "048b27d0282242d84b7fcc02a9c4f13eca0329e3c7029aa34a33794e6e7ba189"
-                        "5cca1c503bf0378ac6937c354912116ff3251026bca1958d7f387316c83ae6cf"
-                        "b2"
-                    ),
-                ),
-                supported_version=tls.TLS_VERSION_1_3,
-                other_extensions=[(12345, b"foo")],
-            ),
-        )
-
-        # serialize
-        buf = Buffer(1000)
-        push_server_hello(buf, hello)
-        self.assertEqual(buf.data, load("tls_server_hello_with_unknown_extension.bin"))
-
-    def test_push_server_hello(self) -> None:
-        hello = ServerHello(
-            random=bytes.fromhex(
-                "ada85271d19680c615ea7336519e3fdf6f1e26f3b1075ee1de96ffa8884e8280"
-            ),
-            legacy_session_id=bytes.fromhex(
-                "9aee82a2d186c1cb32a329d9dcfe004a1a438ad0485a53c6bfcf55c132a23235"
-            ),
-            cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
-            compression_method=tls.CompressionMethod.NULL,
-            key_share=(
-                tls.Group.SECP256R1,
-                bytes.fromhex(
-                    "048b27d0282242d84b7fcc02a9c4f13eca0329e3c7029aa34a33794e6e7ba189"
-                    "5cca1c503bf0378ac6937c354912116ff3251026bca1958d7f387316c83ae6cf"
-                    "b2"
-                ),
-            ),
-            supported_version=tls.TLS_VERSION_1_3,
-        )
-
-        buf = Buffer(1000)
-        push_server_hello(buf, hello)
-        self.assertEqual(buf.data, load("tls_server_hello.bin"))
-
-    def test_pull_new_session_ticket(self) -> None:
-        buf = Buffer(data=load("tls_new_session_ticket.bin"))
-        new_session_ticket = pull_new_session_ticket(buf)
-        self.assertIsNotNone(new_session_ticket)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            new_session_ticket,
-            NewSessionTicket(
-                ticket_lifetime=86400,
-                ticket_age_add=3303452425,
-                ticket_nonce=b"",
-                ticket=bytes.fromhex(
-                    "dbe6f1a77a78c0426bfa607cd0d02b350247d90618704709596beda7e962cc81"
-                ),
-                max_early_data_size=0xFFFFFFFF,
-            ),
-        )
-
-        # serialize
-        buf = Buffer(100)
-        push_new_session_ticket(buf, new_session_ticket)
-        self.assertEqual(buf.data, load("tls_new_session_ticket.bin"))
-
     def test_pull_new_session_ticket_with_unknown_extension(self) -> None:
-        buf = Buffer(data=load("tls_new_session_ticket_with_unknown_extension.bin"))
-        new_session_ticket = pull_new_session_ticket(buf)
-        self.assertIsNotNone(new_session_ticket)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            new_session_ticket,
-            NewSessionTicket(
-                ticket_lifetime=86400,
-                ticket_age_add=3303452425,
-                ticket_nonce=b"",
-                ticket=bytes.fromhex(
-                    "dbe6f1a77a78c0426bfa607cd0d02b350247d90618704709596beda7e962cc81"
-                ),
-                max_early_data_size=0xFFFFFFFF,
-                other_extensions=[(12345, b"foo")],
-            ),
+        new_session_ticket = NewSessionTicket(
+            ticket_lifetime=86400,
+            ticket_age_add=0x12345678,
+            ticket_nonce=b"nonce",
+            ticket=b"ticket",
+            max_early_data_size=0xFFFFFFFF,
+            other_extensions=[(0xFAFA, b"grease")],
         )
-
-        # serialize
-        buf = Buffer(100)
+        buf = Buffer(capacity=1024)
         push_new_session_ticket(buf, new_session_ticket)
-        self.assertEqual(
-            buf.data, load("tls_new_session_ticket_with_unknown_extension.bin")
-        )
-
-    def test_encrypted_extensions(self) -> None:
-        data = load("tls_encrypted_extensions.bin")
-        buf = Buffer(data=data)
-        extensions = pull_encrypted_extensions(buf)
-        self.assertIsNotNone(extensions)
-        self.assertTrue(buf.eof())
 
         self.assertEqual(
-            extensions,
-            EncryptedExtensions(
-                other_extensions=[
-                    (
-                        tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
-                        SERVER_QUIC_TRANSPORT_PARAMETERS,
-                    )
-                ]
-            ),
+            pull_new_session_ticket(Buffer(data=buf.data)), new_session_ticket
         )
-
-        # serialize
-        buf = Buffer(capacity=100)
-        push_encrypted_extensions(buf, extensions)
-        self.assertEqual(buf.data, data)
-
-    def test_encrypted_extensions_with_alpn(self) -> None:
-        data = load("tls_encrypted_extensions_with_alpn.bin")
-        buf = Buffer(data=data)
-        extensions = pull_encrypted_extensions(buf)
-        self.assertIsNotNone(extensions)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            extensions,
-            EncryptedExtensions(
-                alpn_protocol="hq-20",
-                other_extensions=[
-                    (tls.ExtensionType.SERVER_NAME, b""),
-                    (
-                        tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
-                        SERVER_QUIC_TRANSPORT_PARAMETERS_2,
-                    ),
-                ],
-            ),
-        )
-
-        # serialize
-        buf = Buffer(115)
-        push_encrypted_extensions(buf, extensions)
-        self.assertTrue(buf.eof())
-
-    def test_pull_encrypted_extensions_with_alpn_and_early_data(self) -> None:
-        buf = Buffer(data=load("tls_encrypted_extensions_with_alpn_and_early_data.bin"))
-        extensions = pull_encrypted_extensions(buf)
-        self.assertIsNotNone(extensions)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            extensions,
-            EncryptedExtensions(
-                alpn_protocol="hq-20",
-                early_data=True,
-                other_extensions=[
-                    (tls.ExtensionType.SERVER_NAME, b""),
-                    (
-                        tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS_DRAFT,
-                        SERVER_QUIC_TRANSPORT_PARAMETERS_3,
-                    ),
-                ],
-            ),
-        )
-
-        # serialize
-        buf = Buffer(116)
-        push_encrypted_extensions(buf, extensions)
-        self.assertTrue(buf.eof())
 
     def test_pull_encrypted_extensions_with_invalid_alpn(self) -> None:
         for desc, data in [
@@ -2145,97 +1579,6 @@ class TlsTest(TestCase):
                     str(cm.exception),
                     "ALPN extension must contain exactly one protocol",
                 )
-
-    def test_pull_certificate(self) -> None:
-        buf = Buffer(data=load("tls_certificate.bin"))
-        certificate = pull_certificate(buf)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(certificate.request_context, b"")
-        self.assertEqual(certificate.certificates, [(CERTIFICATE_DATA, b"")])
-
-    def test_push_certificate(self) -> None:
-        certificate = Certificate(
-            request_context=b"", certificates=[(CERTIFICATE_DATA, b"")]
-        )
-
-        buf = Buffer(1600)
-        push_certificate(buf, certificate)
-        self.assertEqual(buf.data, load("tls_certificate.bin"))
-
-    def test_pull_certificate_request(self) -> None:
-        buf = Buffer(data=load("tls_certificate_request.bin"))
-        certificate_request = pull_certificate_request(buf)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(certificate_request.request_context, b"")
-        self.assertEqual(
-            certificate_request.signature_algorithms,
-            [
-                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
-                tls.SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA1,
-            ],
-        )
-        self.assertEqual(certificate_request.other_extensions, [(12345, b"foo")])
-
-    def test_push_certificate_request(self) -> None:
-        certificate_request = CertificateRequest(
-            request_context=b"",
-            signature_algorithms=[
-                tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
-                tls.SignatureAlgorithm.ECDSA_SECP256R1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA256,
-                tls.SignatureAlgorithm.RSA_PKCS1_SHA1,
-            ],
-            other_extensions=[(12345, b"foo")],
-        )
-
-        buf = Buffer(400)
-        push_certificate_request(buf, certificate_request)
-        self.assertEqual(buf.data, load("tls_certificate_request.bin"))
-
-    def test_pull_certificate_verify(self) -> None:
-        buf = Buffer(data=load("tls_certificate_verify.bin"))
-        verify = pull_certificate_verify(buf)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(verify.algorithm, tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256)
-        self.assertEqual(verify.signature, CERTIFICATE_VERIFY_SIGNATURE)
-
-    def test_push_certificate_verify(self) -> None:
-        verify = CertificateVerify(
-            algorithm=tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
-            signature=CERTIFICATE_VERIFY_SIGNATURE,
-        )
-
-        buf = Buffer(400)
-        push_certificate_verify(buf, verify)
-        self.assertEqual(buf.data, load("tls_certificate_verify.bin"))
-
-    def test_pull_finished(self) -> None:
-        buf = Buffer(data=load("tls_finished.bin"))
-        finished = pull_finished(buf)
-        self.assertTrue(buf.eof())
-
-        self.assertEqual(
-            finished.verify_data,
-            bytes.fromhex(
-                "f157923234ff9a4921aadb2e0ec7b1a30fce73fb9ec0c4276f9af268f408ec68"
-            ),
-        )
-
-    def test_push_finished(self) -> None:
-        finished = Finished(
-            verify_data=bytes.fromhex(
-                "f157923234ff9a4921aadb2e0ec7b1a30fce73fb9ec0c4276f9af268f408ec68"
-            )
-        )
-
-        buf = Buffer(128)
-        push_finished(buf, finished)
-        self.assertEqual(buf.data, load("tls_finished.bin"))
 
     def test_pull_server_name(self) -> None:
         buf = Buffer(data=b"\x00\x12\x00\x00\x0fwww.example.com")
