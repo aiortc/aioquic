@@ -9,9 +9,8 @@ Please report security vulnerabilities privately, as described in
 
 ## Getting started
 
-Building aioquic from source requires a C compiler and the Python
-development headers. Install it in editable mode, together with the tools
-and libraries used by continuous integration:
+Install aioquic in editable mode, together with the tools and libraries
+used by continuous integration:
 
 ```
 pip install -e . -r requirements/examples.txt -r requirements/lint.txt -r requirements/test.txt

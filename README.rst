@@ -77,18 +77,6 @@ The easiest way to install ``aioquic`` is to run:
 
     pip install aioquic
 
-Building from source
---------------------
-
-If there are no wheels for your system or if you wish to build ``aioquic``
-from source you will need a C compiler and the Python development headers.
-
-On Debian/Ubuntu run:
-
-.. code-block:: console
-
-   sudo apt install python3-dev
-
 Running the examples
 --------------------
 
