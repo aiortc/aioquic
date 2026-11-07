@@ -52,7 +52,12 @@ from .packet_builder import (
     QuicPacketBuilderStop,
 )
 from .recovery import MAX_ACK_RANGES, QuicPacketRecovery, QuicPacketSpace
-from .stream import FinalSizeError, QuicStream, StreamFinishedError
+from .stream import (
+    FinalSizeError,
+    QuicStream,
+    StreamFinishedError,
+    StreamStateError,
+)
 
 logger = logging.getLogger("quic")
 
@@ -102,6 +107,7 @@ PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
 PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
 PING_FRAME_CAPACITY = 1
 RESET_STREAM_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE
+RESET_STREAM_AT_FRAME_CAPACITY = 1 + 4 * UINT_VAR_MAX_SIZE
 RETIRE_CONNECTION_ID_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 STOP_SENDING_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE
 STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
@@ -240,7 +246,8 @@ class QuicConnection:
     The state machine is driven by three kinds of sources:
 
     - the API user requesting data to be send out (see :meth:`connect`,
-      :meth:`reset_stream`, :meth:`send_ping`, :meth:`send_datagram_frame`
+      :meth:`reset_stream`, :meth:`reset_stream_at`, :meth:`send_ping`,
+      :meth:`send_datagram_frame`
       and :meth:`send_stream_data`)
     - data being received from the network (see :meth:`receive_datagram`)
     - a timer firing (see :meth:`handle_timer`)
@@ -355,6 +362,7 @@ class QuicConnection:
         self._remote_max_data = 0
         self._remote_max_data_used = 0
         self._remote_max_datagram_frame_size: int | None = None
+        self._remote_reset_stream_at = False
         self._remote_max_stream_data_bidi_local = 0
         self._remote_max_stream_data_bidi_remote = 0
         self._remote_max_stream_data_uni = 0
@@ -451,6 +459,7 @@ class QuicConnection:
             0x1C: (self._handle_connection_close_frame, EPOCHS("IH01")),
             0x1D: (self._handle_connection_close_frame, EPOCHS("01")),
             0x1E: (self._handle_handshake_done_frame, EPOCHS("1")),
+            0x24: (self._handle_reset_stream_at_frame, EPOCHS("01")),
             0x30: (self._handle_datagram_frame, EPOCHS("01")),
             0x31: (self._handle_datagram_frame, EPOCHS("01")),
         }
@@ -1224,7 +1233,8 @@ class QuicConnection:
 
         This method has no effect if a reset has already been triggered either by a
         call to :meth:`reset_stream` or by the reception of a STOP_SENDING frame, or
-        if all the stream's data has already been acknowledged.
+        if all the stream's data has already been acknowledged. After
+        :meth:`reset_stream_at`, it lowers the reliable size to zero.
 
         .. aioquic_transmit::
 
@@ -1238,6 +1248,28 @@ class QuicConnection:
 
         stream = self._get_or_create_stream_for_send(stream_id)
         stream.sender.reset(error_code)
+
+    def reset_stream_at(
+        self, stream_id: int, error_code: int, reliable_size: int
+    ) -> None:
+        """Reset a stream after reliably delivering data through ``reliable_size``.
+
+        The peer must have advertised RESET_STREAM_AT support. aioquic retransmits
+        stream data up to the reliable size and the reset frame until acknowledged.
+        Final size is derived from the highest offset sent and the reliable size.
+
+        .. aioquic_transmit::
+
+        :param stream_id: The stream's ID.
+        :param error_code: An error code indicating why the stream is being reset.
+        :param reliable_size: The byte offset through which data must be delivered.
+        """
+        if not self._remote_reset_stream_at:
+            raise RuntimeError("Peer does not support RESET_STREAM_AT")
+        if self._stream_can_send(stream_id) and self._stream_is_discarded(stream_id):
+            return
+        stream = self._get_or_create_stream_for_send(stream_id)
+        stream.sender.reset_at(error_code, reliable_size)
 
     def send_ping(self, uid: int) -> None:
         """
@@ -2532,9 +2564,70 @@ class QuicConnection:
             event = stream.receiver.handle_reset(
                 error_code=error_code, final_size=final_size
             )
-        except FinalSizeError as exc:
+        except (FinalSizeError, StreamStateError) as exc:
             raise QuicConnectionError(
-                error_code=QuicErrorCode.FINAL_SIZE_ERROR,
+                error_code=(
+                    QuicErrorCode.STREAM_STATE_ERROR
+                    if isinstance(exc, StreamStateError)
+                    else QuicErrorCode.FINAL_SIZE_ERROR
+                ),
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
+        if event is not None:
+            self._events.append(event)
+        self._local_max_data.used += newly_received
+
+    def _handle_reset_stream_at_frame(
+        self, context: QuicReceiveContext, frame_type: int, buf: Buffer
+    ) -> None:
+        stream_id = buf.pull_uint_var()
+        error_code = buf.pull_uint_var()
+        final_size = buf.pull_uint_var()
+        reliable_size = buf.pull_uint_var()
+        if self._quic_logger is not None:
+            context.quic_logger_frames.append(
+                self._quic_logger.encode_reset_stream_at_frame(
+                    error_code=error_code,
+                    final_size=final_size,
+                    reliable_size=reliable_size,
+                    stream_id=stream_id,
+                )
+            )
+        if reliable_size > final_size:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Reliable size exceeds final size",
+            )
+        self._assert_stream_can_receive(frame_type, stream_id)
+        stream = self._get_or_create_stream(frame_type, stream_id)
+        if final_size > stream.max_stream_data_local:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FLOW_CONTROL_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Over stream data limit",
+            )
+        newly_received = max(0, final_size - stream.receiver.highest_offset)
+        if self._local_max_data.used + newly_received > self._local_max_data.value:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FLOW_CONTROL_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Over connection data limit",
+            )
+        try:
+            event = stream.receiver.handle_reset_at(
+                error_code=error_code,
+                final_size=final_size,
+                reliable_size=reliable_size,
+            )
+        except (FinalSizeError, StreamStateError) as exc:
+            raise QuicConnectionError(
+                error_code=(
+                    QuicErrorCode.STREAM_STATE_ERROR
+                    if isinstance(exc, StreamStateError)
+                    else QuicErrorCode.FINAL_SIZE_ERROR
+                ),
                 frame_type=frame_type,
                 reason_phrase=str(exc),
             )
@@ -2677,6 +2770,9 @@ class QuicConnection:
             )
         if event is not None:
             self._events.append(event)
+        reset_event = stream.receiver.take_reset_event()
+        if reset_event is not None:
+            self._events.append(reset_event)
         self._local_max_data.used += newly_received
 
     def _handle_stream_data_blocked_frame(
@@ -3368,6 +3464,15 @@ class QuicConnection:
         self._remote_max_datagram_frame_size = (
             quic_transport_parameters.max_datagram_frame_size
         )
+        if quic_transport_parameters.reset_stream_at:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                frame_type=QuicFrameType.CRYPTO,
+                reason_phrase="reset_stream_at must be empty",
+            )
+        self._remote_reset_stream_at = (
+            quic_transport_parameters.reset_stream_at is not None
+        )
         for param in [
             "max_data",
             "max_stream_data_bidi_local",
@@ -3455,6 +3560,7 @@ class QuicConnection:
             initial_source_connection_id=self._local_initial_source_connection_id,
             max_ack_delay=25,
             max_datagram_frame_size=self._configuration.max_datagram_frame_size,
+            reset_stream_at=b"",
             quantum_readiness=(
                 b"Q" * SMALLEST_MAX_DATAGRAM_SIZE
                 if self._configuration.quantum_readiness_test
@@ -3769,21 +3875,30 @@ class QuicConnection:
                         # STOP_SENDING
                         self._write_stop_sending_frame(builder=builder, stream=stream)
 
-                    if stream.sender.reset_pending:
-                        # RESET_STREAM
+                    max_stream_offset = min(
+                        stream.sender.highest_offset
+                        + self._remote_max_data
+                        - self._remote_max_data_used,
+                        stream.max_stream_data_remote,
+                    )
+                    can_send_reset = stream.sender.reset_pending and (
+                        stream.sender.reset_reliable_size is None
+                        or stream.sender.reset_final_size <= max_stream_offset
+                    )
+                    if can_send_reset:
+                        # RESET_STREAM or RESET_STREAM_AT.
                         self._write_reset_stream_frame(builder=builder, stream=stream)
-                    elif not stream.is_blocked and not stream.sender.buffer_is_empty:
+                    if (
+                        not can_send_reset
+                        and not stream.is_blocked
+                        and not stream.sender.buffer_is_empty
+                    ):
                         # STREAM
                         used = self._write_stream_frame(
                             builder=builder,
                             space=space,
                             stream=stream,
-                            max_offset=min(
-                                stream.sender.highest_offset
-                                + self._remote_max_data
-                                - self._remote_max_data_used,
-                                stream.max_stream_data_remote,
-                            ),
+                            max_offset=max_stream_offset,
                         )
                         self._remote_max_data_used += used
                         if used > 0:
@@ -4122,25 +4237,47 @@ class QuicConnection:
         builder: QuicPacketBuilder,
         stream: QuicStream,
     ) -> None:
+        reliable_size = stream.sender.reset_reliable_size
+        is_reset_at = reliable_size is not None
+        frame_type = (
+            QuicFrameType.RESET_STREAM_AT if is_reset_at else QuicFrameType.RESET_STREAM
+        )
         buf = builder.start_frame(
-            frame_type=QuicFrameType.RESET_STREAM,
-            capacity=RESET_STREAM_FRAME_CAPACITY,
+            frame_type=frame_type,
+            capacity=(
+                RESET_STREAM_AT_FRAME_CAPACITY
+                if is_reset_at
+                else RESET_STREAM_FRAME_CAPACITY
+            ),
             handler=stream.sender.on_reset_delivery,
+            handler_args=(reliable_size,),
         )
         frame = stream.sender.get_reset_frame()
         buf.push_uint_var(frame.stream_id)
         buf.push_uint_var(frame.error_code)
         buf.push_uint_var(frame.final_size)
+        if reliable_size is not None:
+            buf.push_uint_var(reliable_size)
 
         # log frame
         if self._quic_logger is not None:
-            builder.quic_logger_frames.append(
-                self._quic_logger.encode_reset_stream_frame(
-                    error_code=frame.error_code,
-                    final_size=frame.final_size,
-                    stream_id=frame.stream_id,
+            if reliable_size is not None:
+                builder.quic_logger_frames.append(
+                    self._quic_logger.encode_reset_stream_at_frame(
+                        error_code=frame.error_code,
+                        final_size=frame.final_size,
+                        reliable_size=reliable_size,
+                        stream_id=frame.stream_id,
+                    )
                 )
-            )
+            else:
+                builder.quic_logger_frames.append(
+                    self._quic_logger.encode_reset_stream_frame(
+                        error_code=frame.error_code,
+                        final_size=frame.final_size,
+                        stream_id=frame.stream_id,
+                    )
+                )
 
     def _write_retire_connection_id_frame(
         self, builder: QuicPacketBuilder, sequence_number: int

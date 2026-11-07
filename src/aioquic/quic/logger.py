@@ -152,6 +152,17 @@ class QuicLoggerTrace:
             "stream_id": stream_id,
         }
 
+    def encode_reset_stream_at_frame(
+        self, error_code: int, final_size: int, reliable_size: int, stream_id: int
+    ) -> dict:
+        return {
+            "error_code": error_code,
+            "final_size": final_size,
+            "frame_type": "reset_stream_at",
+            "reliable_size": reliable_size,
+            "stream_id": stream_id,
+        }
+
     def encode_retire_connection_id_frame(self, sequence_number: int) -> dict:
         return {
             "frame_type": "retire_connection_id",
