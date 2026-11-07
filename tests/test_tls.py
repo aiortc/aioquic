@@ -1476,6 +1476,30 @@ class ContextTest(TestCase):
         server.get_session_ticket_cb = lambda label: ticket
         self._resume(client, server)
 
+    def test_session_ticket_long_lifetime(self) -> None:
+        """
+        A client does not keep a session ticket for longer than 7 days, whatever
+        its lifetime (RFC 9846 section 4.7.1).
+        """
+        client_tickets: list[SessionTicket] = []
+        client = self.create_client()
+        client.new_session_ticket_cb = client_tickets.append
+        server = self.create_server()
+        self._handshake(client, server)
+
+        # Handle a session ticket with the largest lifetime.
+        buf = Buffer(capacity=128)
+        push_new_session_ticket(
+            buf, NewSessionTicket(ticket_lifetime=0xFFFFFFFF, ticket=b"ticket")
+        )
+        client.handle_message(buf.data, create_buffers())
+
+        self.assertEqual(len(client_tickets), 1)
+        self.assertEqual(
+            client_tickets[0].not_valid_after - client_tickets[0].not_valid_before,
+            datetime.timedelta(days=7),
+        )
+
     def _create_other_cipher_suite_contexts(
         self, client_cipher_suites: list[tls.CipherSuite]
     ) -> tuple[Context, Context]:
