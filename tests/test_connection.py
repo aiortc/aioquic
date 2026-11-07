@@ -3012,25 +3012,39 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertTrue(event.end_stream)
 
     def test_connect_with_legacy_session_id(self) -> None:
-        def patch(client: QuicConnection) -> None:
-            """
-            Patch client's TLS initialization to send a legacy_session_id.
-            """
-            real_initialize = client._initialize
+        def patch_with(legacy_session_id: bytes) -> Callable[[QuicConnection], None]:
+            def patch(client: QuicConnection) -> None:
+                """
+                Patch client's TLS initialization to send a legacy_session_id.
+                """
+                real_initialize = client._initialize
 
-            def patched_initialize(peer_cid: bytes) -> None:
-                real_initialize(peer_cid)
-                client.tls.legacy_session_id = bytes(32)
+                def patched_initialize(peer_cid: bytes) -> None:
+                    real_initialize(peer_cid)
+                    client.tls.legacy_session_id = legacy_session_id
 
-            client._initialize = patched_initialize  # type: ignore[method-assign]
+                client._initialize = patched_initialize  # type: ignore[method-assign]
 
-        with client_and_server(client_patch=patch) as (client, server):
+            return patch
+
+        with client_and_server(client_patch=patch_with(bytes(32))) as (client, server):
             self.assertEqual(
                 server._close_event,
                 events.ConnectionTerminated(
                     error_code=QuicErrorCode.PROTOCOL_VIOLATION,
                     frame_type=QuicFrameType.CRYPTO,
                     reason_phrase="ClientHello has a non-empty legacy_session_id",
+                ),
+            )
+
+        with client_and_server(client_patch=patch_with(bytes(33))) as (client, server):
+            self.assertEqual(
+                server._close_event,
+                events.ConnectionTerminated(
+                    error_code=QuicErrorCode.CRYPTO_ERROR
+                    + tls.AlertDescription.decode_error,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="legacy_session_id is too long",
                 ),
             )
 

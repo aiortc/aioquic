@@ -616,6 +616,14 @@ def pull_handshake_type(buf: Buffer, expected_type: HandshakeType) -> None:
     assert message_type == expected_type
 
 
+def pull_legacy_session_id(buf: Buffer) -> bytes:
+    legacy_session_id = pull_opaque(buf, 1)
+    # An out-of-range length requires a decode_error (RFC 8446 section 6).
+    if len(legacy_session_id) > 32:
+        raise AlertDecodeError("legacy_session_id is too long")
+    return legacy_session_id
+
+
 def pull_client_hello(buf: Buffer) -> ClientHello:
     pull_handshake_type(buf, HandshakeType.CLIENT_HELLO)
     with pull_block(buf, 3):
@@ -624,7 +632,7 @@ def pull_client_hello(buf: Buffer) -> ClientHello:
 
         hello = ClientHello(
             random=buf.pull_bytes(32),
-            legacy_session_id=pull_opaque(buf, 1),
+            legacy_session_id=pull_legacy_session_id(buf),
             cipher_suites=pull_list(buf, 2, buf.pull_uint16),
             legacy_compression_methods=pull_list(buf, 1, buf.pull_uint8),
         )
@@ -745,7 +753,7 @@ def pull_server_hello(buf: Buffer) -> ServerHello:
 
         hello = ServerHello(
             random=buf.pull_bytes(32),
-            legacy_session_id=pull_opaque(buf, 1),
+            legacy_session_id=pull_legacy_session_id(buf),
             cipher_suite=buf.pull_uint16(),
             compression_method=buf.pull_uint8(),
         )
@@ -1685,6 +1693,11 @@ class Context:
         if peer_hello.compression_method not in self._legacy_compression_methods:
             raise AlertIllegalParameter(
                 "ServerHello has a compression method we did not advertise"
+            )
+        # The server must echo our legacy_session_id (RFC 8446 section 4.1.3).
+        if peer_hello.legacy_session_id != self.legacy_session_id:
+            raise AlertIllegalParameter(
+                "ServerHello has a legacy_session_id we did not send"
             )
         if peer_hello.supported_version not in self._supported_versions:
             raise AlertIllegalParameter(

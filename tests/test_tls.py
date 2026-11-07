@@ -103,6 +103,24 @@ def corrupt_hello_version(data: bytes) -> bytes:
     return data[:4] + b"\xff\xff" + data[6:]
 
 
+def corrupt_server_hello_session_id(data: bytes, session_id: bytes) -> bytes:
+    """
+    Replace a ServerHello's legacy_session_id, adjusting the message length.
+    """
+    old_length = data[38]
+    message_length = (
+        int.from_bytes(data[1:4], byteorder="big") + len(session_id) - old_length
+    )
+    return (
+        data[:1]
+        + message_length.to_bytes(3, byteorder="big")
+        + data[4:38]
+        + bytes([len(session_id)])
+        + session_id
+        + data[39 + old_length :]
+    )
+
+
 def create_buffers() -> dict[tls.Epoch, Buffer]:
     return {
         tls.Epoch.INITIAL: Buffer(capacity=4096),
@@ -180,8 +198,10 @@ class ContextTest(TestCase):
         self,
         corrupt_client_input: Callable[[bytes], bytes],
         expected_exception: tls.Alert,
+        legacy_session_id: bytes = b"",
     ) -> None:
         client = self.create_client()
+        client.legacy_session_id = legacy_session_id
         server = self.create_server()
 
         # Send client hello.
@@ -318,6 +338,31 @@ class ContextTest(TestCase):
             tls.AlertIllegalParameter(
                 "ServerHello has a key share we did not advertise"
             ),
+        )
+
+    def test_client_bad_hello_legacy_session_id(self) -> None:
+        self.handshake_with_client_input_corruption(
+            # Echo a value although we sent none.
+            lambda x: corrupt_server_hello_session_id(x, b"\xff"),
+            tls.AlertIllegalParameter(
+                "ServerHello has a legacy_session_id we did not send"
+            ),
+        )
+
+    def test_client_bad_hello_legacy_session_id_not_echoed(self) -> None:
+        self.handshake_with_client_input_corruption(
+            # Drop the value we sent.
+            lambda x: corrupt_server_hello_session_id(x, b""),
+            tls.AlertIllegalParameter(
+                "ServerHello has a legacy_session_id we did not send"
+            ),
+            legacy_session_id=bytes(32),
+        )
+
+    def test_client_bad_hello_legacy_session_id_too_long(self) -> None:
+        self.handshake_with_client_input_corruption(
+            lambda x: corrupt_server_hello_session_id(x, bytes(33)),
+            tls.AlertDecodeError("legacy_session_id is too long"),
         )
 
     def test_client_bad_hello_no_key_share(self) -> None:
@@ -992,6 +1037,13 @@ class ContextTest(TestCase):
     def test_handshake_with_grease_group(self) -> None:
         client = self.create_client()
         client._supported_groups = [tls.Group.GREASE, tls.Group.SECP256R1]
+        server = self.create_server()
+
+        self._handshake(client, server)
+
+    def test_handshake_with_legacy_session_id(self) -> None:
+        client = self.create_client()
+        client.legacy_session_id = bytes(32)
         server = self.create_server()
 
         self._handshake(client, server)
