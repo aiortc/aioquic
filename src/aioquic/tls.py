@@ -318,6 +318,8 @@ class CompressionMethod(IntEnum):
     NULL = 0
 
 
+# Members are the extensions we recognize, which a ServerHello or
+# EncryptedExtensions must not carry unless allowed there (RFC 9846 section 4.3).
 class ExtensionType(IntEnum):
     SERVER_NAME = 0
     STATUS_REQUEST = 5
@@ -332,7 +334,6 @@ class ExtensionType(IntEnum):
     PSK_KEY_EXCHANGE_MODES = 45
     KEY_SHARE = 51
     QUIC_TRANSPORT_PARAMETERS = 0x0039
-    ENCRYPTED_SERVER_NAME = 65486
 
 
 class Group(IntEnum):
@@ -469,6 +470,27 @@ def push_opaque(buf: Buffer, capacity: int, value: bytes) -> None:
     """
     with push_block(buf, capacity):
         buf.push_bytes(value)
+
+
+def pull_extensions(buf: Buffer, func: Callable[[int, int], None]) -> None:
+    """
+    Pull a list of extensions, calling `func` with the type and length of each.
+    """
+    extension_types: set[int] = set()
+
+    def pull_extension() -> None:
+        extension_type = buf.pull_uint16()
+        # An extension type must not appear twice (RFC 9846 section 4.3).
+        if extension_type in extension_types:
+            raise AlertIllegalParameter(f"Extension {extension_type:#06x} is repeated")
+        extension_types.add(extension_type)
+
+        # Data left over after the extension's structure requires a
+        # decode_error (RFC 9846 section 4.3).
+        with pull_block(buf, 2) as extension_length:
+            func(extension_type, extension_length)
+
+    pull_list(buf, 2, pull_extension)
 
 
 @contextmanager
@@ -648,7 +670,7 @@ def pull_client_hello(buf: Buffer) -> ClientHello:
         # extensions
         after_psk = False
 
-        def pull_extension() -> None:
+        def pull_extension(extension_type: int, extension_length: int) -> None:
             # pre_shared_key MUST be last
             nonlocal after_psk
             if after_psk:
@@ -657,8 +679,6 @@ def pull_client_hello(buf: Buffer) -> ClientHello:
                     "ClientHello has a pre_shared_key which is not the last extension"
                 )
 
-            extension_type = buf.pull_uint16()
-            extension_length = buf.pull_uint16()
             if extension_type == ExtensionType.KEY_SHARE:
                 hello.key_share = pull_list(buf, 2, partial(pull_key_share, buf))
             elif extension_type == ExtensionType.SUPPORTED_VERSIONS:
@@ -685,7 +705,7 @@ def pull_client_hello(buf: Buffer) -> ClientHello:
                     (extension_type, buf.pull_bytes(extension_length))
                 )
 
-        pull_list(buf, 2, pull_extension)
+        pull_extensions(buf, pull_extension)
 
     return hello
 
@@ -769,9 +789,7 @@ def pull_server_hello(buf: Buffer) -> ServerHello:
         )
 
         # extensions
-        def pull_extension() -> None:
-            extension_type = buf.pull_uint16()
-            extension_length = buf.pull_uint16()
+        def pull_extension(extension_type: int, extension_length: int) -> None:
             if extension_type == ExtensionType.SUPPORTED_VERSIONS:
                 hello.supported_version = buf.pull_uint16()
             elif extension_type == ExtensionType.KEY_SHARE:
@@ -783,7 +801,7 @@ def pull_server_hello(buf: Buffer) -> ServerHello:
                     (extension_type, buf.pull_bytes(extension_length))
                 )
 
-        pull_list(buf, 2, pull_extension)
+        pull_extensions(buf, pull_extension)
 
     return hello
 
@@ -839,9 +857,7 @@ def pull_new_session_ticket(buf: Buffer) -> NewSessionTicket:
         new_session_ticket.ticket_nonce = pull_opaque(buf, 1)
         new_session_ticket.ticket = pull_opaque(buf, 2)
 
-        def pull_extension() -> None:
-            extension_type = buf.pull_uint16()
-            extension_length = buf.pull_uint16()
+        def pull_extension(extension_type: int, extension_length: int) -> None:
             if extension_type == ExtensionType.EARLY_DATA:
                 new_session_ticket.max_early_data_size = buf.pull_uint32()
             else:
@@ -849,7 +865,7 @@ def pull_new_session_ticket(buf: Buffer) -> NewSessionTicket:
                     (extension_type, buf.pull_bytes(extension_length))
                 )
 
-        pull_list(buf, 2, pull_extension)
+        pull_extensions(buf, pull_extension)
 
     return new_session_ticket
 
@@ -886,9 +902,7 @@ def pull_encrypted_extensions(buf: Buffer) -> EncryptedExtensions:
     pull_handshake_type(buf, HandshakeType.ENCRYPTED_EXTENSIONS)
     with pull_block(buf, 3):
 
-        def pull_extension() -> None:
-            extension_type = buf.pull_uint16()
-            extension_length = buf.pull_uint16()
+        def pull_extension(extension_type: int, extension_length: int) -> None:
             if extension_type == ExtensionType.ALPN:
                 protocols = pull_list(buf, 2, partial(pull_alpn_protocol, buf))
 
@@ -905,7 +919,7 @@ def pull_encrypted_extensions(buf: Buffer) -> EncryptedExtensions:
                     (extension_type, buf.pull_bytes(extension_length))
                 )
 
-        pull_list(buf, 2, pull_extension)
+        pull_extensions(buf, pull_extension)
 
     return extensions
 
@@ -988,9 +1002,7 @@ def pull_certificate_request(buf: Buffer) -> CertificateRequest:
     with pull_block(buf, 3):
         certificate_request.request_context = pull_opaque(buf, 1)
 
-        def pull_extension() -> None:
-            extension_type = buf.pull_uint16()
-            extension_length = buf.pull_uint16()
+        def pull_extension(extension_type: int, extension_length: int) -> None:
             if extension_type == ExtensionType.SIGNATURE_ALGORITHMS:
                 certificate_request.signature_algorithms = pull_list(
                     buf, 2, buf.pull_uint16
@@ -1000,7 +1012,7 @@ def pull_certificate_request(buf: Buffer) -> CertificateRequest:
                     (extension_type, buf.pull_bytes(extension_length))
                 )
 
-        pull_list(buf, 2, pull_extension)
+        pull_extensions(buf, pull_extension)
 
     return certificate_request
 
@@ -1374,6 +1386,7 @@ class Context:
         self.key_schedule: KeySchedule | None = None
         self.received_extensions: list[Extension] | None = None
         self._certificate_request: CertificateRequest | None = None
+        self._early_data_offered = False
         self._key_schedule_psk: KeySchedule | None = None
         self._key_schedule_proxy: KeyScheduleProxy | None = None
         self._new_session_ticket: NewSessionTicket | None = None
@@ -1381,6 +1394,7 @@ class Context:
         self._peer_certificate_chain: list[x509.Certificate] = []
         self._psk_key_exchange_mode: int | None = None
         self._receive_buffer = bytearray()
+        self._server_name_sent = False
         self._session_resumed = False
         self._enc_key: bytes | None = None
         self._dec_key: bytes | None = None
@@ -1620,6 +1634,7 @@ class Context:
             server_name = self._server_name
         else:
             server_name = None
+        self._server_name_sent = server_name is not None
 
         hello = ClientHello(
             random=self.client_random,
@@ -1650,6 +1665,7 @@ class Context:
             # update hello
             if self.session_ticket.max_early_data_size is not None:
                 hello.early_data = True
+                self._early_data_offered = True
             hello.pre_shared_key = OfferedPsks(
                 identities=[
                     (self.session_ticket.ticket, self.session_ticket.obfuscated_age)
@@ -1727,13 +1743,14 @@ class Context:
 
         # Every extension a ServerHello may carry has been parsed, so any other one
         # is either in the wrong message or unsolicited (RFC 9846 section 4.3).
-        if any(
-            extension_type in list(ExtensionType)
-            for extension_type, _ in peer_hello.other_extensions
-        ):
-            raise AlertIllegalParameter("ServerHello has a prohibited extension")
-        if peer_hello.other_extensions:
-            raise AlertUnsupportedExtension("ServerHello has an unsolicited extension")
+        for extension_type, _ in peer_hello.other_extensions:
+            if extension_type in list(ExtensionType):
+                raise AlertIllegalParameter(
+                    f"ServerHello has a prohibited extension {extension_type:#06x}"
+                )
+            raise AlertUnsupportedExtension(
+                f"ServerHello has an unsolicited extension {extension_type:#06x}"
+            )
 
         # If the server accepted our PSK, keep its key schedule. The server may
         # select any cipher suite with the PSK's hash (RFC 9846 section 4.3.11):
@@ -1810,6 +1827,51 @@ class Context:
             and encrypted_extensions.alpn_protocol not in self._alpn_protocols
         ):
             raise AlertNoApplicationProtocol("No common ALPN protocols")
+
+        # The server may only answer what we offered, with extensions specified for
+        # EncryptedExtensions (RFC 9846 section 4.3), and only accept early data
+        # along with our PSK (RFC 9846 section 4.3.11).
+        if (
+            self._alpn_protocols is None
+            and encrypted_extensions.alpn_protocol is not None
+        ):
+            raise AlertUnsupportedExtension(
+                "EncryptedExtensions has an unsolicited ALPN"
+            )
+        if encrypted_extensions.early_data:
+            if not self._early_data_offered:
+                raise AlertUnsupportedExtension(
+                    "EncryptedExtensions has an unsolicited early_data"
+                )
+            if not self._session_resumed:
+                raise AlertIllegalParameter(
+                    "EncryptedExtensions accepts early data without our PSK"
+                )
+        expected = [extension_type for extension_type, _ in self.handshake_extensions]
+        expected.append(ExtensionType.SUPPORTED_GROUPS)
+        if self._server_name_sent:
+            expected.append(ExtensionType.SERVER_NAME)
+        for extension_type, extension_data in encrypted_extensions.other_extensions:
+            if extension_type in list(ExtensionType) and extension_type not in (
+                ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                ExtensionType.SERVER_NAME,
+                ExtensionType.SUPPORTED_GROUPS,
+            ):
+                raise AlertIllegalParameter(
+                    "EncryptedExtensions has a prohibited extension "
+                    f"{extension_type:#06x}"
+                )
+            if extension_type not in expected:
+                raise AlertUnsupportedExtension(
+                    "EncryptedExtensions has an unsolicited extension "
+                    f"{extension_type:#06x}"
+                )
+            # The server_name acknowledgement is empty (RFC 6066 section 3), so any
+            # data in it is left over (RFC 9846 section 4.3).
+            if extension_type == ExtensionType.SERVER_NAME and extension_data:
+                raise AlertDecodeError(
+                    "EncryptedExtensions has a non-empty server_name"
+                )
 
         self.alpn_negotiated = encrypted_extensions.alpn_protocol
         self.early_data_accepted = encrypted_extensions.early_data
