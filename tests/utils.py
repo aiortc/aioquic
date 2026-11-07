@@ -80,6 +80,7 @@ def generate_certificate(
     *,
     alternative_names: list[str],
     common_name: str,
+    extensions: list[x509.ExtensionType] = [],
     hash_algorithm: hashes.SHA256 | None,
     key: K,
 ) -> tuple[x509.Certificate, K]:
@@ -107,6 +108,8 @@ def generate_certificate(
             ),
             critical=False,
         )
+    for extension in extensions:
+        builder = builder.add_extension(extension, critical=False)
     cert = builder.sign(key, hash_algorithm)
     return cert, key
 
@@ -275,11 +278,13 @@ def generate_ec_certificate(
     common_name: str,
     alternative_names: list[str] = [],
     curve: type[ec.EllipticCurve] = ec.SECP256R1,
+    extensions: list[x509.ExtensionType] = [],
 ) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
     key = ec.generate_private_key(curve=curve())
     return generate_certificate(
         alternative_names=alternative_names,
         common_name=common_name,
+        extensions=extensions,
         hash_algorithm=hashes.SHA256(),
         key=key,
     )
