@@ -326,6 +326,15 @@ class ContextTest(TestCase):
             tls.AlertDecodeError("Could not parse TLS message"),
         )
 
+    def test_client_bad_hello_cipher_suite(self) -> None:
+        self.handshake_with_client_input_corruption(
+            # Select TLS_AES_128_CCM_SHA256, which we did not offer.
+            lambda x: modify_server_hello(x, cipher_suite=0x1304),
+            tls.AlertIllegalParameter(
+                "ServerHello has a cipher suite we did not advertise"
+            ),
+        )
+
     def test_client_bad_hello_compression_method(self) -> None:
         self.handshake_with_client_input_corruption(
             lambda x: modify_server_hello(x, compression_method=0xFF),

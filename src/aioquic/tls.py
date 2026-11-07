@@ -1689,10 +1689,14 @@ class Context:
     def _client_handle_hello(self, input_buf: Buffer, output_buf: Buffer) -> None:
         peer_hello = pull_server_hello(input_buf)
 
+        # A cipher suite we did not offer requires an illegal_parameter alert
+        # (RFC 9846 section 4.2.3).
         cipher_suite = negotiate(
             self._cipher_suites,
             [peer_hello.cipher_suite],
-            AlertHandshakeFailure("Unsupported cipher suite"),
+            AlertIllegalParameter(
+                "ServerHello has a cipher suite we did not advertise"
+            ),
         )
         if peer_hello.compression_method not in self._legacy_compression_methods:
             raise AlertIllegalParameter(
