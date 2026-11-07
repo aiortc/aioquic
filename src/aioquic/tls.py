@@ -649,7 +649,9 @@ def pull_client_hello(buf: Buffer) -> ClientHello:
             nonlocal after_psk
             if after_psk:
                 # the alert is Illegal Parameter per RFC 9846 section 4.3.11.
-                raise AlertIllegalParameter("PreSharedKey is not the last extension")
+                raise AlertIllegalParameter(
+                    "ClientHello has a pre_shared_key which is not the last extension"
+                )
 
             extension_type = buf.pull_uint16()
             extension_length = buf.pull_uint16()
@@ -1970,38 +1972,56 @@ class Context:
         cipher_suite = negotiate(
             self._cipher_suites,
             peer_hello.cipher_suites,
-            AlertHandshakeFailure("No supported cipher suite"),
-        )
-        compression_method = negotiate(
-            self._legacy_compression_methods,
-            peer_hello.legacy_compression_methods,
-            AlertHandshakeFailure("No supported compression method"),
+            AlertHandshakeFailure("ClientHello has no supported cipher suite"),
         )
         psk_key_exchange_mode = negotiate(
             self._psk_key_exchange_modes, peer_hello.psk_key_exchange_modes
         )
-        signature_algorithm = negotiate(
-            self._signature_algorithms_for_private_key(),
-            peer_hello.signature_algorithms,
-            AlertHandshakeFailure("No supported signature algorithm"),
-        )
         supported_version = negotiate(
             self._supported_versions,
             peer_hello.supported_versions,
-            AlertProtocolVersion("No supported protocol version"),
+            AlertProtocolVersion("ClientHello has no supported protocol version"),
         )
 
+        # The only compression method in TLS 1.3 is null (RFC 9846 section 4.2.2).
+        if peer_hello.legacy_compression_methods != [CompressionMethod.NULL]:
+            raise AlertIllegalParameter(
+                "ClientHello has a compression method other than null"
+            )
+
         # We only support (EC)DHE key exchange, so the client must send a key share
-        # (RFC 9846 section 9.2).
+        # with its supported groups. Without a PSK, it must also send signature
+        # algorithms (RFC 9846 section 9.2).
         if peer_hello.key_share is None:
             raise AlertMissingExtension("ClientHello has no key share")
+        if peer_hello.supported_groups is None:
+            raise AlertMissingExtension("ClientHello has no supported groups")
+        if (
+            peer_hello.pre_shared_key is None
+            and peer_hello.signature_algorithms is None
+        ):
+            raise AlertMissingExtension("ClientHello has no signature algorithms")
+
+        # A client offering a PSK must send its key exchange modes (RFC 9846
+        # section 4.3.9).
+        if (
+            peer_hello.pre_shared_key is not None
+            and peer_hello.psk_key_exchange_modes is None
+        ):
+            raise AlertMissingExtension("ClientHello has no PSK key exchange modes")
+
+        signature_algorithm = negotiate(
+            self._signature_algorithms_for_private_key(),
+            peer_hello.signature_algorithms,
+            AlertHandshakeFailure("ClientHello has no supported signature algorithm"),
+        )
 
         # negotiate ALPN
         if self._alpn_protocols is not None:
             self.alpn_negotiated = negotiate(
                 self._alpn_protocols,
                 peer_hello.alpn_protocols,
-                AlertNoApplicationProtocol("No common ALPN protocols"),
+                AlertNoApplicationProtocol("ClientHello has no common ALPN protocol"),
             )
 
         self.client_random = peer_hello.random
@@ -2047,7 +2067,7 @@ class Context:
                 expected_binder = self.key_schedule.finished_verify_data(binder_key)
 
                 if binder != expected_binder:
-                    raise AlertHandshakeFailure("PSK validation failed")
+                    raise AlertHandshakeFailure("ClientHello has an invalid PSK binder")
 
                 self.key_schedule.update_hash(
                     input_buf.data_slice(hash_offset, hash_offset + 3 + binder_length)
@@ -2104,14 +2124,14 @@ class Context:
         except ValueError:
             raise AlertIllegalParameter("ClientHello has an invalid key share")
         if shared_key is None:
-            raise AlertHandshakeFailure("No supported key share")
+            raise AlertHandshakeFailure("ClientHello has no supported key share")
 
         # send hello
         hello = ServerHello(
             random=self.server_random,
             legacy_session_id=self.legacy_session_id,
             cipher_suite=cipher_suite,
-            compression_method=compression_method,
+            compression_method=CompressionMethod.NULL,
             key_share=encode_public_key(public_key),
             pre_shared_key=pre_shared_key,
             supported_version=supported_version,

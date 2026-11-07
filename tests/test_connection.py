@@ -2886,7 +2886,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
                     error_code=QuicErrorCode.CRYPTO_ERROR
                     + tls.AlertDescription.no_application_protocol,
                     frame_type=QuicFrameType.CRYPTO,
-                    reason_phrase="No common ALPN protocols",
+                    reason_phrase="ClientHello has no common ALPN protocol",
                 ),
             )
 
@@ -3553,7 +3553,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
             assert isinstance(event, events.ConnectionTerminated)
             self.assertEqual(event.error_code, 326)
             self.assertEqual(event.frame_type, QuicFrameType.CRYPTO)
-            self.assertEqual(event.reason_phrase, "No supported protocol version")
+            self.assertEqual(
+                event.reason_phrase, "ClientHello has no supported protocol version"
+            )
 
     def test_receive_datagram_different_source_cid(self) -> None:
         client = create_standalone_client(self)
