@@ -622,7 +622,7 @@ def pull_handshake_type(buf: Buffer, expected_type: HandshakeType) -> None:
 
 def pull_legacy_session_id(buf: Buffer) -> bytes:
     legacy_session_id = pull_opaque(buf, 1)
-    # An out-of-range length requires a decode_error (RFC 8446 section 6).
+    # An out-of-range length requires a decode_error (RFC 9846 section 6).
     if len(legacy_session_id) > 32:
         raise AlertDecodeError("legacy_session_id is too long")
     return legacy_session_id
@@ -648,7 +648,7 @@ def pull_client_hello(buf: Buffer) -> ClientHello:
             # pre_shared_key MUST be last
             nonlocal after_psk
             if after_psk:
-                # the alert is Illegal Parameter per RFC 8446 section 4.2.11.
+                # the alert is Illegal Parameter per RFC 9846 section 4.3.11.
                 raise AlertIllegalParameter("PreSharedKey is not the last extension")
 
             extension_type = buf.pull_uint16()
@@ -1540,15 +1540,15 @@ class Context:
                 "CertificateVerify has a signature algorithm we did not advertise"
             )
 
-        # We advertise RSASSA-PKCS1-v1_5 for signatures in certificates, but RSA
-        # signatures in CertificateVerify must use RSASSA-PSS (RFC 8446 section 4.4.3).
+        # We advertise RSASSA-PKCS1-v1_5 for signatures in certificates, but these
+        # algorithms are not defined for CertificateVerify (RFC 9846 section 4.3.3).
         if verify.algorithm in RSA_PKCS1_SIGNATURE_ALGORITHMS:
             raise AlertIllegalParameter(
                 "CertificateVerify has an RSASSA-PKCS1-v1_5 signature algorithm"
             )
 
         # The signature algorithm must be compatible with the key in the peer's
-        # certificate (RFC 8446 section 4.4.3).
+        # certificate (RFC 9846 section 4.5.2).
         try:
             public_key = self._peer_certificate.public_key()
         except UnsupportedAlgorithm as exc:
@@ -1661,7 +1661,7 @@ class Context:
             if hello.pre_shared_key is not None:
                 # The binder is computed over the ClientHello truncated before
                 # the binders list, then written over its zero-filled
-                # placeholder (RFC 8446 section 4.2.11.2).
+                # placeholder (RFC 9846 section 4.3.11.2).
                 binder_start = output_buf.tell() - binder_length
                 binders_start = binder_start - 3
                 self._key_schedule_psk.update_hash(
@@ -1698,7 +1698,7 @@ class Context:
             raise AlertIllegalParameter(
                 "ServerHello has a compression method we did not advertise"
             )
-        # The server must echo our legacy_session_id (RFC 8446 section 4.1.3).
+        # The server must echo our legacy_session_id (RFC 9846 section 4.2.3).
         if peer_hello.legacy_session_id != self.legacy_session_id:
             raise AlertIllegalParameter(
                 "ServerHello has a legacy_session_id we did not send"
@@ -1709,12 +1709,12 @@ class Context:
             )
 
         # We only offer (EC)DHE key exchange, so the server must send a key share
-        # (RFC 8446 section 9.2).
+        # (RFC 9846 section 9.2).
         if peer_hello.key_share is None:
             raise AlertMissingExtension("ServerHello has no key share")
 
         # Every extension a ServerHello may carry has been parsed, so any other one
-        # is either in the wrong message or unsolicited (RFC 8446 section 4.2).
+        # is either in the wrong message or unsolicited (RFC 9846 section 4.3).
         if any(
             extension_type in list(ExtensionType)
             for extension_type, _ in peer_hello.other_extensions
@@ -1770,7 +1770,7 @@ class Context:
         self.key_schedule.extract(shared_key)
 
         # Both handshake secrets are available once the ServerHello is processed
-        # (RFC 8446 section 7.1). Provide the write key to QUIC straight away, as
+        # (RFC 9846 section 7.1). Provide the write key to QUIC straight away, as
         # it may need to acknowledge Handshake packets before EncryptedExtensions
         # arrives (RFC 9001 section 4.1.4).
         self._setup_traffic_protection(
@@ -1786,7 +1786,7 @@ class Context:
         encrypted_extensions = pull_encrypted_extensions(input_buf)
 
         # If we offered ALPN, the server must select one of our protocols
-        # (RFC 9001 section 8.1). RFC 8446 only defines no_application_protocol
+        # (RFC 9001 section 8.1). RFC 9846 only defines no_application_protocol
         # for servers, but RFC 9001 requires QUIC clients to use it too.
         if (
             self._alpn_protocols is not None
@@ -1819,7 +1819,7 @@ class Context:
         certificate = pull_certificate(input_buf)
 
         # The server must send at least one certificate, otherwise the client
-        # must abort with a decode_error alert (RFC 8446 section 4.4.2.4).
+        # must abort with a decode_error alert (RFC 9846 section 4.5.1.3).
         if not certificate.certificates:
             raise AlertDecodeError("Certificate message is empty")
         self.key_schedule.update_hash(input_buf.data)
@@ -1983,7 +1983,7 @@ class Context:
         )
 
         # We only support (EC)DHE key exchange, so the client must send a key share
-        # (RFC 8446 section 9.2).
+        # (RFC 9846 section 9.2).
         if peer_hello.key_share is None:
             raise AlertMissingExtension("ClientHello has no key share")
 
@@ -2196,7 +2196,7 @@ class Context:
 
         # If the client sends an empty Certificate message, the server may
         # continue the handshake without client authentication
-        # (RFC 8446 section 4.4.2.4).
+        # (RFC 9846 section 4.5.1.3).
         if certificate.certificates:
             self._set_peer_certificate(certificate)
             self._set_state(State.SERVER_EXPECT_CERTIFICATE_VERIFY)
@@ -2270,7 +2270,7 @@ class Context:
 
     def _set_peer_certificate(self, certificate: Certificate) -> None:
         # A certificate which cannot be parsed is corrupt, which calls for
-        # a bad_certificate alert (RFC 8446 section 6.2).
+        # a bad_certificate alert (RFC 9846 section 6.2).
         try:
             self._peer_certificate = x509.load_der_x509_certificate(
                 certificate.certificates[0][0]
@@ -2290,8 +2290,8 @@ class Context:
     def _signature_algorithms_for_private_key(self) -> list[SignatureAlgorithm]:
         signature_algorithms: list[SignatureAlgorithm] = []
         if isinstance(self.certificate_private_key, rsa.RSAPrivateKey):
-            # RSA signatures in CertificateVerify must use RSASSA-PSS
-            # (RFC 8446 section 4.4.3).
+            # RSASSA-PKCS1-v1_5 is not defined for CertificateVerify, so RSA
+            # signatures use RSASSA-PSS (RFC 9846 section 4.3.3).
             signature_algorithms = [
                 SignatureAlgorithm.RSA_PSS_RSAE_SHA256,
                 SignatureAlgorithm.RSA_PSS_RSAE_SHA384,
