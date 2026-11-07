@@ -958,6 +958,48 @@ class ContextTest(TestCase):
         self.assertEqual(client.alpn_negotiated, None)
         self.assertEqual(server.alpn_negotiated, None)
 
+    def test_handshake_one_byte_at_a_time(self) -> None:
+        """
+        Handshake messages are reassembled when they arrive one byte at a time.
+        """
+        client = self.create_client()
+        server = self.create_server()
+
+        # Send client hello.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        server_input = merge_buffers(client_buf)
+        reset_buffers(client_buf)
+
+        # Handle client hello.
+        #
+        # Send server hello, encrypted extensions, certificate, certificate verify,
+        # finished.
+        server_buf = create_buffers()
+        for i in range(len(server_input)):
+            server.handle_message(server_input[i : i + 1], server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
+        client_input = merge_buffers(server_buf)
+        reset_buffers(server_buf)
+
+        # Handle server hello, encrypted extensions, certificate, certificate verify,
+        # finished.
+        #
+        # Send finished.
+        for i in range(len(client_input)):
+            client.handle_message(client_input[i : i + 1], client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+        server_input = merge_buffers(client_buf)
+
+        # Handle finished.
+        for i in range(len(server_input)):
+            server.handle_message(server_input[i : i + 1], server_buf)
+        self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
+
+        # Check keys match.
+        self.assertEqual(client._dec_key, server._enc_key)
+        self.assertEqual(client._enc_key, server._dec_key)
+
     def test_handshake_with_certificate_request_no_certificate(self) -> None:
         # The server requests a certificate, but the client has none.
         client = self.create_client()
