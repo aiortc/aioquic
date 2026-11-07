@@ -4405,6 +4405,41 @@ class QuicConnectionTest(QuicConnectionTestCase):
             ),
         )
 
+    def test_handle_crypto_frame_message_too_large(self) -> None:
+        server = create_standalone_server(self)
+        crypto = CryptoPair()
+        crypto.setup_initial(
+            bytes(8), is_client=True, version=QuicProtocolVersion.VERSION_1
+        )
+
+        # The client's first CRYPTO frame starts a 16 MiB ClientHello.
+        builder = QuicPacketBuilder(
+            host_cid=bytes([1] * 8),
+            is_client=True,
+            max_datagram_size=SMALLEST_MAX_DATAGRAM_SIZE,
+            peer_cid=bytes(8),
+            version=QuicProtocolVersion.VERSION_1,
+        )
+        builder.start_packet(QuicPacketType.INITIAL, crypto)
+        data = bytes([tls.HandshakeType.CLIENT_HELLO]) + b"\xff\xff\xff" + bytes(1000)
+        buf = builder.start_frame(QuicFrameType.CRYPTO)
+        buf.push_uint_var(0)
+        buf.push_uint_var(len(data))
+        buf.push_bytes(data)
+        for datagram in builder.flush()[0]:
+            server.receive_datagram(datagram, CLIENT_ADDR, now=time.time())
+
+        # The server refuses it without waiting for the rest.
+        self.assertEqual(
+            server._close_event,
+            events.ConnectionTerminated(
+                error_code=QuicErrorCode.CRYPTO_ERROR
+                + tls.AlertDescription.illegal_parameter,
+                frame_type=QuicFrameType.CRYPTO,
+                reason_phrase="TLS message is too large",
+            ),
+        )
+
     def test_handle_crypto_frame_over_largest_offset(self) -> None:
         with client_and_server() as (client, server):
             # client receives offset + length > 2^62 - 1

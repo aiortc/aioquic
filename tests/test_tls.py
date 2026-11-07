@@ -899,6 +899,28 @@ class ContextTest(TestCase):
             tls.AlertBadCertificate("Certificate could not be parsed"),
         )
 
+    def test_server_message_too_large(self) -> None:
+        """
+        A message larger than 64 KiB is refused as soon as its header arrives.
+        """
+
+        def header(length: int) -> bytes:
+            return bytes([tls.HandshakeType.CLIENT_HELLO]) + length.to_bytes(3, "big")
+
+        # A ClientHello of the largest size is still awaited.
+        server = self.create_server()
+        server.handle_message(header(tls.MAX_HANDSHAKE_MESSAGE_SIZE), create_buffers())
+        self.assertEqual(server.state, State.SERVER_EXPECT_CLIENT_HELLO)
+
+        # A larger one is refused without waiting for its body.
+        server = self.create_server()
+        with self.assertRaisesMessage(
+            tls.AlertIllegalParameter, "TLS message is too large"
+        ):
+            server.handle_message(
+                header(tls.MAX_HANDSHAKE_MESSAGE_SIZE + 1), create_buffers()
+            )
+
     def test_server_unexpected_message(self) -> None:
         server = self.create_server()
 

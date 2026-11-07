@@ -43,6 +43,10 @@ TLS_VERSION_1_3 = 0x0304
 CLIENT_CONTEXT_STRING = b"TLS 1.3, client CertificateVerify"
 SERVER_CONTEXT_STRING = b"TLS 1.3, server CertificateVerify"
 
+# TLS allows handshake messages of up to 16 MiB, but handshakes need far less, so
+# we refuse to buffer larger ones.
+MAX_HANDSHAKE_MESSAGE_SIZE = 65536
+
 T = TypeVar("T")
 
 
@@ -1440,6 +1444,9 @@ class Context:
             message_length = 4 + int.from_bytes(
                 self._receive_buffer[1:4], byteorder="big"
             )
+
+            if message_length > 4 + MAX_HANDSHAKE_MESSAGE_SIZE:
+                raise AlertIllegalParameter("TLS message is too large")
 
             # check message is complete
             if len(self._receive_buffer) < message_length:
