@@ -96,6 +96,18 @@ class BufferTest(TestCase):
                 pass
 
 
+def add_server_hello_extension(data: bytes, extension_type: int) -> bytes:
+    """
+    Add an empty extension to the ServerHello at the start of `data`.
+    """
+    buf = Buffer(data=data)
+    hello = pull_server_hello(buf)
+    hello.other_extensions.append((extension_type, b""))
+    output = Buffer(capacity=len(data) + 4)
+    push_server_hello(output, hello)
+    return output.data + data[buf.tell() :]
+
+
 def corrupt_hello_version(data: bytes) -> bytes:
     """
     Corrupt a ClientHello or ServerHello's protocol version.
@@ -373,6 +385,22 @@ class ContextTest(TestCase):
                 b"\x00\x2b\x00\x02\x03\x04\xfa\xfa",
             ),
             tls.AlertMissingExtension("ServerHello has no key share"),
+        )
+
+    def test_client_bad_hello_prohibited_extension(self) -> None:
+        self.handshake_with_client_input_corruption(
+            # We offered transport parameters, but they belong in EncryptedExtensions.
+            lambda x: add_server_hello_extension(
+                x, tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS
+            ),
+            tls.AlertIllegalParameter("ServerHello has a prohibited extension"),
+        )
+
+    def test_client_bad_hello_unsolicited_extension(self) -> None:
+        self.handshake_with_client_input_corruption(
+            # A GREASE value (RFC 8701).
+            lambda x: add_server_hello_extension(x, 0xFAFA),
+            tls.AlertUnsupportedExtension("ServerHello has an unsolicited extension"),
         )
 
     def test_client_bad_hello_version(self) -> None:
