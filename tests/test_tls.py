@@ -15,6 +15,7 @@ from aioquic.tls import (
     CertificateRequest,
     ClientHello,
     Context,
+    EncryptedExtensions,
     NewSessionTicket,
     ServerHello,
     SessionTicket,
@@ -32,6 +33,7 @@ from aioquic.tls import (
     push_certificate_request,
     push_certificate_verify,
     push_client_hello,
+    push_encrypted_extensions,
     push_new_session_ticket,
     push_server_hello,
     push_server_name,
@@ -403,14 +405,16 @@ class ContextTest(TestCase):
                 x,
                 other_extensions=[(tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS, b"")],
             ),
-            tls.AlertIllegalParameter("ServerHello has a prohibited extension"),
+            tls.AlertIllegalParameter("ServerHello has a prohibited extension 0x0039"),
         )
 
     def test_client_bad_hello_unsolicited_extension(self) -> None:
         self.handshake_with_client_input_corruption(
             # A GREASE value (RFC 8701).
             lambda x: modify_server_hello(x, other_extensions=[(0xFAFA, b"")]),
-            tls.AlertUnsupportedExtension("ServerHello has an unsolicited extension"),
+            tls.AlertUnsupportedExtension(
+                "ServerHello has an unsolicited extension 0xfafa"
+            ),
         )
 
     def test_client_bad_hello_version(self) -> None:
@@ -454,6 +458,98 @@ class ContextTest(TestCase):
         self.handshake_with_client_input_corruption(
             lambda x: modify_certificate_verify(x, signature=bytes(4)),
             tls.AlertDecryptError(),
+        )
+
+    def test_client_bad_encrypted_extensions_early_data_without_psk(self) -> None:
+        """
+        A server may only accept early data if it accepts our PSK
+        (RFC 9846 section 4.3.11).
+        """
+        client = self.create_client()
+        client.session_ticket = dataclasses.replace(
+            create_session_ticket(), max_early_data_size=0xFFFFFFFF
+        )
+        server = self.create_server()
+        # The server does not know the ticket, but claims to accept early data.
+        server.early_data_accepted = True
+
+        with self.assertRaises(tls.AlertIllegalParameter) as cm:
+            self._handshake(client, server)
+        self.assertEqual(
+            str(cm.exception), "EncryptedExtensions accepts early data without our PSK"
+        )
+
+    def test_client_bad_encrypted_extensions_prohibited_extension(self) -> None:
+        client = self.create_client()
+        server = self.create_server()
+        # We offered a key share, but the answer belongs in ServerHello.
+        server.handshake_extensions.append((tls.ExtensionType.KEY_SHARE, b""))
+
+        with self.assertRaises(tls.AlertIllegalParameter) as cm:
+            self._handshake(client, server)
+        self.assertEqual(
+            str(cm.exception), "EncryptedExtensions has a prohibited extension 0x0033"
+        )
+
+    def test_client_bad_encrypted_extensions_server_name_with_data(self) -> None:
+        client = self.create_client()
+        client._server_name = "localhost"
+        server = self.create_server()
+        # The acknowledgement of our server name must be empty.
+        server.handshake_extensions.append((tls.ExtensionType.SERVER_NAME, b"junk"))
+
+        with self.assertRaises(tls.AlertDecodeError) as cm:
+            self._handshake(client, server)
+        self.assertEqual(
+            str(cm.exception), "EncryptedExtensions has a non-empty server_name"
+        )
+
+    def test_client_bad_encrypted_extensions_unsolicited_alpn(self) -> None:
+        client = self.create_client()
+        server = self.create_server()
+        # We did not offer ALPN.
+        server.alpn_negotiated = "h3"
+
+        with self.assertRaises(tls.AlertUnsupportedExtension) as cm:
+            self._handshake(client, server)
+        self.assertEqual(
+            str(cm.exception), "EncryptedExtensions has an unsolicited ALPN"
+        )
+
+    def test_client_bad_encrypted_extensions_unsolicited_early_data(self) -> None:
+        client = self.create_client()
+        server = self.create_server()
+        # We did not offer early data.
+        server.early_data_accepted = True
+
+        with self.assertRaises(tls.AlertUnsupportedExtension) as cm:
+            self._handshake(client, server)
+        self.assertEqual(
+            str(cm.exception), "EncryptedExtensions has an unsolicited early_data"
+        )
+
+    def test_client_bad_encrypted_extensions_unsolicited_extension(self) -> None:
+        client = self.create_client()
+        server = self.create_server()
+        # A GREASE value (RFC 8701).
+        server.handshake_extensions.append((0xFAFA, b""))
+
+        with self.assertRaises(tls.AlertUnsupportedExtension) as cm:
+            self._handshake(client, server)
+        self.assertEqual(
+            str(cm.exception), "EncryptedExtensions has an unsolicited extension 0xfafa"
+        )
+
+    def test_client_bad_encrypted_extensions_unsolicited_server_name(self) -> None:
+        client = self.create_client()
+        server = self.create_server()
+        # We did not send a server name.
+        server.handshake_extensions.append((tls.ExtensionType.SERVER_NAME, b""))
+
+        with self.assertRaises(tls.AlertUnsupportedExtension) as cm:
+            self._handshake(client, server)
+        self.assertEqual(
+            str(cm.exception), "EncryptedExtensions has an unsolicited extension 0x0000"
         )
 
     def test_client_bad_finished_verify_data(self) -> None:
@@ -1208,6 +1304,19 @@ class ContextTest(TestCase):
 
         self._handshake(client, server)
 
+    def test_handshake_with_server_name(self) -> None:
+        client = self.create_client()
+        client._server_name = "localhost"
+        server = self.create_server()
+        # Acknowledge the server name (RFC 6066 section 3) and send our groups
+        # (RFC 9846 section 4.3.7).
+        server.handshake_extensions += [
+            (tls.ExtensionType.SERVER_NAME, b""),
+            (tls.ExtensionType.SUPPORTED_GROUPS, b"\x00\x02\x00\x1d"),
+        ]
+
+        self._handshake(client, server)
+
     def test_handshake_with_server_supported_groups(self) -> None:
         client = self.create_client()
         client._supported_groups = [tls.Group.SECP256R1, tls.Group.SECP384R1]
@@ -1579,6 +1688,99 @@ class TlsTest(TestCase):
                     str(cm.exception),
                     "ALPN extension must contain exactly one protocol",
                 )
+
+    def test_pull_extension_with_trailing_data(self) -> None:
+        """
+        An extension with data left over after its structure requires a
+        decode_error (RFC 9846 section 4.3).
+        """
+        # The leftover data could be read as an empty GREASE extension.
+        trailing_data = b"\xfa\xfa\x00\x00"
+
+        def assertTrailingData(pull: Callable[[Buffer], Any], buf: Buffer) -> None:
+            with self.assertRaises(tls.AlertDecodeError) as cm:
+                pull(Buffer(data=buf.data))
+            self.assertEqual(str(cm.exception), "extra bytes at the end of a block")
+
+        with self.subTest("CertificateRequest"):
+            # push_certificate_request() always writes signature_algorithms, so
+            # write a single one by hand, with an empty list and the leftover data.
+            buf = Buffer(capacity=1024)
+            buf.push_bytes(bytes.fromhex("0d00000d00000a000d00060000") + trailing_data)
+            assertTrailingData(pull_certificate_request, buf)
+
+        with self.subTest("ClientHello"):
+            buf = Buffer(capacity=1024)
+            push_client_hello(
+                buf,
+                ClientHello(
+                    random=bytes(32),
+                    legacy_session_id=b"",
+                    cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256],
+                    legacy_compression_methods=[tls.CompressionMethod.NULL],
+                    key_share=[],
+                    signature_algorithms=[],
+                    supported_groups=[],
+                    supported_versions=[tls.TLS_VERSION_1_3],
+                    other_extensions=[(tls.ExtensionType.EARLY_DATA, trailing_data)],
+                ),
+            )
+            assertTrailingData(pull_client_hello, buf)
+
+        with self.subTest("EncryptedExtensions"):
+            buf = Buffer(capacity=1024)
+            push_encrypted_extensions(
+                buf,
+                EncryptedExtensions(
+                    other_extensions=[(tls.ExtensionType.EARLY_DATA, trailing_data)]
+                ),
+            )
+            assertTrailingData(pull_encrypted_extensions, buf)
+
+        with self.subTest("NewSessionTicket"):
+            buf = Buffer(capacity=1024)
+            push_new_session_ticket(
+                buf,
+                NewSessionTicket(
+                    ticket=b"ticket",
+                    other_extensions=[
+                        (
+                            tls.ExtensionType.EARLY_DATA,
+                            b"\xff\xff\xff\xff" + trailing_data,
+                        )
+                    ],
+                ),
+            )
+            assertTrailingData(pull_new_session_ticket, buf)
+
+        with self.subTest("ServerHello"):
+            buf = Buffer(capacity=1024)
+            push_server_hello(
+                buf,
+                ServerHello(
+                    random=bytes(32),
+                    legacy_session_id=b"",
+                    cipher_suite=tls.CipherSuite.AES_128_GCM_SHA256,
+                    compression_method=tls.CompressionMethod.NULL,
+                    other_extensions=[
+                        (
+                            tls.ExtensionType.SUPPORTED_VERSIONS,
+                            b"\x03\x04" + trailing_data,
+                        )
+                    ],
+                ),
+            )
+            assertTrailingData(pull_server_hello, buf)
+
+    def test_pull_extensions_repeated(self) -> None:
+        """
+        An extension type must not appear twice (RFC 9846 section 4.3).
+        """
+        # Two empty GREASE extensions of the same type.
+        buf = Buffer(data=bytes.fromhex("0008fafa0000fafa0000"))
+        with self.assertRaises(tls.AlertIllegalParameter) as cm:
+            tls.pull_extensions(buf, lambda extension_type, extension_length: None)
+        self.assertEqual(str(cm.exception), "Extension 0xfafa is repeated")
 
     def test_pull_server_name(self) -> None:
         buf = Buffer(data=b"\x00\x12\x00\x00\x0fwww.example.com")
