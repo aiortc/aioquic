@@ -3,6 +3,7 @@ import datetime
 import ssl
 from collections.abc import Callable
 from functools import partial
+from typing import Any
 from unittest import TestCase, skipIf
 from unittest.mock import patch
 
@@ -96,41 +97,11 @@ class BufferTest(TestCase):
                 pass
 
 
-def add_server_hello_extension(data: bytes, extension_type: int) -> bytes:
-    """
-    Add an empty extension to the ServerHello at the start of `data`.
-    """
-    buf = Buffer(data=data)
-    hello = pull_server_hello(buf)
-    hello.other_extensions.append((extension_type, b""))
-    output = Buffer(capacity=len(data) + 4)
-    push_server_hello(output, hello)
-    return output.data + data[buf.tell() :]
-
-
 def corrupt_hello_version(data: bytes) -> bytes:
     """
     Corrupt a ClientHello or ServerHello's protocol version.
     """
     return data[:4] + b"\xff\xff" + data[6:]
-
-
-def corrupt_server_hello_session_id(data: bytes, session_id: bytes) -> bytes:
-    """
-    Replace a ServerHello's legacy_session_id, adjusting the message length.
-    """
-    old_length = data[38]
-    message_length = (
-        int.from_bytes(data[1:4], byteorder="big") + len(session_id) - old_length
-    )
-    return (
-        data[:1]
-        + message_length.to_bytes(3, byteorder="big")
-        + data[4:38]
-        + bytes([len(session_id)])
-        + session_id
-        + data[39 + old_length :]
-    )
 
 
 def create_buffers() -> dict[tls.Epoch, Buffer]:
@@ -143,6 +114,34 @@ def create_buffers() -> dict[tls.Epoch, Buffer]:
 
 def merge_buffers(buffers: dict[tls.Epoch, Buffer]) -> bytes:
     return b"".join(x.data for x in buffers.values())
+
+
+def modify_certificate_verify(data: bytes, **changes: Any) -> bytes:
+    """
+    Replace fields of the CertificateVerify in `data`, a flight of handshake
+    messages.
+    """
+    # Skip the messages before it, using their type and length header.
+    start = 0
+    while data[start] != tls.HandshakeType.CERTIFICATE_VERIFY:
+        start += 4 + int.from_bytes(data[start + 1 : start + 4], byteorder="big")
+    buf = Buffer(data=data)
+    buf.seek(start)
+    verify = dataclasses.replace(pull_certificate_verify(buf), **changes)
+    output = Buffer(capacity=buf.tell() - start + 64)
+    push_certificate_verify(output, verify)
+    return data[:start] + output.data + data[buf.tell() :]
+
+
+def modify_server_hello(data: bytes, **changes: Any) -> bytes:
+    """
+    Replace fields of the ServerHello at the start of `data`.
+    """
+    buf = Buffer(data=data)
+    hello = dataclasses.replace(pull_server_hello(buf), **changes)
+    output = Buffer(capacity=len(data) + 64)
+    push_server_hello(output, hello)
+    return output.data + data[buf.tell() :]
 
 
 def reset_buffers(buffers: dict[tls.Epoch, Buffer]) -> None:
@@ -233,7 +232,7 @@ class ContextTest(TestCase):
         client_input = merge_buffers(server_buf)
         reset_buffers(server_buf)
 
-        # Mess with compression method.
+        # Corrupt the server's flight.
         client_input = corrupt_client_input(client_input)
 
         # Handle server hello, encrypted extensions, certificate, certificate verify,
@@ -329,8 +328,7 @@ class ContextTest(TestCase):
 
     def test_client_bad_hello_compression_method(self) -> None:
         self.handshake_with_client_input_corruption(
-            # Mess with compression method.
-            lambda x: x[:41] + b"\xff" + x[42:],
+            lambda x: modify_server_hello(x, compression_method=0xFF),
             tls.AlertIllegalParameter(
                 "ServerHello has a compression method we did not advertise"
             ),
@@ -338,15 +336,16 @@ class ContextTest(TestCase):
 
     def test_client_bad_hello_invalid_key_share(self) -> None:
         self.handshake_with_client_input_corruption(
-            # Mess with key share public key.
-            lambda x: x[:58] + b"\x05" + x[59:],
+            # A SECP256R1 public key which is not a valid point encoding.
+            lambda x: modify_server_hello(
+                x, key_share=(tls.Group.SECP256R1, b"\x05" + bytes(64))
+            ),
             tls.AlertIllegalParameter("ServerHello has an invalid key share"),
         )
 
     def test_client_bad_hello_key_share(self) -> None:
         self.handshake_with_client_input_corruption(
-            # Mess with key share group.
-            lambda x: x[:54] + b"\xff\xff" + x[56:],
+            lambda x: modify_server_hello(x, key_share=(0xFFFF, b"")),
             tls.AlertIllegalParameter(
                 "ServerHello has a key share we did not advertise"
             ),
@@ -355,7 +354,7 @@ class ContextTest(TestCase):
     def test_client_bad_hello_legacy_session_id(self) -> None:
         self.handshake_with_client_input_corruption(
             # Echo a value although we sent none.
-            lambda x: corrupt_server_hello_session_id(x, b"\xff"),
+            lambda x: modify_server_hello(x, legacy_session_id=b"\xff"),
             tls.AlertIllegalParameter(
                 "ServerHello has a legacy_session_id we did not send"
             ),
@@ -364,7 +363,7 @@ class ContextTest(TestCase):
     def test_client_bad_hello_legacy_session_id_not_echoed(self) -> None:
         self.handshake_with_client_input_corruption(
             # Drop the value we sent.
-            lambda x: corrupt_server_hello_session_id(x, b""),
+            lambda x: modify_server_hello(x, legacy_session_id=b""),
             tls.AlertIllegalParameter(
                 "ServerHello has a legacy_session_id we did not send"
             ),
@@ -373,25 +372,22 @@ class ContextTest(TestCase):
 
     def test_client_bad_hello_legacy_session_id_too_long(self) -> None:
         self.handshake_with_client_input_corruption(
-            lambda x: corrupt_server_hello_session_id(x, bytes(33)),
+            lambda x: modify_server_hello(x, legacy_session_id=bytes(33)),
             tls.AlertDecodeError("legacy_session_id is too long"),
         )
 
     def test_client_bad_hello_no_key_share(self) -> None:
         self.handshake_with_client_input_corruption(
-            # Rename the key share extension, which follows supported versions.
-            lambda x: x.replace(
-                b"\x00\x2b\x00\x02\x03\x04\x00\x33",
-                b"\x00\x2b\x00\x02\x03\x04\xfa\xfa",
-            ),
+            lambda x: modify_server_hello(x, key_share=None),
             tls.AlertMissingExtension("ServerHello has no key share"),
         )
 
     def test_client_bad_hello_prohibited_extension(self) -> None:
         self.handshake_with_client_input_corruption(
             # We offered transport parameters, but they belong in EncryptedExtensions.
-            lambda x: add_server_hello_extension(
-                x, tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS
+            lambda x: modify_server_hello(
+                x,
+                other_extensions=[(tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS, b"")],
             ),
             tls.AlertIllegalParameter("ServerHello has a prohibited extension"),
         )
@@ -399,21 +395,19 @@ class ContextTest(TestCase):
     def test_client_bad_hello_unsolicited_extension(self) -> None:
         self.handshake_with_client_input_corruption(
             # A GREASE value (RFC 8701).
-            lambda x: add_server_hello_extension(x, 0xFAFA),
+            lambda x: modify_server_hello(x, other_extensions=[(0xFAFA, b"")]),
             tls.AlertUnsupportedExtension("ServerHello has an unsolicited extension"),
         )
 
     def test_client_bad_hello_version(self) -> None:
         self.handshake_with_client_input_corruption(
-            # Mess with supported version.
-            lambda x: x[:48] + b"\xff\xff" + x[50:],
+            lambda x: modify_server_hello(x, supported_version=0xFFFF),
             tls.AlertIllegalParameter("ServerHello has a version we did not advertise"),
         )
 
     def test_client_bad_certificate_verify_algorithm(self) -> None:
         self.handshake_with_client_input_corruption(
-            # Mess with certificate verify.
-            lambda x: x[:-440] + b"\xff\xff" + x[-438:],
+            lambda x: modify_certificate_verify(x, algorithm=0xFFFF),
             tls.AlertDecryptError(
                 "CertificateVerify has a signature algorithm we did not advertise"
             ),
@@ -422,7 +416,9 @@ class ContextTest(TestCase):
     def test_client_bad_certificate_verify_algorithm_for_key(self) -> None:
         self.handshake_with_client_input_corruption(
             # Use an ECDSA signature algorithm with the server's RSA key.
-            lambda x: x[:-440] + b"\x04\x03" + x[-438:],
+            lambda x: modify_certificate_verify(
+                x, algorithm=tls.SignatureAlgorithm.ECDSA_SECP256R1_SHA256
+            ),
             tls.AlertDecryptError(
                 "CertificateVerify has a signature algorithm which does not match "
                 "the certificate's key"
@@ -432,7 +428,9 @@ class ContextTest(TestCase):
     def test_client_bad_certificate_verify_algorithm_rsa_pkcs1(self) -> None:
         self.handshake_with_client_input_corruption(
             # Replace RSA_PSS_RSAE_SHA256 by RSA_PKCS1_SHA256, which we advertise.
-            lambda x: x[:-440] + b"\x04\x01" + x[-438:],
+            lambda x: modify_certificate_verify(
+                x, algorithm=tls.SignatureAlgorithm.RSA_PKCS1_SHA256
+            ),
             tls.AlertIllegalParameter(
                 "CertificateVerify has an RSASSA-PKCS1-v1_5 signature algorithm"
             ),
@@ -440,8 +438,7 @@ class ContextTest(TestCase):
 
     def test_client_bad_certificate_verify_data(self) -> None:
         self.handshake_with_client_input_corruption(
-            # Mess with certificate verify.
-            lambda x: x[:-56] + bytes(4) + x[-52:],
+            lambda x: modify_certificate_verify(x, signature=bytes(4)),
             tls.AlertDecryptError(),
         )
 
@@ -534,8 +531,8 @@ class ContextTest(TestCase):
             certificate,
             private_key,
             # Use an RSA signature algorithm with the client's Ed25519 key.
-            lambda x: x.replace(
-                b"\x0f\x00\x00\x44\x08\x07", b"\x0f\x00\x00\x44\x08\x04"
+            lambda x: modify_certificate_verify(
+                x, algorithm=tls.SignatureAlgorithm.RSA_PSS_RSAE_SHA256
             ),
             tls.AlertDecryptError(
                 "CertificateVerify has a signature algorithm which does not match "
