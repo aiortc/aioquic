@@ -1542,13 +1542,15 @@ class Context:
             length=self.key_schedule.algorithm.digest_size,
         )
 
+        # Tickets must not be used for longer than 7 days, regardless of the
+        # ticket_lifetime (RFC 9846 section 4.7.1).
+        lifetime = min(new_session_ticket.ticket_lifetime, 604800)
         timestamp = utcnow()
         return SessionTicket(
             age_add=new_session_ticket.ticket_age_add,
             cipher_suite=self.key_schedule.cipher_suite,
             max_early_data_size=new_session_ticket.max_early_data_size,
-            not_valid_after=timestamp
-            + datetime.timedelta(seconds=new_session_ticket.ticket_lifetime),
+            not_valid_after=timestamp + datetime.timedelta(seconds=lifetime),
             not_valid_before=timestamp,
             other_extensions=other_extensions,
             resumption_secret=resumption_secret,
