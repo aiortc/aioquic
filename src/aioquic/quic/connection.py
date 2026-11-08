@@ -3327,7 +3327,9 @@ class QuicConnection:
         # Store remote parameters.
         if not from_session_ticket:
             if quic_transport_parameters.ack_delay_exponent is not None:
-                self._remote_ack_delay_exponent = self._remote_ack_delay_exponent
+                self._remote_ack_delay_exponent = (
+                    quic_transport_parameters.ack_delay_exponent
+                )
             if quic_transport_parameters.max_ack_delay is not None:
                 self._loss.max_ack_delay = (
                     quic_transport_parameters.max_ack_delay / 1000.0

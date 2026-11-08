@@ -484,6 +484,61 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
         client._packet_number = builder.packet_number
         return datagrams[0]
 
+    def test_ack_delay_exponent(self) -> None:
+        """
+        Check the client decodes the ACK Delay field with the exponent the server
+        advertised, and deducts the delay from its RTT sample (RFC 9000 section
+        19.3, RFC 9002 section 5.3).
+        """
+
+        def patch(server: QuicConnection) -> None:
+            server._local_ack_delay_exponent = 10
+
+        with client_and_server(handshake=False, server_patch=patch) as (
+            client,
+            server,
+        ):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+            self.assertAlmostEqual(client._loss._rtt_smoothed, 0.1)
+
+            # Server delays its ACKs by 25 ms. Client sends stream data.
+            server._ack_delay = 0.025
+            client.send_stream_data(0, b"ping")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [35])
+            self.assertAlmostEqual(client.get_timer(), 0.625)
+            self.assertSentPackets(client, [0, 0, 2])
+            self.assertEvents(client, [])
+
+            # Server receives stream data, arms its ACK timer.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertEqual(server.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(server.get_timer(), 0.425)
+            self.assertSentPackets(server, [0, 0, 0])
+            self.assertEvents(server, [events.StreamDataReceived])
+
+            # Server's ACK timer fires, it sends an ACK with a delay of 25 ms,
+            # encoded as 24 units of 1024 microseconds.
+            now = self.advance_to_timer(now, server)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(server.get_timer(), 60.4)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, [])
+
+            # Client receives the ACK. The 125 ms RTT sample less the 24.576 ms
+            # ACK delay gives 100.424 ms.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(client.get_timer(), 60.475)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 0])
+            self.assertEvents(client, [])
+            self.assertAlmostEqual(client._loss._rtt_latest, 0.100424)
+            self.assertAlmostEqual(client._loss._rtt_smoothed, 0.100053)
+
     def test_connect_with_0rtt_and_amplification_limited_paced_response(self) -> None:
         """
         Check a server whose anti-amplification limit leaves no room even for an
