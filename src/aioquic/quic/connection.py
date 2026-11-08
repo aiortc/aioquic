@@ -1278,6 +1278,9 @@ class QuicConnection:
         """
         Request termination of the receiving part of a stream.
 
+        This method has no effect if the stream has finished and its state has
+        been discarded.
+
         .. aioquic_transmit::
 
         :param stream_id: The stream's ID.
@@ -1290,6 +1293,9 @@ class QuicConnection:
 
         stream = self._streams.get(stream_id, None)
         if stream is None:
+            if self._stream_is_discarded(stream_id):
+                # The stream finished, so there is nothing to stop.
+                return
             raise ValueError("Cannot stop receiving on an unknown stream")
 
         stream.receiver.stop(error_code)
