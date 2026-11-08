@@ -65,6 +65,17 @@ class QuicConfiguration:
     Per-stream flow control limit.
     """
 
+    migrate_to_preferred_address: bool = True
+    """
+    Whether to migrate to the server's preferred address, if it advertises one.
+
+    Disable this if datagrams can only be sent to the address passed to
+    :meth:`~aioquic.quic.connection.QuicConnection.connect`, for instance with a
+    connected UDP socket or a tunnel with a single fixed destination.
+
+    .. note:: This is only used by clients.
+    """
+
     quic_logger: QuicLogger | None = None
     """
     The :class:`~aioquic.quic.logger.QuicLogger` instance to log events to.

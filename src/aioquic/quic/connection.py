@@ -3362,7 +3362,9 @@ class QuicConnection:
                     )
                 )
                 self._peer_cid_sequence_numbers.add(1)
-                self._remote_preferred_address = preferred_address
+                # Migrating is optional (RFC 9000 section 9.6.1).
+                if self._configuration.migrate_to_preferred_address:
+                    self._remote_preferred_address = preferred_address
             self._remote_version_information = (
                 quic_transport_parameters.version_information
             )
