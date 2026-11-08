@@ -1969,6 +1969,31 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             self.assertIsNone(client.get_timer())
             self.assertEvents(client, [events.ConnectionTerminated])
 
+    def test_idle_timeout_then_handle_timer(self) -> None:
+        """
+        Check handling the timer of a terminated connection has no effect, so an
+        application may fire a timer it armed before the connection terminated.
+        """
+        with client_and_server(
+            client_options={"idle_timeout": 2.0}, handshake=False
+        ) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+            self.assertAlmostEqual(client.get_timer(), 2.2)  # idle timeout
+
+            # Client's idle timer expires.
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertIsNone(client.get_timer())
+            self.assertEvents(client, [events.ConnectionTerminated])
+
+            # Client handles the same timer again.
+            client.handle_timer(now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertIsNone(client.get_timer())
+            self.assertEvents(client, [])
+
     def test_migrate_after_probing(self) -> None:
         """
         Check the server answers a client probing a new path, and validates the

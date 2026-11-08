@@ -715,6 +715,10 @@ class QuicConnection:
 
         :param now: The current time.
         """
+        # No timer runs before the connection starts or once it has terminated.
+        if self._close_at is None:
+            return
+
         # end of closing period or idle timeout
         if now >= self._close_at:
             if self._close_event is None:
