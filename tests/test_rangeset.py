@@ -61,6 +61,50 @@ class RangeSetTest(TestCase):
         rangeset.add(4, 6)
         self.assertEqual(list(rangeset), [range(0, 6)])
 
+    def test_add_range_many(self) -> None:
+        rangeset = RangeSet()
+        for i in range(0, 40, 4):
+            rangeset.add(i, i + 1)
+        self.assertEqual(len(rangeset), 10)
+
+        # Insert between two items.
+        rangeset.add(10, 11)
+        self.assertEqual(
+            list(rangeset)[2:5], [range(8, 9), range(10, 11), range(12, 13)]
+        )
+
+        # Merge with the item just before.
+        rangeset.add(17, 18)
+        self.assertEqual(list(rangeset)[4:6], [range(12, 13), range(16, 18)])
+
+        # Merge with the item just after.
+        rangeset.add(19, 20)
+        self.assertEqual(list(rangeset)[5:7], [range(16, 18), range(19, 21)])
+
+        # Merge with several items, the last of which extends beyond the added range.
+        rangeset.add(11, 24)
+        self.assertEqual(
+            list(rangeset)[2:5], [range(8, 9), range(10, 25), range(28, 29)]
+        )
+
+        # Insert before all items, then append after all of them.
+        rangeset.add(-3, -2)
+        rangeset.add(40, 41)
+        self.assertEqual(
+            list(rangeset),
+            [
+                range(-3, -2),
+                range(0, 1),
+                range(4, 5),
+                range(8, 9),
+                range(10, 25),
+                range(28, 29),
+                range(32, 33),
+                range(36, 37),
+                range(40, 41),
+            ],
+        )
+
     def test_add_range_merge(self) -> None:
         rangeset = RangeSet()
 

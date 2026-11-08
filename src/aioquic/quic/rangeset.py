@@ -1,4 +1,6 @@
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Iterator, Sequence
+from operator import attrgetter
 from typing import Any
 
 
@@ -14,27 +16,30 @@ class RangeSet(Sequence):
             stop = start + 1
         assert stop > start
 
-        for i, r in enumerate(self.__ranges):
-            # the added range is entirely before current item, insert here
-            if stop < r.start:
-                self.__ranges.insert(i, range(start, stop))
-                return
+        # Find the first item which the added range is not entirely after.
+        i = bisect_left(self.__ranges, start, key=_stop)
 
-            # the added range is entirely after current item, keep looking
-            if start > r.stop:
-                continue
-
-            # the added range touches the current item, merge it
-            start = min(start, r.start)
-            stop = max(stop, r.stop)
-            while i < len(self.__ranges) - 1 and self.__ranges[i + 1].start <= stop:
-                stop = max(self.__ranges[i + 1].stop, stop)
-                self.__ranges.pop(i + 1)
-            self.__ranges[i] = range(start, stop)
+        # The added range is entirely after all existing items, append it.
+        if i == len(self.__ranges):
+            self.__ranges.append(range(start, stop))
             return
 
-        # the added range is entirely after all existing items, append it
-        self.__ranges.append(range(start, stop))
+        # The added range is entirely before the item, insert it.
+        r = self.__ranges[i]
+        if stop < r.start:
+            self.__ranges.insert(i, range(start, stop))
+            return
+
+        # The added range touches the item, merge it.
+        start = min(start, r.start)
+        j = i + 1
+        if j == len(self.__ranges) or stop < self.__ranges[j].start:
+            self.__ranges[i] = range(start, max(stop, r.stop))
+            return
+
+        # The added range also touches the following items, merge them all.
+        j = bisect_right(self.__ranges, stop, lo=j + 1, key=_start)
+        self.__ranges[i:j] = [range(start, max(stop, self.__ranges[j - 1].stop))]
 
     def bounds(self) -> range:
         return range(self.__ranges[0].start, self.__ranges[-1].stop)
@@ -99,3 +104,9 @@ class RangeSet(Sequence):
 
     def __repr__(self) -> str:
         return f"RangeSet({self.__ranges!r})"
+
+
+# Created once, as creating them in each call to `add()` doubles the cost of the
+# search for small sets.
+_start = attrgetter("start")
+_stop = attrgetter("stop")
