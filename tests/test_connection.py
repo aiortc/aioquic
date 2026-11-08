@@ -6410,8 +6410,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 client.send_stream_data(0, b"hello")
             self.assertEqual(str(cm.exception), "Cannot send data on a finished stream")
 
-            # The client resets the finished stream, which has no effect.
+            # The client resets and stops the finished stream, which has no effect.
             client.reset_stream(0, QuicErrorCode.NO_ERROR)
+            client.stop_stream(0, QuicErrorCode.NO_ERROR)
+
+            # The server stops the finished stream, which has no effect.
+            self.assertNotIn(0, server._streams)
+            server.stop_stream(0, QuicErrorCode.NO_ERROR)
+            self.assertNotIn(0, server._streams)
 
             # The stream was not recreated.
             self.assertNotIn(0, client._streams)
