@@ -5984,6 +5984,26 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 cm.exception.reason_phrase, "Too many active connection IDs"
             )
 
+    def test_preferred_address_disabled(self) -> None:
+        with client_and_server(
+            client_options={"migrate_to_preferred_address": False},
+            handshake=False,
+            server_patch=advertise_preferred_address,
+        ) as (client, server):
+            client.connect(SERVER_ADDR, now=time.time())
+            while not client._handshake_confirmed:
+                roundtrip(client, server)
+
+            # The client does not probe the preferred address, but can still use
+            # its connection ID.
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(
+                set(receive_from(client, server, CLIENT_ADDR)), {SERVER_ADDR}
+            )
+            self.assertEqual(len(client._network_paths), 1)
+            self.assertEqual(client.get_peer_address(), SERVER_ADDR)
+            self.assertEqual(client._peer_cid_available[0].sequence_number, 1)
+
     def test_preferred_address_not_probed_when_closing(self) -> None:
         with client_and_server() as (client, server):
             client._remote_preferred_address = SERVER_PREFERRED_ADDRESS
