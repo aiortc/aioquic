@@ -330,6 +330,14 @@ class QuicConnectionTestCase(TestCase):
                 break
         self.assertEqual(types, expected)
 
+    def assertEventsEqual(
+        self, connection: QuicConnection, expected: list[events.QuicEvent]
+    ) -> None:
+        """
+        Check the connection's pending events, comparing their values.
+        """
+        self.assertEqual(list(iter(connection.next_event, None)), expected)
+
     @contextlib.contextmanager
     def assertPacketsDropped(
         self, connection: QuicConnection, triggers: list[str]
@@ -6445,6 +6453,68 @@ class QuicConnectionTest(QuicConnectionTestCase):
             client.reset_stream(0, QuicErrorCode.NO_ERROR)
             self.assertEqual(roundtrip(client, server), (1, 1))
 
+    def test_send_reset_stream_over_max_streams_bidi(self) -> None:
+        with client_and_server() as (client, server):
+            # The client opens as many streams as the server allows.
+            for i in range(128):
+                client.send_stream_data(i * 4, b"x")
+            roundtrip_until_done(client, server)
+            consume_events(server)
+
+            # The next stream is blocked, so the RESET_STREAM waits.
+            stream_id = 128 * 4
+            client.reset_stream(stream_id, QuicErrorCode.INTERNAL_ERROR)
+            self.assertTrue(client._streams[stream_id].is_blocked)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertIsNone(server._close_event)
+            self.assertIsNone(server.next_event())
+
+            # Stream 0 closes, so the server lets the client open one more stream
+            # and the RESET_STREAM is sent.
+            client.send_stream_data(0, b"", end_stream=True)
+            roundtrip_until_done(client, server)
+            server.send_stream_data(0, b"", end_stream=True)
+            roundtrip_until_done(server, client)
+            self.assertEventsEqual(
+                server,
+                [
+                    events.StreamDataReceived(data=b"", end_stream=True, stream_id=0),
+                    events.StreamReset(
+                        error_code=QuicErrorCode.INTERNAL_ERROR, stream_id=stream_id
+                    ),
+                ],
+            )
+
+    def test_send_reset_stream_over_max_streams_uni(self) -> None:
+        with client_and_server() as (client, server):
+            # The client opens as many streams as the server allows.
+            for i in range(128):
+                client.send_stream_data(i * 4 + 2, b"x")
+            roundtrip_until_done(client, server)
+            consume_events(server)
+
+            # The next stream is blocked, so the RESET_STREAM waits.
+            stream_id = 128 * 4 + 2
+            client.reset_stream(stream_id, QuicErrorCode.INTERNAL_ERROR)
+            self.assertTrue(client._streams[stream_id].is_blocked)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertIsNone(server._close_event)
+            self.assertIsNone(server.next_event())
+
+            # Stream 2 closes, so the server lets the client open one more stream
+            # and the RESET_STREAM is sent.
+            client.send_stream_data(2, b"", end_stream=True)
+            roundtrip_until_done(client, server)
+            self.assertEventsEqual(
+                server,
+                [
+                    events.StreamDataReceived(data=b"", end_stream=True, stream_id=2),
+                    events.StreamReset(
+                        error_code=QuicErrorCode.INTERNAL_ERROR, stream_id=stream_id
+                    ),
+                ],
+            )
+
     def test_send_stop_sending(self) -> None:
         with client_and_server() as (client, server):
             # check handshake completed
@@ -6463,6 +6533,39 @@ class QuicConnectionTest(QuicConnectionTestCase):
             assert isinstance(event, events.StreamReset)
             self.assertEqual(event.error_code, 0x11)
             self.assertEqual(event.stream_id, 0)
+
+    def test_send_stop_sending_over_max_streams_bidi(self) -> None:
+        with client_and_server() as (client, server):
+            # The client opens as many streams as the server allows.
+            for i in range(128):
+                client.send_stream_data(i * 4, b"x")
+            roundtrip_until_done(client, server)
+            consume_events(server)
+
+            # The next stream is blocked, so the STOP_SENDING waits.
+            stream_id = 128 * 4
+            client.send_stream_data(stream_id, b"")
+            client.stop_stream(stream_id, QuicErrorCode.INTERNAL_ERROR)
+            self.assertTrue(client._streams[stream_id].is_blocked)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertIsNone(server._close_event)
+            self.assertIsNone(server.next_event())
+
+            # Stream 0 closes, so the server lets the client open one more stream
+            # and the STOP_SENDING is sent.
+            client.send_stream_data(0, b"", end_stream=True)
+            roundtrip_until_done(client, server)
+            server.send_stream_data(0, b"", end_stream=True)
+            roundtrip_until_done(server, client)
+            self.assertEventsEqual(
+                server,
+                [
+                    events.StreamDataReceived(data=b"", end_stream=True, stream_id=0),
+                    events.StopSendingReceived(
+                        error_code=QuicErrorCode.INTERNAL_ERROR, stream_id=stream_id
+                    ),
+                ],
+            )
 
     def test_send_stop_sending_uni_stream(self) -> None:
         with client_and_server() as (client, server):

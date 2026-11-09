@@ -3779,6 +3779,11 @@ class QuicConnection:
                         discarded.add(stream)
                         continue
 
+                    # Any frame would open a stream the peer does not allow yet
+                    # (RFC 9000 section 4.6).
+                    if stream.is_blocked:
+                        continue
+
                     if stream.receiver.stop_pending:
                         # STOP_SENDING
                         self._write_stop_sending_frame(builder=builder, stream=stream)
@@ -3786,7 +3791,7 @@ class QuicConnection:
                     if stream.sender.reset_pending:
                         # RESET_STREAM
                         self._write_reset_stream_frame(builder=builder, stream=stream)
-                    elif not stream.is_blocked and not stream.sender.buffer_is_empty:
+                    elif not stream.sender.buffer_is_empty:
                         # STREAM
                         used = self._write_stream_frame(
                             builder=builder,
