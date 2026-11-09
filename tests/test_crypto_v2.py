@@ -1,4 +1,4 @@
-from unittest import TestCase, skipIf
+from unittest import skipIf
 
 from aioquic.buffer import Buffer
 from aioquic.quic.crypto import (
@@ -12,7 +12,7 @@ from aioquic.quic.crypto import (
 from aioquic.quic.packet import PACKET_FIXED_BIT, QuicProtocolVersion
 from aioquic.tls import CipherSuite
 
-from .utils import SKIP_TESTS
+from .utils import SKIP_TESTS, TestCase
 
 PROTOCOL_VERSION = QuicProtocolVersion.VERSION_2
 

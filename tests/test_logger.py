@@ -1,9 +1,10 @@
 import json
 import os
 import tempfile
-from unittest import TestCase
 
 from aioquic.quic.logger import QuicFileLogger, QuicLogger
+
+from .utils import TestCase
 
 SINGLE_TRACE = {
     "qlog_format": "JSON",
@@ -31,11 +32,10 @@ class QuicLoggerTest(TestCase):
     def test_end_trace_unknown(self) -> None:
         logger = QuicLogger()
         trace = QuicLogger().start_trace(is_client=True, odcid=bytes(8))
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "QuicLoggerTrace does not belong to QuicLogger"
+        ):
             logger.end_trace(trace)
-        self.assertEqual(
-            str(cm.exception), "QuicLoggerTrace does not belong to QuicLogger"
-        )
 
     def test_single_trace(self) -> None:
         logger = QuicLogger()
@@ -46,12 +46,11 @@ class QuicLoggerTest(TestCase):
 
 class QuicFileLoggerTest(TestCase):
     def test_invalid_path(self) -> None:
-        with self.assertRaises(ValueError) as cm:
-            QuicFileLogger("this_path_should_not_exist")
-        self.assertEqual(
-            str(cm.exception),
+        with self.assertRaisesMessage(
+            ValueError,
             "QUIC log output directory 'this_path_should_not_exist' does not exist",
-        )
+        ):
+            QuicFileLogger("this_path_should_not_exist")
 
     def test_single_trace(self) -> None:
         with tempfile.TemporaryDirectory() as dirpath:

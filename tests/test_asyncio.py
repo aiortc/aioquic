@@ -6,7 +6,7 @@ import weakref
 from array import array
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
-from unittest import TestCase, skipIf
+from unittest import skipIf
 from unittest.mock import MagicMock, patch
 
 from aioquic.asyncio.client import connect
@@ -28,6 +28,7 @@ from .utils import (
     SERVER_KEYFILE,
     SKIP_TESTS,
     CertificatePrivateKey,
+    TestCase,
     asynctest,
     generate_ec_certificate,
     generate_ed448_certificate,
@@ -596,9 +597,8 @@ class HighLevelTest(TestCase):
             waiter = asyncio.ensure_future(client.wait_connected())
             await asyncio.sleep(0)
 
-            with self.assertRaises(RuntimeError) as cm:
+            with self.assertRaisesMessage(RuntimeError, "Already awaiting connected"):
                 await client.wait_connected()
-            self.assertEqual(str(cm.exception), "Already awaiting connected")
 
             waiter.cancel()
 

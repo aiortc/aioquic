@@ -1,9 +1,7 @@
-from unittest import TestCase
-
 from aioquic.quic.congestion.base import K_INITIAL_WINDOW, K_MINIMUM_WINDOW
 from aioquic.quic.congestion.reno import RenoCongestionControl
 
-from .utils import ack_eliciting_packet
+from .utils import TestCase, ack_eliciting_packet
 
 
 class RenoCongestionControlTest(TestCase):

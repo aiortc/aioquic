@@ -1,5 +1,3 @@
-from unittest import TestCase
-
 from aioquic.quic.configuration import SMALLEST_MAX_DATAGRAM_SIZE
 from aioquic.quic.crypto import CryptoPair
 from aioquic.quic.packet import QuicFrameType, QuicPacketType, QuicProtocolVersion
@@ -9,6 +7,8 @@ from aioquic.quic.packet_builder import (
     QuicSentPacket,
 )
 from aioquic.tls import Epoch
+
+from .utils import TestCase
 
 
 def create_builder(is_client: bool = False) -> QuicPacketBuilder:

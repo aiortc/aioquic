@@ -1,12 +1,14 @@
 import asyncio
+import contextlib
 import datetime
 import functools
 import ipaddress
 import logging
 import os
 import tempfile
-from collections.abc import Callable, Coroutine
-from typing import ParamSpec, TypeVar
+import unittest
+from collections.abc import Callable, Coroutine, Iterator
+from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
 from aioquic import tls
 from aioquic.quic.packet import QuicPacketType
@@ -15,12 +17,16 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
 
+if TYPE_CHECKING:
+    from unittest.case import _AssertRaisesContext
+
 CertificatePrivateKey = (
     ec.EllipticCurvePrivateKey
     | ed448.Ed448PrivateKey
     | ed25519.Ed25519PrivateKey
     | rsa.RSAPrivateKey
 )
+E = TypeVar("E", bound=BaseException)
 K = TypeVar(
     "K",
     ec.EllipticCurvePrivateKey,
@@ -29,6 +35,20 @@ K = TypeVar(
     rsa.RSAPrivateKey,
 )
 P = ParamSpec("P")
+
+
+class TestCase(unittest.TestCase):
+    @contextlib.contextmanager
+    def assertRaisesMessage(
+        self, expected_exception: type[E], expected_message: str
+    ) -> Iterator["_AssertRaisesContext[E]"]:
+        """
+        Check that the block raises `expected_exception` with exactly
+        `expected_message` as its message.
+        """
+        with self.assertRaises(expected_exception) as cm:
+            yield cm
+        self.assertEqual(str(cm.exception), expected_message)
 
 
 def ack_eliciting_packet(

@@ -1,13 +1,12 @@
-from unittest import TestCase
-
 from aioquic.buffer import Buffer, BufferReadError, BufferWriteError, size_uint_var
+
+from .utils import TestCase
 
 
 class BufferTest(TestCase):
     def test_capacity_negative(self) -> None:
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "capacity cannot be negative"):
             Buffer(capacity=-1)
-        self.assertEqual(str(cm.exception), "capacity cannot be negative")
 
     def test_capacity_zero(self) -> None:
         buf = Buffer(capacity=0)
@@ -217,11 +216,10 @@ class UintVarTest(TestCase):
 
     def test_push_uint_var_too_big(self) -> None:
         buf = Buffer(capacity=8)
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Integer is too big for a variable-length integer"
+        ):
             buf.push_uint_var(4611686018427387904)
-        self.assertEqual(
-            str(cm.exception), "Integer is too big for a variable-length integer"
-        )
 
     def test_size_uint_var(self) -> None:
         self.assertEqual(size_uint_var(63), 1)
@@ -229,8 +227,7 @@ class UintVarTest(TestCase):
         self.assertEqual(size_uint_var(1073741823), 4)
         self.assertEqual(size_uint_var(4611686018427387903), 8)
 
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Integer is too big for a variable-length integer"
+        ):
             size_uint_var(4611686018427387904)
-        self.assertEqual(
-            str(cm.exception), "Integer is too big for a variable-length integer"
-        )

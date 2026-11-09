@@ -1,5 +1,4 @@
 import math
-from unittest import TestCase
 
 from aioquic import tls
 from aioquic.quic.congestion.base import K_MINIMUM_WINDOW
@@ -14,7 +13,7 @@ from aioquic.quic.recovery import (
     QuicPacketSpace,
 )
 
-from .utils import ack_eliciting_packet
+from .utils import TestCase, ack_eliciting_packet
 
 
 def send_one_rtt_packets(

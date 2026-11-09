@@ -1,5 +1,4 @@
 import contextlib
-from unittest import TestCase
 
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
@@ -7,6 +6,7 @@ from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import StreamDataReceived
 
 from .test_connection import client_and_server, transfer
+from .utils import TestCase
 
 
 def h0_client_and_server() -> contextlib.AbstractContextManager[
