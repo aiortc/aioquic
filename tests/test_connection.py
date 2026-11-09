@@ -1265,19 +1265,19 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             client.send_stream_data(0, b"hello")
             client.reset_stream_at(0, QuicErrorCode.INTERNAL_ERROR, 5)
             items = client.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [32, 36])
+            self.assertEqual(datagram_sizes(items), [36, 32])
             self.assertAlmostEqual(client.get_timer(), 0.625)
             self.assertSentPackets(client, [0, 0, 3])
             self.assertEvents(client, [])
 
             # The reset packet is lost, then the server receives reliable data.
             now = self.advance_by_tick(now)
-            server.receive_datagram(items[1][0], CLIENT_ADDR, now=now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
             self.assertEvents(server, [events.StreamDataReceived])
             self.assertAlmostEqual(server.get_timer(), 0.4)
             self.assertSentPackets(server, [0, 0, 0])
             ack_items = server.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(ack_items), [34])
+            self.assertEqual(datagram_sizes(ack_items), [32])
             self.assertAlmostEqual(server.get_timer(), 60.4)
             self.assertSentPackets(server, [0, 0, 1])
             self.assertEvents(server, [])
@@ -1286,13 +1286,13 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             # outstanding until its PTO causes a retransmission.
             now = self.advance_by_tick(now)
             client.receive_datagram(ack_items[0][0], SERVER_ADDR, now=now)
-            self.assertAlmostEqual(client.get_timer(), 0.4625)
+            self.assertAlmostEqual(client.get_timer(), 0.5875)
             self.assertSentPackets(client, [0, 0, 1])
             now = self.advance_to_timer(now, client)
             client.handle_timer(now=now)
             retransmit_items = client.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(retransmit_items), [32])
-            self.assertAlmostEqual(client.get_timer(), 0.7)
+            self.assertEqual(datagram_sizes(retransmit_items), [33])
+            self.assertAlmostEqual(client.get_timer(), 1.0625)
             self.assertSentPackets(client, [0, 0, 1])
             self.assertEvents(client, [])
 
@@ -1300,7 +1300,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             now = self.advance_by_tick(now)
             server.receive_datagram(retransmit_items[0][0], CLIENT_ADDR, now=now)
             self.assertEvents(server, [events.StreamReset])
-            self.assertAlmostEqual(server.get_timer(), 0.5125)
+            self.assertAlmostEqual(server.get_timer(), 0.6375)
             self.assertSentPackets(server, [0, 0, 1])
 
     def test_connect_with_lost_server_encrypted_extensions(self) -> None:

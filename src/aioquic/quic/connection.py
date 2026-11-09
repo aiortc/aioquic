@@ -2544,10 +2544,30 @@ class QuicConnection:
                 )
             )
 
-        # check stream direction
-        self._assert_stream_can_receive(frame_type, stream_id)
+        self._handle_reset_stream(
+            frame_type=frame_type,
+            stream_id=stream_id,
+            error_code=error_code,
+            final_size=final_size,
+        )
 
-        # check flow-control limits
+    def _handle_reset_stream(
+        self,
+        *,
+        frame_type: int,
+        stream_id: int,
+        error_code: int,
+        final_size: int,
+        reliable_size: int | None = None,
+    ) -> None:
+        """Apply a RESET_STREAM or RESET_STREAM_AT frame."""
+        if reliable_size is not None and reliable_size > final_size:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                frame_type=frame_type,
+                reason_phrase="Reliable size exceeds final size",
+            )
+        self._assert_stream_can_receive(frame_type, stream_id)
         stream = self._get_or_create_stream(frame_type, stream_id)
         if final_size > stream.max_stream_data_local:
             raise QuicConnectionError(
@@ -2563,24 +2583,32 @@ class QuicConnection:
                 reason_phrase="Over connection data limit",
             )
 
-        # process reset
-        self._logger.info(
-            "Stream %d reset by peer (error code %d, final size %d)",
-            stream_id,
-            error_code,
-            final_size,
-        )
-        try:
-            event = stream.receiver.handle_reset(
-                error_code=error_code, final_size=final_size
+        if reliable_size is None:
+            self._logger.info(
+                "Stream %d reset by peer (error code %d, final size %d)",
+                stream_id,
+                error_code,
+                final_size,
             )
+
+        try:
+            if reliable_size is None:
+                event = stream.receiver.handle_reset(
+                    error_code=error_code, final_size=final_size
+                )
+            else:
+                event = stream.receiver.handle_reset_at(
+                    error_code=error_code,
+                    final_size=final_size,
+                    reliable_size=reliable_size,
+                )
         except (FinalSizeError, StreamStateError) as exc:
+            if isinstance(exc, StreamStateError):
+                quic_error_code = QuicErrorCode.STREAM_STATE_ERROR
+            else:
+                quic_error_code = QuicErrorCode.FINAL_SIZE_ERROR
             raise QuicConnectionError(
-                error_code=(
-                    QuicErrorCode.STREAM_STATE_ERROR
-                    if isinstance(exc, StreamStateError)
-                    else QuicErrorCode.FINAL_SIZE_ERROR
-                ),
+                error_code=quic_error_code,
                 frame_type=frame_type,
                 reason_phrase=str(exc),
             )
@@ -2604,46 +2632,13 @@ class QuicConnection:
                     stream_id=stream_id,
                 )
             )
-        if reliable_size > final_size:
-            raise QuicConnectionError(
-                error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
-                frame_type=frame_type,
-                reason_phrase="Reliable size exceeds final size",
-            )
-        self._assert_stream_can_receive(frame_type, stream_id)
-        stream = self._get_or_create_stream(frame_type, stream_id)
-        if final_size > stream.max_stream_data_local:
-            raise QuicConnectionError(
-                error_code=QuicErrorCode.FLOW_CONTROL_ERROR,
-                frame_type=frame_type,
-                reason_phrase="Over stream data limit",
-            )
-        newly_received = max(0, final_size - stream.receiver.highest_offset)
-        if self._local_max_data.used + newly_received > self._local_max_data.value:
-            raise QuicConnectionError(
-                error_code=QuicErrorCode.FLOW_CONTROL_ERROR,
-                frame_type=frame_type,
-                reason_phrase="Over connection data limit",
-            )
-        try:
-            event = stream.receiver.handle_reset_at(
-                error_code=error_code,
-                final_size=final_size,
-                reliable_size=reliable_size,
-            )
-        except (FinalSizeError, StreamStateError) as exc:
-            raise QuicConnectionError(
-                error_code=(
-                    QuicErrorCode.STREAM_STATE_ERROR
-                    if isinstance(exc, StreamStateError)
-                    else QuicErrorCode.FINAL_SIZE_ERROR
-                ),
-                frame_type=frame_type,
-                reason_phrase=str(exc),
-            )
-        if event is not None:
-            self._events.append(event)
-        self._local_max_data.used += newly_received
+        self._handle_reset_stream(
+            frame_type=frame_type,
+            stream_id=stream_id,
+            error_code=error_code,
+            final_size=final_size,
+            reliable_size=reliable_size,
+        )
 
     def _handle_retire_connection_id_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
