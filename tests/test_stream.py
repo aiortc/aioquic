@@ -452,15 +452,20 @@ class QuicStreamTest(TestCase):
             stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"01234567"))
         self.assertEqual(str(cm.exception), "Data received beyond final size")
 
-    def test_receiver_reset_twice(self) -> None:
+    def test_receiver_reset_twice_changed_error_code(self) -> None:
         stream = QuicStream(stream_id=0)
         self.assertEqual(
             stream.receiver.handle_reset(final_size=4),
             StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
         )
 
-        # the duplicate reset is ignored
-        self.assertEqual(stream.receiver.handle_reset(final_size=4), None)
+        # A repeated plain RESET_STREAM may use a different error code.
+        self.assertEqual(
+            stream.receiver.handle_reset(
+                final_size=4, error_code=QuicErrorCode.INTERNAL_ERROR
+            ),
+            None,
+        )
 
     def test_receiver_reset_twice_final_size_error(self) -> None:
         stream = QuicStream(stream_id=0)

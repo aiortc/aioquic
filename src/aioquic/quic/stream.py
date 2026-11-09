@@ -49,6 +49,7 @@ class QuicStreamReceiver:
         self._stream_id = stream_id
         self._stop_error_code: int | None = None
         self._reset_error_code: int | None = None
+        self._reset_at_received = False
         self._reset_at_reliable_size: int | None = None
         self._reset_event_pending = False
 
@@ -145,7 +146,11 @@ class QuicStreamReceiver:
         """
         if self._final_size is not None and final_size != self._final_size:
             raise FinalSizeError("Cannot change final size")
-        if self._reset_error_code is not None and error_code != self._reset_error_code:
+        if (
+            self._reset_at_received
+            and self._reset_error_code is not None
+            and error_code != self._reset_error_code
+        ):
             raise StreamStateError("Cannot change reset error code")
         # Data at or beyond this final size already arrived (RFC 9000 section 4.5).
         if final_size < self.highest_offset:
@@ -179,6 +184,7 @@ class QuicStreamReceiver:
         self._final_size = final_size
         self.highest_offset = max(self.highest_offset, final_size)
         self._reset_error_code = error_code
+        self._reset_at_received = True
         if self._reset_at_reliable_size is None:
             self._reset_at_reliable_size = reliable_size
         else:
