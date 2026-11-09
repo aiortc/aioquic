@@ -143,14 +143,22 @@ class QuicLoggerTrace:
         return {"frame_type": "ping"}
 
     def encode_reset_stream_frame(
-        self, error_code: int, final_size: int, stream_id: int
+        self,
+        error_code: int,
+        final_size: int,
+        stream_id: int,
+        reliable_size: int | None = None,
     ) -> dict:
-        return {
+        data: dict = {
             "error_code": error_code,
             "final_size": final_size,
             "frame_type": "reset_stream",
             "stream_id": stream_id,
         }
+        if reliable_size is not None:
+            data["frame_type"] = "reset_stream_at"
+            data["reliable_size"] = reliable_size
+        return data
 
     def encode_retire_connection_id_frame(self, sequence_number: int) -> dict:
         return {

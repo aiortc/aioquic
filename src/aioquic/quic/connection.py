@@ -52,7 +52,12 @@ from .packet_builder import (
     QuicPacketBuilderStop,
 )
 from .recovery import MAX_ACK_RANGES, QuicPacketRecovery, QuicPacketSpace
-from .stream import FinalSizeError, QuicStream, StreamFinishedError
+from .stream import (
+    FinalSizeError,
+    QuicStream,
+    StreamFinishedError,
+    StreamStateError,
+)
 
 logger = logging.getLogger("quic")
 
@@ -102,6 +107,7 @@ PATH_CHALLENGE_FRAME_CAPACITY = 1 + 8
 PATH_RESPONSE_FRAME_CAPACITY = 1 + 8
 PING_FRAME_CAPACITY = 1
 RESET_STREAM_FRAME_CAPACITY = 1 + 3 * UINT_VAR_MAX_SIZE
+RESET_STREAM_AT_FRAME_CAPACITY = 1 + 4 * UINT_VAR_MAX_SIZE
 RETIRE_CONNECTION_ID_CAPACITY = 1 + UINT_VAR_MAX_SIZE
 STOP_SENDING_FRAME_CAPACITY = 1 + 2 * UINT_VAR_MAX_SIZE
 STREAMS_BLOCKED_CAPACITY = 1 + UINT_VAR_MAX_SIZE
@@ -382,6 +388,7 @@ class QuicConnection:
         self._remote_max_streams_bidi = 0
         self._remote_max_streams_uni = 0
         self._remote_preferred_address: QuicPreferredAddress | None = None
+        self._remote_reset_stream_at = False
         self._remote_version_information: QuicVersionInformation | None = None
         self._retry_count = 0
         self._retry_source_connection_id = retry_source_connection_id
@@ -472,6 +479,7 @@ class QuicConnection:
             0x1C: (self._handle_connection_close_frame, EPOCHS("IH01")),
             0x1D: (self._handle_connection_close_frame, EPOCHS("01")),
             0x1E: (self._handle_handshake_done_frame, EPOCHS("1")),
+            0x24: (self._handle_reset_stream_frame, EPOCHS("01")),
             0x30: (self._handle_datagram_frame, EPOCHS("01")),
             0x31: (self._handle_datagram_frame, EPOCHS("01")),
         }
@@ -1249,7 +1257,9 @@ class QuicConnection:
 
         This method has no effect if a reset has already been triggered either by a
         call to :meth:`reset_stream` or by the reception of a STOP_SENDING frame, or
-        if all the stream's data has already been acknowledged.
+        if all the stream's data has already been acknowledged. After
+        :meth:`reset_stream_at`, it keeps that call's error code and lowers the
+        reliable size to zero.
 
         .. aioquic_transmit::
 
@@ -1262,7 +1272,46 @@ class QuicConnection:
             return
 
         stream = self._get_or_create_stream_for_send(stream_id)
-        stream.sender.reset(error_code)
+        stream.sender.reset(error_code=error_code)
+
+    def reset_stream_at(
+        self, stream_id: int, error_code: int, reliable_size: int
+    ) -> None:
+        """
+        Reset a stream after reliably delivering its prefix.
+
+        .. warning::
+
+            This method is experimental, as reliable stream resets are still an
+            Internet-Draft (draft-ietf-quic-reliable-stream-reset). It could change
+            or be removed in a future release.
+
+        This method requires a completed handshake and a peer which supports reliable
+        stream resets. It has no effect if all the stream's data has already been
+        acknowledged.
+
+        It can be called again with the same error code to reduce the reliable size,
+        and has no effect if the reliable size is unchanged. Changing the error code
+        or increasing the reliable size raises :class:`ValueError`.
+
+        .. aioquic_transmit::
+
+        :param stream_id: The stream's ID.
+        :param error_code: The application error code.
+        :param reliable_size: The number of written bytes to deliver reliably.
+        """
+        if not self._handshake_complete:
+            raise ValueError(
+                "Cannot reset a stream reliably before the handshake completes"
+            )
+        if not self._remote_reset_stream_at:
+            raise ValueError("Cannot reset a stream reliably without peer support")
+        if self._stream_can_send(stream_id) and self._stream_is_discarded(stream_id):
+            # The stream finished and its state was discarded, so there is nothing
+            # to reset.
+            return
+        stream = self._get_or_create_stream_for_send(stream_id)
+        stream.sender.reset_at(error_code=error_code, reliable_size=reliable_size)
 
     def send_ping(self, uid: int) -> None:
         """
@@ -1571,8 +1620,9 @@ class QuicConnection:
         if ticket is None or ticket.max_early_data_size is None:
             return ticket
 
-        # Reject 0-RTT data unless the limits the client remembers from the
-        # ticket are still supported (RFC 9000 section 7.4.1, RFC 9221 section 3).
+        # Reject 0-RTT data unless the limits and extensions the client remembers
+        # from the ticket are still supported (RFC 9000 section 7.4.1, RFC 9221
+        # section 3, draft-ietf-quic-reliable-stream-reset section 3).
         try:
             stored = get_transport_parameters(ticket.other_extensions)
         except (KeyError, ValueError):
@@ -1590,6 +1640,7 @@ class QuicConnection:
             "initial_max_streams_bidi",
             "initial_max_streams_uni",
             "max_datagram_frame_size",
+            "reset_stream_at",
         ]:
             if (getattr(stored, attr) or 0) > (getattr(current, attr) or 0):
                 self._logger.info(
@@ -2552,17 +2603,36 @@ class QuicConnection:
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
     ) -> None:
         """
-        Handle a RESET_STREAM frame.
+        Handle a RESET_STREAM or RESET_STREAM_AT frame.
         """
         stream_id = buf.pull_uint_var()
         error_code = buf.pull_uint_var()
         final_size = buf.pull_uint_var()
+        if frame_type == QuicFrameType.RESET_STREAM_AT:
+            reliable_size = buf.pull_uint_var()
+            if not self._configuration.reliable_stream_reset:
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                    frame_type=frame_type,
+                    reason_phrase="Unexpected RESET_STREAM_AT frame",
+                )
+            if reliable_size > final_size:
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.FRAME_ENCODING_ERROR,
+                    frame_type=frame_type,
+                    reason_phrase="Reliable Size is greater than Final Size",
+                )
+        else:
+            reliable_size = None
 
         # log frame
         if self._quic_logger is not None:
             context.quic_logger_frames.append(
                 self._quic_logger.encode_reset_stream_frame(
-                    error_code=error_code, final_size=final_size, stream_id=stream_id
+                    error_code=error_code,
+                    final_size=final_size,
+                    reliable_size=reliable_size,
+                    stream_id=stream_id,
                 )
             )
 
@@ -2594,11 +2664,19 @@ class QuicConnection:
         )
         try:
             event = stream.receiver.handle_reset(
-                error_code=error_code, final_size=final_size
+                error_code=error_code,
+                final_size=final_size,
+                reliable_size=reliable_size,
             )
         except FinalSizeError as exc:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.FINAL_SIZE_ERROR,
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
+        except StreamStateError as exc:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.STREAM_STATE_ERROR,
                 frame_type=frame_type,
                 reason_phrase=str(exc),
             )
@@ -2741,6 +2819,11 @@ class QuicConnection:
             )
         if event is not None:
             self._events.append(event)
+
+        pending_reset_event = stream.receiver.get_pending_reset_event()
+        if pending_reset_event is not None:
+            self._events.append(pending_reset_event)
+
         self._local_max_data.used += newly_received
 
     def _handle_stream_data_blocked_frame(
@@ -3444,6 +3527,7 @@ class QuicConnection:
         self._remote_max_datagram_frame_size = (
             quic_transport_parameters.max_datagram_frame_size
         )
+        self._remote_reset_stream_at = bool(quic_transport_parameters.reset_stream_at)
         for param in [
             "max_data",
             "max_stream_data_bidi_local",
@@ -3541,6 +3625,7 @@ class QuicConnection:
                 chosen_version=self._version,
                 available_versions=self._configuration.supported_versions,
             ),
+            reset_stream_at=self._configuration.reliable_stream_reset,
         )
         if not self._is_client:
             quic_transport_parameters.original_destination_connection_id = (
@@ -3851,10 +3936,12 @@ class QuicConnection:
                         self._write_stop_sending_frame(builder=builder, stream=stream)
 
                     if stream.sender.reset_pending:
-                        # RESET_STREAM
+                        # RESET_STREAM or RESET_STREAM_AT
                         self._write_reset_stream_frame(builder=builder, stream=stream)
-                    elif not stream.sender.buffer_is_empty:
-                        # STREAM
+                    if not stream.sender.buffer_is_empty:
+                        # STREAM, which after a RESET_STREAM_AT only carries data
+                        # up to the reliable size. The reset may be waiting for
+                        # the credit this data makes the peer grant.
                         used = self._write_stream_frame(
                             builder=builder,
                             space=space,
@@ -4203,15 +4290,36 @@ class QuicConnection:
         builder: QuicPacketBuilder,
         stream: QuicStream,
     ) -> None:
+        # The final size counts towards flow control limits
+        # (draft-ietf-quic-reliable-stream-reset section 4).
+        final_size = stream.sender.reset_final_size
+        newly_sent = final_size - stream.sender.highest_offset
+        if (
+            final_size > stream.max_stream_data_remote
+            or self._remote_max_data_used + newly_sent > self._remote_max_data
+        ):
+            return
+
+        reliable_size = stream.sender.reset_reliable_size
+        if reliable_size:
+            frame_type = QuicFrameType.RESET_STREAM_AT
+            capacity = RESET_STREAM_AT_FRAME_CAPACITY
+        else:
+            frame_type = QuicFrameType.RESET_STREAM
+            capacity = RESET_STREAM_FRAME_CAPACITY
         buf = builder.start_frame(
-            frame_type=QuicFrameType.RESET_STREAM,
-            capacity=RESET_STREAM_FRAME_CAPACITY,
+            frame_type=frame_type,
+            capacity=capacity,
             handler=stream.sender.on_reset_delivery,
+            handler_args=(reliable_size,),
         )
         frame = stream.sender.get_reset_frame()
+        self._remote_max_data_used += newly_sent
         buf.push_uint_var(frame.stream_id)
         buf.push_uint_var(frame.error_code)
         buf.push_uint_var(frame.final_size)
+        if frame.reliable_size is not None:
+            buf.push_uint_var(frame.reliable_size)
 
         # log frame
         if self._quic_logger is not None:
@@ -4219,6 +4327,7 @@ class QuicConnection:
                 self._quic_logger.encode_reset_stream_frame(
                     error_code=frame.error_code,
                     final_size=frame.final_size,
+                    reliable_size=frame.reliable_size,
                     stream_id=frame.stream_id,
                 )
             )
