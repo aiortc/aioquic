@@ -2144,8 +2144,12 @@ class Context:
                 )
                 self._session_resumed = True
 
-                # calculate early data key
-                if peer_hello.early_data:
+                # Accept early data only if the ticket allows it
+                # (RFC 9846 section 4.7.1), and calculate its key.
+                if (
+                    peer_hello.early_data
+                    and session_ticket.max_early_data_size is not None
+                ):
                     early_key = self.key_schedule.derive_secret(b"c e traffic")
                     self.early_data_accepted = True
                     self.update_traffic_key_cb(
