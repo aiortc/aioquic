@@ -81,6 +81,18 @@ class QuicConfiguration:
     The :class:`~aioquic.quic.logger.QuicLogger` instance to log events to.
     """
 
+    reliable_stream_reset: bool = False
+    """
+    Whether to let the peer reset streams reliably, which still delivers a
+    stream's data up to a given size.
+
+    .. warning::
+
+        This option is experimental, as reliable stream resets are still an
+        Internet-Draft (draft-ietf-quic-reliable-stream-reset). It could change
+        or be removed in a future release.
+    """
+
     secrets_log_file: TextIO | None = None
     """
     A file-like object in which to log traffic secrets.

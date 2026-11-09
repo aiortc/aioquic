@@ -2869,6 +2869,81 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             self.assertAlmostEqual(client.get_timer(), 60.55)  # idle timeout
             self.assertSentPackets(client, [0, 0, 0])
 
+    def test_send_reset_stream_at_lost(self) -> None:
+        """
+        Check lost stream data is only retransmitted up to the reliable size, and
+        a lost RESET_STREAM_AT is retransmitted until it is acknowledged
+        (draft-ietf-quic-reliable-stream-reset section 5).
+        """
+        with client_and_server(
+            handshake=False, server_options={"reliable_stream_reset": True}
+        ) as (client, server):
+            self.watch_timers(client, server)
+            now = self.handshake(client, server, now=0.0)
+
+            # Client sends stream data, which is lost.
+            client.send_stream_data(0, b"abcdefgh")
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [39])
+            self.assertAlmostEqual(client.get_timer(), 0.625)
+            self.assertSentPackets(client, [0, 0, 2])
+
+            # Client sends RESET_STREAM_AT with a reliable size of 3, which is lost.
+            now = self.advance_by_tick(now)
+            client.reset_stream_at(0, error_code=7, reliable_size=3)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(client.get_timer(), 0.675)
+            self.assertSentPackets(client, [0, 0, 3])
+
+            # Client's PTO fires, it only retransmits the first 3 bytes.
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [35])
+            self.assertAlmostEqual(client.get_timer(), 1.225)
+            self.assertSentPackets(client, [0, 0, 3])
+
+            # Server receives the data, sends ACK.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertEventsEqual(
+                server,
+                [events.StreamDataReceived(data=b"abc", end_stream=False, stream_id=0)],
+            )
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [34])
+            self.assertAlmostEqual(server.get_timer(), 60.725)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 1])
+
+            # Client receives ACK, detects the loss of RESET_STREAM_AT and
+            # retransmits it.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(client.get_timer(), 1.0125)
+            self.assertSentPackets(client, [0, 0, 1])
+
+            # Server receives RESET_STREAM_AT, sends ACK.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            self.assertEventsEqual(
+                server, [events.StreamReset(error_code=7, stream_id=0)]
+            )
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [34])
+            self.assertAlmostEqual(server.get_timer(), 60.825)  # idle timeout
+            self.assertSentPackets(server, [0, 0, 2])
+
+            # Client receives ACK, nothing remains in flight.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            self.assertEqual(client.datagrams_to_send(now=now), [])
+            self.assertAlmostEqual(client.get_timer(), 60.875)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 0])
+            self.assertTrue(client._streams[0].sender.is_finished)
+
     def watch_timers(self, *connections: QuicConnection) -> None:
         """
         Register the connections whose timers the advance_* helpers check.
@@ -2890,7 +2965,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         `ticket_extensions`. The session is resumed unless `ticket_known` is
         `False`, in which case the server no longer has the ticket.
         """
-        options = {"max_datagram_frame_size": 65536}
+        options = {"max_datagram_frame_size": 65536, "reliable_stream_reset": True}
         client_ticket, ticket_store = self.create_session_ticket(
             client_options=options, server_options=options
         )
@@ -3574,14 +3649,16 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
     def test_connect_with_0rtt_lowered_limits(self) -> None:
         """
-        A server whose limits are lower than those stored in the session ticket
-        resumes the session but rejects 0-RTT data (RFC 9000 section 7.4.1,
-        RFC 9221 section 3).
+        A server whose limits are lower than those stored in the session ticket,
+        or which no longer supports an extension, resumes the session but rejects
+        0-RTT data (RFC 9000 section 7.4.1, RFC 9221 section 3,
+        draft-ietf-quic-reliable-stream-reset section 3).
         """
         for name, value in [
             ("max_data", 65536),
             ("max_datagram_frame_size", None),
             ("max_stream_data", 65536),
+            ("reliable_stream_reset", False),
         ]:
             with self.subTest(name=name):
                 self.check_0rtt_rejected(server_options={name: value})
@@ -4991,6 +5068,84 @@ class QuicConnectionTest(QuicConnectionTestCase):
             )
             self.assertTrue(network_path.is_validated)
 
+    def test_handle_reset_stream_at_frame_not_advertised(self) -> None:
+        with client_and_server() as (client, server):
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM_AT,
+                    Buffer(data=b"\x01\x07\x00\x00"),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION)
+
+    def test_handle_reset_stream_at_frame_over_limits(self) -> None:
+        with client_and_server(client_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            # The final size exceeds the stream's limit, then the connection's.
+            for final_size in (
+                client._local_max_stream_data_bidi_remote + 1,
+                client._local_max_data.value + 1,
+            ):
+                data = b"".join(encode_uint_var(x) for x in (1, 7, final_size, 0))
+                with (
+                    self.subTest(final_size=final_size),
+                    self.assertRaises(QuicConnectionError) as cm,
+                ):
+                    client._handle_reset_stream_frame(
+                        client_receive_context(client),
+                        QuicFrameType.RESET_STREAM_AT,
+                        Buffer(data=data),
+                    )
+                self.assertEqual(
+                    cm.exception.error_code, QuicErrorCode.FLOW_CONTROL_ERROR
+                )
+
+    def test_handle_reset_stream_at_frame_reliable_size_exceeds_final_size(
+        self,
+    ) -> None:
+        with client_and_server(client_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            client._handle_reset_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM,
+                Buffer(data=b"\x01\x07\x03"),
+            )
+            self.assertTrue(client._streams[1].receiver.is_finished)
+
+            # The frame is rejected on a stream which was already reset, and on a
+            # stream the client cannot receive on.
+            for stream_id in (1, 2):
+                with (
+                    self.subTest(stream_id=stream_id),
+                    self.assertRaises(QuicConnectionError) as cm,
+                ):
+                    client._handle_reset_stream_frame(
+                        client_receive_context(client),
+                        QuicFrameType.RESET_STREAM_AT,
+                        Buffer(data=bytes([stream_id, 7, 3, 4])),
+                    )
+                self.assertEqual(
+                    cm.exception.error_code, QuicErrorCode.FRAME_ENCODING_ERROR
+                )
+
+    def test_handle_reset_stream_at_frame_twice(self) -> None:
+        with client_and_server(client_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            # The final size only counts once towards flow control.
+            for _ in range(2):
+                client._handle_reset_stream_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM_AT,
+                    Buffer(data=b"\x01\x07\x08\x04"),
+                )
+            self.assertEqual(client._local_max_data.used, 8)
+
     def test_handle_padding_frame(self) -> None:
         client = create_standalone_client(self)
 
@@ -5037,6 +5192,26 @@ class QuicConnectionTest(QuicConnectionTestCase):
             assert isinstance(event, events.StreamReset)
             self.assertEqual(event.error_code, QuicErrorCode.INTERNAL_ERROR)
             self.assertEqual(event.stream_id, stream_id)
+
+    def test_handle_reset_stream_frame_after_reset_stream_at(self) -> None:
+        with client_and_server(client_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            client._handle_reset_stream_frame(
+                client_receive_context(client),
+                QuicFrameType.RESET_STREAM_AT,
+                Buffer(data=b"\x01\x07\x08\x03"),
+            )
+
+            # A RESET_STREAM cannot change the error code.
+            with self.assertRaises(QuicConnectionError) as cm:
+                client._handle_reset_stream_frame(
+                    client_receive_context(client),
+                    QuicFrameType.RESET_STREAM,
+                    Buffer(data=b"\x01\x08\x08"),
+                )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.STREAM_STATE_ERROR)
 
     def test_handle_reset_stream_frame_below_received_data(self) -> None:
         stream_id = 1
@@ -5346,6 +5521,26 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(event.error_code, 0x12)
 
             self.assertIsNone(client.next_event())
+
+    def test_handle_stop_sending_frame_after_reset_stream_at(self) -> None:
+        with client_and_server(server_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            client.send_stream_data(0, b"abcdefgh")
+            client.reset_stream_at(0, 7, 3)
+            stream = client._streams[0]
+
+            # The RESET_STREAM keeps the error code of the RESET_STREAM_AT.
+            for _ in range(2):
+                client._handle_stop_sending_frame(
+                    client_receive_context(client),
+                    QuicFrameType.STOP_SENDING,
+                    Buffer(data=b"\x00\x09"),
+                )
+            self.assertTrue(stream.sender.reset_pending)
+            frame = stream.sender.get_reset_frame()
+            self.assertEqual((frame.error_code, frame.reliable_size), (7, None))
 
     def test_handle_stop_sending_frame_receive_only(self) -> None:
         with client_and_server() as (client, server):
@@ -5855,6 +6050,17 @@ class QuicConnectionTest(QuicConnectionTestCase):
             cm.exception.reason_phrase, "max_udp_payload_size must be >= 1200"
         )
 
+    def test_parse_transport_parameters_with_bad_reset_stream_at(self) -> None:
+        client = create_standalone_client(self)
+
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._parse_transport_parameters(
+                [(tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS, bytes.fromhex("1d0100"))]
+            )
+        self.assertEqual(
+            cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
+        )
+
     def test_parse_transport_parameters_with_bad_initial_source_connection_id(
         self,
     ) -> None:
@@ -5985,6 +6191,17 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client._parse_transport_parameters(extensions, from_session_ticket=True)
         self.assertIsNone(client._remote_preferred_address)
         self.assertEqual(client._peer_cid_available, [])
+
+    def test_parse_transport_parameters_with_reset_stream_at_from_session_ticket(
+        self,
+    ) -> None:
+        client = create_standalone_client(self)
+
+        extensions = transport_parameters_extensions(
+            QuicTransportParameters(reset_stream_at=True)
+        )
+        client._parse_transport_parameters(extensions, from_session_ticket=True)
+        self.assertTrue(client._remote_reset_stream_at)
 
     def test_parse_transport_parameters_with_server_only_parameter(self) -> None:
         server = create_standalone_server(self)
@@ -6630,6 +6847,287 @@ class QuicConnectionTest(QuicConnectionTestCase):
             # client resets stream
             client.reset_stream(0, QuicErrorCode.NO_ERROR)
             self.assertEqual(roundtrip(client, server), (1, 1))
+
+    def test_send_reset_stream_after_reset_stream_at(self) -> None:
+        # An unsent RESET_STREAM_AT commits nothing.
+        with client_and_server(
+            server_options={"max_stream_data": 2, "reliable_stream_reset": True}
+        ) as (client, server):
+            client.send_stream_data(0, b"abcdefgh")
+            stream = client._streams[0]
+            client.reset_stream_at(0, 7, 4)
+            client.reset_stream(0, 7)
+            roundtrip(client, server)
+            self.assertFalse(stream.sender.reset_pending)
+            self.assertEqual(server._streams[0].receiver._final_size, 0)
+            self.assertEqual(client._remote_max_data_used, 0)
+
+        # A sent RESET_STREAM_AT commits its final size, counted once.
+        with client_and_server(
+            server_options={"max_stream_data": 4, "reliable_stream_reset": True}
+        ) as (client, server):
+            client.send_stream_data(0, b"abcdefgh")
+            stream = client._streams[0]
+            client.reset_stream_at(0, 7, 4)
+            roundtrip(client, server)
+            self.assertFalse(stream.sender.reset_pending)
+            client.reset_stream(0, 7)
+            roundtrip(client, server)
+            self.assertFalse(stream.sender.reset_pending)
+            self.assertEqual(server._streams[0].receiver._final_size, 4)
+            self.assertEqual(client._remote_max_data_used, 4)
+
+    def test_send_reset_stream_at(self) -> None:
+        with client_and_server(server_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            # Only the server advertised support, so only the client can send
+            # RESET_STREAM_AT.
+            self.assertTrue(client._remote_reset_stream_at)
+            self.assertFalse(server._remote_reset_stream_at)
+            client.send_stream_data(0, b"abcdefgh")
+            client.reset_stream_at(0, 7, 3)
+            with self.assertRaises(ValueError):
+                server.reset_stream_at(0, 7, 3)
+            consume_events(server)
+            roundtrip(client, server)
+            self.assertEventsEqual(
+                server,
+                [
+                    events.StreamDataReceived(
+                        data=b"abc", end_stream=False, stream_id=0
+                    ),
+                    events.StreamReset(error_code=7, stream_id=0),
+                ],
+            )
+
+    def test_send_reset_stream_at_after_fin_acked(self) -> None:
+        with client_and_server(server_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            client.send_stream_data(0, b"abc", end_stream=True)
+            roundtrip(client, server)
+
+            # The stream is finished, there is nothing to send.
+            client.reset_stream_at(0, error_code=7, reliable_size=3)
+            self.assertEqual(transfer(client, server), 0)
+
+    def test_send_reset_stream_at_discarded_stream(self) -> None:
+        with client_and_server(server_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            # The client sends data on unidirectional stream 2.
+            client.send_stream_data(2, b"hello", end_stream=True)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+
+            # The client discards the stream once all data is acknowledged.
+            self.assertEqual(roundtrip(client, server), (0, 0))
+            self.assertNotIn(2, client._streams)
+
+            # The client resets the finished stream, which has no effect.
+            client.reset_stream_at(2, QuicErrorCode.NO_ERROR, 0)
+            self.assertNotIn(2, client._streams)
+            self.assertEqual(roundtrip(client, server), (0, 0))
+
+    def test_send_reset_stream_at_flow_control(self) -> None:
+        # The stream's or the connection's limit defers the RESET_STREAM_AT, but
+        # not the reliable data, which makes the server raise its limit.
+        for name in ("max_data", "max_stream_data"):
+            with (
+                self.subTest(name=name),
+                client_and_server(
+                    server_options={name: 2, "reliable_stream_reset": True}
+                ) as (client, server),
+            ):
+                consume_events(server)
+                client.send_stream_data(0, b"abcdefgh")
+                client.reset_stream_at(0, 7, 4)
+                stream = client._streams[0]
+
+                roundtrip(client, server)
+                self.assertTrue(stream.sender.reset_pending)
+                self.assertEventsEqual(
+                    server,
+                    [
+                        events.StreamDataReceived(
+                            data=b"ab", end_stream=False, stream_id=0
+                        )
+                    ],
+                )
+
+                roundtrip(client, server)
+                self.assertFalse(stream.sender.reset_pending)
+                self.assertEventsEqual(
+                    server,
+                    [
+                        events.StreamDataReceived(
+                            data=b"cd", end_stream=False, stream_id=0
+                        ),
+                        events.StreamReset(error_code=7, stream_id=0),
+                    ],
+                )
+                self.assertEqual(client._remote_max_data_used, 4)
+
+    def test_send_reset_stream_at_invalid(self) -> None:
+        with client_and_server(server_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            client.send_stream_data(0, b"abcdefgh")
+            client.reset_stream_at(0, 7, 4)
+            with self.assertRaisesRegex(RuntimeError, "after the stream was reset"):
+                client.send_stream_data(0, b"more")
+            with self.assertRaises(ValueError):
+                client.reset_stream_at(0, 7, 5)
+            with self.assertRaises(ValueError):
+                client.reset_stream_at(0, 8, 4)
+            client.reset_stream(0, 8)
+            with self.assertRaises(ValueError):
+                client.reset_stream_at(0, 7, 1)
+
+    def test_send_reset_stream_at_not_supported(self) -> None:
+        # The server did not advertise support.
+        with client_and_server() as (client, server):
+            with self.assertRaises(ValueError):
+                client.reset_stream_at(0, 7, 0)
+            self.assertNotIn(0, client._streams)
+
+        # The handshake is not complete.
+        with client_and_server(handshake=False) as (client, server):
+            with self.assertRaises(ValueError):
+                client.reset_stream_at(0, 7, 0)
+
+    def test_send_reset_stream_at_over_max_streams_bidi(self) -> None:
+        with client_and_server(server_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            # The client opens as many streams as the server allows.
+            for i in range(128):
+                client.send_stream_data(i * 4, b"x")
+            roundtrip_until_done(client, server)
+            consume_events(server)
+
+            # The next stream is blocked, so its data and RESET_STREAM_AT wait.
+            stream_id = 128 * 4
+            client.send_stream_data(stream_id, b"abc")
+            client.reset_stream_at(stream_id, 7, 3)
+            self.assertTrue(client._streams[stream_id].is_blocked)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertIsNone(server._close_event)
+            self.assertIsNone(server.next_event())
+
+            # Stream 0 closes, so the server lets the client open one more stream
+            # and the data and RESET_STREAM_AT are sent.
+            client.send_stream_data(0, b"", end_stream=True)
+            roundtrip_until_done(client, server)
+            server.send_stream_data(0, b"", end_stream=True)
+            roundtrip_until_done(server, client)
+            self.assertEventsEqual(
+                server,
+                [
+                    events.StreamDataReceived(data=b"", end_stream=True, stream_id=0),
+                    events.StreamDataReceived(
+                        data=b"abc", end_stream=False, stream_id=stream_id
+                    ),
+                    events.StreamReset(error_code=7, stream_id=stream_id),
+                ],
+            )
+
+    def test_send_reset_stream_at_qlog(self) -> None:
+        with client_and_server(server_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, b"abcdefgh")
+            roundtrip(client, server)
+            client.reset_stream_at(stream_id, error_code=7, reliable_size=3)
+            roundtrip(client, server)
+
+            expected_frame = {
+                "error_code": 7,
+                "final_size": 8,
+                "frame_type": "reset_stream_at",
+                "reliable_size": 3,
+                "stream_id": stream_id,
+            }
+            for connection, event_name in (
+                (client, "transport:packet_sent"),
+                (server, "transport:packet_received"),
+            ):
+                with self.subTest(event_name=event_name):
+                    logger = connection.configuration.quic_logger
+                    assert logger is not None
+                    trace = logger.to_dict()["traces"][0]
+                    reset_frames = [
+                        frame
+                        for event in trace["events"]
+                        if event["name"] == event_name
+                        for frame in event["data"]["frames"]
+                        if frame["frame_type"].startswith("reset_stream")
+                    ]
+                    self.assertEqual(reset_frames, [expected_frame])
+
+    def test_send_reset_stream_at_unsent_fin(self) -> None:
+        # An unsent FIN does not block the reset, whatever the reliable size.
+        reset: events.QuicEvent = events.StreamReset(error_code=7, stream_id=0)
+        for reliable_size, expected in (
+            (0, [reset]),
+            (
+                1,
+                [
+                    events.StreamDataReceived(data=b"a", end_stream=False, stream_id=0),
+                    reset,
+                ],
+            ),
+        ):
+            with (
+                self.subTest(reliable_size=reliable_size),
+                client_and_server(
+                    server_options={"max_stream_data": 4, "reliable_stream_reset": True}
+                ) as (client, server),
+            ):
+                consume_events(server)
+                client.send_stream_data(0, b"abcdefgh", end_stream=True)
+                client.reset_stream_at(0, 7, reliable_size)
+                roundtrip(client, server)
+                roundtrip(server, client)
+                self.assertEventsEqual(server, expected)
+                self.assertTrue(client._streams[0].sender.is_finished)
+                self.assertEqual(client._remote_max_data_used, reliable_size)
+
+    def test_send_reset_stream_at_unsent_reliable_data(self) -> None:
+        # The server never raises its limit of 4 bytes, so a reset to a reliable
+        # size of 0 must not keep needing credit for the 8 bytes never sent.
+        for stop_sending in (False, True):
+            with (
+                self.subTest(stop_sending=stop_sending),
+                client_and_server(
+                    server_options={"max_stream_data": 4, "reliable_stream_reset": True}
+                ) as (client, server),
+            ):
+                consume_events(server)
+                client.send_stream_data(0, b"abcdefgh")
+                client.reset_stream_at(0, 7, 8)
+                if stop_sending:
+                    client._handle_stop_sending_frame(
+                        client_receive_context(client),
+                        QuicFrameType.STOP_SENDING,
+                        Buffer(data=b"\x00\x09"),
+                    )
+                else:
+                    client.reset_stream_at(0, 7, 0)
+                roundtrip(client, server)
+                roundtrip(server, client)
+                self.assertEventsEqual(
+                    server, [events.StreamReset(error_code=7, stream_id=0)]
+                )
+                self.assertTrue(client._streams[0].sender.is_finished)
+                self.assertEqual(client._remote_max_data_used, 0)
 
     def test_send_reset_stream_over_max_streams_bidi(self) -> None:
         with client_and_server() as (client, server):

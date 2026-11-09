@@ -360,6 +360,25 @@ class ParamsTest(TestCase):
         push_quic_transport_parameters(buf, params)
         self.assertEqual(buf.data, data)
 
+    def test_params_reset_stream_at(self) -> None:
+        data = bytes.fromhex("1d00")
+
+        # parse
+        buf = Buffer(data=data)
+        params = pull_quic_transport_parameters(buf)
+        self.assertEqual(params, QuicTransportParameters(reset_stream_at=True))
+
+        # serialize
+        buf = Buffer(capacity=len(data))
+        push_quic_transport_parameters(buf, params)
+        self.assertEqual(buf.data, data)
+
+    def test_params_reset_stream_at_not_empty(self) -> None:
+        buf = Buffer(data=bytes.fromhex("1d0100"))
+        with self.assertRaises(ValueError) as cm:
+            pull_quic_transport_parameters(buf)
+        self.assertEqual(str(cm.exception), "Transport parameter length does not match")
+
     def test_params_unknown(self) -> None:
         data = bytes.fromhex("8000ff000100")
 
