@@ -20,6 +20,13 @@ from . import events
 from .configuration import SMALLEST_MAX_DATAGRAM_SIZE, QuicConfiguration
 from .congestion.base import K_GRANULARITY
 from .crypto import CryptoError, CryptoPair, KeyUnavailableError, NoCallback
+from .exceptions import (
+    ConnectionConfigurationError,
+    ConnectionStateError,
+    OutOfRangeError,
+    StreamStateError,
+    StreamTypeError,
+)
 from .logger import QuicLoggerTrace
 from .packet import (
     CONNECTION_ID_MAX_SIZE,
@@ -53,10 +60,10 @@ from .packet_builder import (
 )
 from .recovery import MAX_ACK_RANGES, QuicPacketRecovery, QuicPacketSpace
 from .stream import (
+    ErrorCodeChangedError,
     FinalSizeError,
     QuicStream,
     StreamFinishedError,
-    StreamStateError,
 )
 
 logger = logging.getLogger("quic")
@@ -171,6 +178,42 @@ def stream_is_unidirectional(stream_id: int) -> bool:
     return bool(stream_id & 2)
 
 
+def validate_error_code(error_code: int) -> None:
+    """
+    Raises `OutOfRangeError` if the error code is not between 0 and 2^62 - 1
+    (RFC 9000 section 20).
+    """
+    if not 0 <= error_code <= UINT_VAR_MAX:
+        raise OutOfRangeError("Error code must be between 0 and 2^62 - 1")
+
+
+def validate_frame_type(frame_type: int) -> None:
+    """
+    Raises `OutOfRangeError` if the frame type is not between 0 and 2^62 - 1
+    (RFC 9000 section 12.4).
+    """
+    if not 0 <= frame_type <= UINT_VAR_MAX:
+        raise OutOfRangeError("Frame type must be between 0 and 2^62 - 1")
+
+
+def validate_reliable_size(reliable_size: int) -> None:
+    """
+    Raises `OutOfRangeError` if the reliable size is not between 0 and 2^62 - 1
+    (draft-ietf-quic-reliable-stream-reset section 4).
+    """
+    if not 0 <= reliable_size <= UINT_VAR_MAX:
+        raise OutOfRangeError("Reliable size must be between 0 and 2^62 - 1")
+
+
+def validate_stream_id(stream_id: int) -> None:
+    """
+    Raises `OutOfRangeError` if the stream ID is not between 0 and 2^62 - 1
+    (RFC 9000 section 2.1).
+    """
+    if not 0 <= stream_id <= UINT_VAR_MAX:
+        raise OutOfRangeError("Stream ID must be between 0 and 2^62 - 1")
+
+
 class Limit:
     def __init__(self, frame_type: int, name: str, value: int):
         self.frame_type = frame_type
@@ -273,6 +316,8 @@ class QuicConnection:
     - a timer firing (see :meth:`handle_timer`)
 
     :param configuration: The QUIC configuration to use.
+    :raises ~aioquic.quic.exceptions.ConnectionConfigurationError:
+        If the configuration or arguments are invalid.
     """
 
     def __init__(
@@ -286,28 +331,38 @@ class QuicConnection:
         token_handler: QuicTokenHandler | None = None,
     ) -> None:
         if configuration.max_datagram_size < SMALLEST_MAX_DATAGRAM_SIZE:
-            raise ValueError(
+            raise ConnectionConfigurationError(
                 "The smallest allowed maximum datagram size is "
                 f"{SMALLEST_MAX_DATAGRAM_SIZE} bytes"
             )
         if configuration.is_client:
             if original_destination_connection_id is not None:
-                raise ValueError(
+                raise ConnectionConfigurationError(
                     "Cannot set original_destination_connection_id for a client"
                 )
             if retry_source_connection_id is not None:
-                raise ValueError("Cannot set retry_source_connection_id for a client")
+                raise ConnectionConfigurationError(
+                    "Cannot set retry_source_connection_id for a client"
+                )
         else:
             if token_handler is not None:
-                raise ValueError("Cannot set `token_handler` for a server")
+                raise ConnectionConfigurationError(
+                    "Cannot set `token_handler` for a server"
+                )
             if configuration.token != b"":
-                raise ValueError("Cannot set `configuration.token` for a server")
+                raise ConnectionConfigurationError(
+                    "Cannot set `configuration.token` for a server"
+                )
             if configuration.certificate is None:
-                raise ValueError("SSL certificate is required for a server")
+                raise ConnectionConfigurationError(
+                    "SSL certificate is required for a server"
+                )
             if configuration.private_key is None:
-                raise ValueError("SSL private key is required for a server")
+                raise ConnectionConfigurationError(
+                    "SSL private key is required for a server"
+                )
             if original_destination_connection_id is None:
-                raise ValueError(
+                raise ConnectionConfigurationError(
                     "original_destination_connection_id is required for a server"
                 )
 
@@ -521,7 +576,13 @@ class QuicConnection:
                            being closed.
         :param reason_phrase: A human-readable explanation of why the
                               connection is being closed.
+        :raises ~aioquic.quic.exceptions.OutOfRangeError:
+            If the error code or frame type is out of range.
         """
+        validate_error_code(error_code)
+        if frame_type is not None:
+            validate_frame_type(frame_type)
+
         if self._close_event is None and self._state not in END_STATES:
             self._close_event = events.ConnectionTerminated(
                 error_code=error_code,
@@ -540,9 +601,11 @@ class QuicConnection:
 
         :param addr: The network address of the remote peer.
         :param now: The current time.
+        :raises ~aioquic.quic.exceptions.ConnectionStateError:
+            If the connection is a server's, or this method was already called.
         """
         if not self._is_client or self._connect_called:
-            raise RuntimeError(
+            raise ConnectionStateError(
                 "connect() can only be called for clients and a single time"
             )
         self._connect_called = True
@@ -1265,7 +1328,16 @@ class QuicConnection:
 
         :param stream_id: The stream's ID.
         :param error_code: An error code indicating why the stream is being reset.
+        :raises ~aioquic.quic.exceptions.OutOfRangeError:
+            If the stream ID or error code is out of range.
+        :raises ~aioquic.quic.exceptions.StreamTypeError:
+            If the stream is one of the peer's unidirectional streams.
+        :raises ~aioquic.quic.exceptions.StreamStateError:
+            If the peer has not opened the stream.
         """
+        validate_stream_id(stream_id)
+        validate_error_code(error_code)
+
         if self._stream_can_send(stream_id) and self._stream_is_discarded(stream_id):
             # The stream finished and its state was discarded, so there is nothing
             # to reset.
@@ -1291,21 +1363,37 @@ class QuicConnection:
         acknowledged.
 
         It can be called again with the same error code to reduce the reliable size,
-        and has no effect if the reliable size is unchanged. Changing the error code
-        or increasing the reliable size raises :class:`ValueError`.
+        and has no effect if the reliable size is unchanged.
 
         .. aioquic_transmit::
 
         :param stream_id: The stream's ID.
         :param error_code: The application error code.
         :param reliable_size: The number of written bytes to deliver reliably.
+        :raises ~aioquic.quic.exceptions.OutOfRangeError:
+            If the stream ID, error code or reliable size is out of range.
+        :raises ~aioquic.quic.exceptions.ConnectionStateError:
+            If the handshake is not complete, or the peer does not support reliable
+            stream resets.
+        :raises ~aioquic.quic.exceptions.StreamTypeError:
+            If the stream is one of the peer's unidirectional streams.
+        :raises ~aioquic.quic.exceptions.StreamStateError:
+            If the peer has not opened the stream, the call changes the error code or
+            increases the reliable size, or the reliable size is beyond the data
+            written.
         """
+        validate_stream_id(stream_id)
+        validate_error_code(error_code)
+        validate_reliable_size(reliable_size)
+
         if not self._handshake_complete:
-            raise ValueError(
+            raise ConnectionStateError(
                 "Cannot reset a stream reliably before the handshake completes"
             )
         if not self._remote_reset_stream_at:
-            raise ValueError("Cannot reset a stream reliably without peer support")
+            raise ConnectionStateError(
+                "Cannot reset a stream reliably without peer support"
+            )
         if self._stream_can_send(stream_id) and self._stream_is_discarded(stream_id):
             # The stream finished and its state was discarded, so there is nothing
             # to reset.
@@ -1344,7 +1432,15 @@ class QuicConnection:
         :param stream_id: The stream's ID.
         :param data: The data to be sent.
         :param end_stream: If set to `True`, the FIN bit will be set.
+        :raises ~aioquic.quic.exceptions.OutOfRangeError:
+            If the stream ID is out of range.
+        :raises ~aioquic.quic.exceptions.StreamTypeError:
+            If the stream is one of the peer's unidirectional streams.
+        :raises ~aioquic.quic.exceptions.StreamStateError:
+            If sending on the stream has ended, or the peer has not opened it.
         """
+        validate_stream_id(stream_id)
+
         stream = self._get_or_create_stream_for_send(stream_id)
         stream.sender.write(data, end_stream=end_stream)
 
@@ -1359,9 +1455,18 @@ class QuicConnection:
 
         :param stream_id: The stream's ID.
         :param error_code: An error code indicating why the stream is being stopped.
+        :raises ~aioquic.quic.exceptions.OutOfRangeError:
+            If the stream ID or error code is out of range.
+        :raises ~aioquic.quic.exceptions.StreamTypeError:
+            If the stream is one of our unidirectional streams.
+        :raises ~aioquic.quic.exceptions.StreamStateError:
+            If the stream has not been opened yet.
         """
+        validate_stream_id(stream_id)
+        validate_error_code(error_code)
+
         if not self._stream_can_receive(stream_id):
-            raise ValueError(
+            raise StreamTypeError(
                 "Cannot stop receiving on a local-initiated unidirectional stream"
             )
 
@@ -1370,7 +1475,7 @@ class QuicConnection:
             if self._stream_is_discarded(stream_id):
                 # The stream finished, so there is nothing to stop.
                 return
-            raise ValueError("Cannot stop receiving on an unknown stream")
+            raise StreamStateError("Cannot stop receiving on an unknown stream")
 
         stream.receiver.stop(error_code)
 
@@ -1850,15 +1955,19 @@ class QuicConnection:
         This always occurs as a result of an API call.
         """
         if not self._stream_can_send(stream_id):
-            raise ValueError("Cannot send data on peer-initiated unidirectional stream")
+            raise StreamTypeError(
+                "Cannot send data on peer-initiated unidirectional stream"
+            )
         if self._stream_is_discarded(stream_id):
-            raise ValueError("Cannot send data on a finished stream")
+            raise StreamStateError("Cannot send data on a finished stream")
 
         stream = self._streams.get(stream_id, None)
         if stream is None:
             # check initiator
             if stream_is_client_initiated(stream_id) != self._is_client:
-                raise ValueError("Cannot send data on unknown peer-initiated stream")
+                raise StreamStateError(
+                    "Cannot send data on unknown peer-initiated stream"
+                )
 
             # determine limits
             if stream_is_unidirectional(stream_id):
@@ -2674,7 +2783,7 @@ class QuicConnection:
                 frame_type=frame_type,
                 reason_phrase=str(exc),
             )
-        except StreamStateError as exc:
+        except ErrorCodeChangedError as exc:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.STREAM_STATE_ERROR,
                 frame_type=frame_type,

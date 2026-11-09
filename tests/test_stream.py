@@ -1,7 +1,8 @@
 from aioquic.quic.events import StreamDataReceived, StreamReset
+from aioquic.quic.exceptions import StreamStateError
 from aioquic.quic.packet import QuicErrorCode, QuicStreamFrame
 from aioquic.quic.packet_builder import QuicDeliveryState
-from aioquic.quic.stream import FinalSizeError, QuicStream, StreamStateError
+from aioquic.quic.stream import ErrorCodeChangedError, FinalSizeError, QuicStream
 
 from .utils import TestCase
 
@@ -320,7 +321,7 @@ class QuicStreamTest(TestCase):
         self.assertEqual(stream.receiver.highest_offset, 8)
 
         # A RESET_STREAM cannot change the error code.
-        with self.assertRaises(StreamStateError):
+        with self.assertRaises(ErrorCodeChangedError):
             stream.receiver.handle_reset(final_size=8, error_code=8)
 
         # A RESET_STREAM_AT after a RESET_STREAM is ignored.
@@ -379,7 +380,7 @@ class QuicStreamTest(TestCase):
         self.assertIsNone(
             stream.receiver.handle_reset(final_size=8, error_code=7, reliable_size=8)
         )
-        with self.assertRaises(StreamStateError):
+        with self.assertRaises(ErrorCodeChangedError):
             stream.receiver.handle_reset(final_size=8, error_code=8, reliable_size=8)
 
     def test_receiver_reset_below_received_data(self) -> None:
@@ -439,7 +440,7 @@ class QuicStreamTest(TestCase):
                 final_size=4, error_code=QuicErrorCode.NO_ERROR, reliable_size=0
             )
         )
-        with self.assertRaises(StreamStateError):
+        with self.assertRaises(ErrorCodeChangedError):
             stream.receiver.handle_reset(
                 final_size=4, error_code=QuicErrorCode.INTERNAL_ERROR, reliable_size=0
             )
@@ -928,7 +929,9 @@ class QuicStreamTest(TestCase):
         stream.sender.on_reset_delivery(QuicDeliveryState.LOST, 4)
         frame = stream.sender.get_reset_frame()
         self.assertEqual((frame.final_size, frame.reliable_size), (8, None))
-        with self.assertRaisesMessage(ValueError, "Cannot increase reliable size"):
+        with self.assertRaisesMessage(
+            StreamStateError, "Cannot increase reliable size"
+        ):
             stream.sender.reset_at(error_code=7, reliable_size=1)
 
     def test_sender_reset_after_reset_at_error_code(self) -> None:
@@ -1060,10 +1063,12 @@ class QuicStreamTest(TestCase):
         self.assertEqual(second.reliable_size, 3)
 
         # The reliable size cannot increase, nor the error code change.
-        with self.assertRaisesMessage(ValueError, "Cannot increase reliable size"):
+        with self.assertRaisesMessage(
+            StreamStateError, "Cannot increase reliable size"
+        ):
             stream.sender.reset_at(error_code=7, reliable_size=4)
         with self.assertRaisesMessage(
-            ValueError, "Cannot change the error code of a reset"
+            StreamStateError, "Cannot change the error code of a reset"
         ):
             stream.sender.reset_at(error_code=8, reliable_size=3)
         self.assertEqual(stream.sender.get_reset_frame().reliable_size, 3)
@@ -1114,10 +1119,11 @@ class QuicStreamTest(TestCase):
         stream.sender.write(b"abcdefgh", end_stream=True)
         stream.sender.get_frame(8)
 
-        # An invalid reliable size leaves the sender unchanged.
-        for reliable_size in (-1, 9):
-            with self.assertRaises(ValueError):
-                stream.sender.reset_at(error_code=7, reliable_size=reliable_size)
+        # A reliable size beyond the data written leaves the sender unchanged.
+        with self.assertRaisesMessage(
+            StreamStateError, "Cannot set reliable size beyond the data written"
+        ):
+            stream.sender.reset_at(error_code=7, reliable_size=9)
         stream.sender.reset_at(error_code=8, reliable_size=4)
         self.assertEqual(stream.sender.get_reset_frame().error_code, 8)
 
@@ -1300,7 +1306,7 @@ class QuicStreamTest(TestCase):
         stream = QuicStream()
         stream.sender.write(b"data", end_stream=True)
 
-        with self.assertRaisesMessage(RuntimeError, "Cannot send data after FIN"):
+        with self.assertRaisesMessage(StreamStateError, "Cannot send data after FIN"):
             stream.sender.write(b"more")
 
     def test_sender_write_after_reset(self) -> None:
@@ -1308,6 +1314,6 @@ class QuicStreamTest(TestCase):
         stream.sender.reset(error_code=QuicErrorCode.NO_ERROR)
 
         with self.assertRaisesMessage(
-            RuntimeError, "Cannot send data after the stream was reset"
+            StreamStateError, "Cannot send data after the stream was reset"
         ):
             stream.sender.write(b"data")
