@@ -1662,7 +1662,7 @@ class TlsTest(TestCase):
             ),
         )
 
-        with self.assertRaises(tls.AlertDecodeError) as cm:
+        with self.assertRaises(tls.AlertProtocolVersion) as cm:
             pull_client_hello(Buffer(data=corrupt_hello_version(buf.data)))
         self.assertEqual(str(cm.exception), "ClientHello version is not 1.2")
 
@@ -1679,7 +1679,7 @@ class TlsTest(TestCase):
             ),
         )
 
-        with self.assertRaises(tls.AlertDecodeError) as cm:
+        with self.assertRaises(tls.AlertProtocolVersion) as cm:
             pull_server_hello(Buffer(data=corrupt_hello_version(buf.data)))
         self.assertEqual(str(cm.exception), "ServerHello version is not 1.2")
 

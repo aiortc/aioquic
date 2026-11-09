@@ -657,8 +657,10 @@ def pull_legacy_session_id(buf: Buffer) -> bytes:
 def pull_client_hello(buf: Buffer) -> ClientHello:
     pull_handshake_type(buf, HandshakeType.CLIENT_HELLO)
     with pull_block(buf, 3):
+        # A legacy_version other than 1.2 requires a protocol_version alert
+        # (RFC 9846 section 4.2.2).
         if buf.pull_uint16() != TLS_VERSION_1_2:
-            raise AlertDecodeError("ClientHello version is not 1.2")
+            raise AlertProtocolVersion("ClientHello version is not 1.2")
 
         hello = ClientHello(
             random=buf.pull_bytes(32),
@@ -778,8 +780,10 @@ class ServerHello:
 def pull_server_hello(buf: Buffer) -> ServerHello:
     pull_handshake_type(buf, HandshakeType.SERVER_HELLO)
     with pull_block(buf, 3):
+        # A legacy_version other than 1.2 requires a protocol_version alert
+        # (RFC 9846 section 4.2.3).
         if buf.pull_uint16() != TLS_VERSION_1_2:
-            raise AlertDecodeError("ServerHello version is not 1.2")
+            raise AlertProtocolVersion("ServerHello version is not 1.2")
 
         hello = ServerHello(
             random=buf.pull_bytes(32),
