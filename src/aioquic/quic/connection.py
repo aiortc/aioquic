@@ -2,8 +2,8 @@ import ipaddress
 import logging
 import os
 from collections import deque
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, replace
 from enum import Enum
 from functools import partial
 from typing import Any
@@ -137,6 +137,18 @@ def get_epoch(packet_type: QuicPacketType) -> tls.Epoch:
         return tls.Epoch.HANDSHAKE
     else:
         return tls.Epoch.ONE_RTT
+
+
+def get_transport_parameters(
+    extensions: Iterable[tls.Extension],
+) -> QuicTransportParameters:
+    """
+    Find and parse the QUIC transport parameters in a list of TLS extensions.
+
+    Raises `KeyError` if they are missing and `ValueError` if they cannot be parsed.
+    """
+    data = dict(extensions)[tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS]
+    return pull_quic_transport_parameters(Buffer(data=data))
 
 
 def stream_is_client_initiated(stream_id: int) -> bool:
@@ -1351,17 +1363,7 @@ class QuicConnection:
             )
 
         # Parse the remote transport parameters.
-        for ext_type, ext_data in self.tls.received_extensions:
-            if ext_type == tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS:
-                self._parse_transport_parameters(ext_data)
-                break
-        else:
-            raise QuicConnectionError(
-                error_code=QuicErrorCode.CRYPTO_ERROR
-                + tls.AlertDescription.missing_extension,
-                frame_type=self._crypto_frame_type,
-                reason_phrase="No QUIC transport parameters received",
-            )
+        self._parse_transport_parameters(self.tls.received_extensions)
 
         # For servers, determine the Negotiated Version.
         if not self._is_client and not self._version_negotiated_compatible:
@@ -1554,6 +1556,38 @@ class QuicConnection:
                     crypto.teardown()
             self._loss.discard_space(self._spaces[epoch])
             self._spaces[epoch].discarded = True
+
+    def _fetch_session_ticket(self, label: bytes) -> tls.SessionTicket | None:
+        ticket = self._session_ticket_fetcher(label)
+        if ticket is None or ticket.max_early_data_size is None:
+            return ticket
+
+        # Reject 0-RTT data unless the limits the client remembers from the
+        # ticket are still supported (RFC 9000 section 7.4.1, RFC 9221 section 3).
+        try:
+            stored = get_transport_parameters(ticket.other_extensions)
+        except (KeyError, ValueError):
+            self._logger.info(
+                "Rejecting 0-RTT data as the ticket has no valid transport parameters"
+            )
+            return replace(ticket, max_early_data_size=None)
+        current = get_transport_parameters(self.tls.handshake_extensions)
+        for attr in [
+            "active_connection_id_limit",
+            "initial_max_data",
+            "initial_max_stream_data_bidi_local",
+            "initial_max_stream_data_bidi_remote",
+            "initial_max_stream_data_uni",
+            "initial_max_streams_bidi",
+            "initial_max_streams_uni",
+            "max_datagram_frame_size",
+        ]:
+            if (getattr(stored, attr) or 0) > (getattr(current, attr) or 0):
+                self._logger.info(
+                    "Rejecting 0-RTT data as %s is lower than in the ticket", attr
+                )
+                return replace(ticket, max_early_data_size=None)
+        return ticket
 
     def _find_network_path(self, addr: NetworkAddress) -> QuicNetworkPath:
         # check existing network paths
@@ -1849,17 +1883,14 @@ class QuicConnection:
 
             # parse saved QUIC transport parameters - for 0-RTT
             if session_ticket.max_early_data_size == MAX_EARLY_DATA:
-                for ext_type, ext_data in session_ticket.other_extensions:
-                    if ext_type == tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS:
-                        self._parse_transport_parameters(
-                            ext_data, from_session_ticket=True
-                        )
-                        break
+                self._parse_transport_parameters(
+                    session_ticket.other_extensions, from_session_ticket=True
+                )
 
         # TLS callbacks
         self.tls.alpn_cb = self._alpn_handler
         if self._session_ticket_fetcher is not None:
-            self.tls.get_session_ticket_cb = self._session_ticket_fetcher
+            self.tls.get_session_ticket_cb = self._fetch_session_ticket
         if self._session_ticket_handler is not None:
             self.tls.new_session_ticket_cb = self._handle_session_ticket
         self.tls.update_traffic_key_cb = self._update_traffic_key
@@ -3164,18 +3195,23 @@ class QuicConnection:
         self._probe_pending = True
 
     def _parse_transport_parameters(
-        self, data: bytes, from_session_ticket: bool = False
+        self, extensions: Iterable[tls.Extension], from_session_ticket: bool = False
     ) -> None:
         """
-        Parse and apply remote transport parameters.
+        Parse and apply remote transport parameters from TLS extensions.
 
         `from_session_ticket` is `True` when restoring saved transport parameters,
         and `False` when handling received transport parameters.
         """
 
         try:
-            quic_transport_parameters = pull_quic_transport_parameters(
-                Buffer(data=data)
+            quic_transport_parameters = get_transport_parameters(extensions)
+        except KeyError:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.CRYPTO_ERROR
+                + tls.AlertDescription.missing_extension,
+                frame_type=self._crypto_frame_type,
+                reason_phrase="No QUIC transport parameters received",
             )
         except ValueError:
             raise QuicConnectionError(
