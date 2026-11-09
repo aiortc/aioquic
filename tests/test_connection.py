@@ -6779,8 +6779,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertIn("reset_stream_at", sent_frame_types)
             self.assertNotIn("reset_stream", sent_frame_types)
             self.assertLess(
-                sent_frame_types.index("reset_stream_at"),
                 sent_frame_types.index("stream"),
+                sent_frame_types.index("reset_stream_at"),
             )
 
             data_event = server.next_event()

@@ -3895,9 +3895,15 @@ class QuicConnection:
                         - self._remote_max_data_used,
                         stream.max_stream_data_remote,
                     )
+                    # Send reliable data first so its flow-control credit is accounted
+                    # before advertising the final size (RFC 9000 section 4.5).
                     can_send_reset = stream.sender.reset_pending and (
                         stream.sender.reset_reliable_size is None
-                        or stream.sender.reset_final_size <= max_stream_offset
+                        or (
+                            stream.sender.reset_reliable_size
+                            <= stream.sender.highest_offset
+                            and stream.sender.reset_final_size <= max_stream_offset
+                        )
                     )
                     if can_send_reset:
                         # RESET_STREAM or RESET_STREAM_AT.
