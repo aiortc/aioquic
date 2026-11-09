@@ -2,7 +2,8 @@ import contextlib
 import io
 import os
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import replace
 from typing import Any
 from unittest import TestCase, skipIf
 
@@ -263,6 +264,17 @@ def encode_transport_parameters(parameters: QuicTransportParameters) -> bytes:
 
 def sequence_numbers(connection_ids: Iterable[QuicConnectionId]) -> list[int]:
     return list(map(lambda x: x.sequence_number, connection_ids))
+
+
+def transport_parameters_extensions(
+    parameters: QuicTransportParameters,
+) -> list[tls.Extension]:
+    return [
+        (
+            tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+            encode_transport_parameters(parameters),
+        )
+    ]
 
 
 def drop(sender: QuicConnection) -> int:
@@ -2859,6 +2871,72 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
 
 
 class QuicConnectionTest(QuicConnectionTestCase):
+    def check_0rtt_rejected(
+        self,
+        server_options: dict[str, Any] = {},
+        ticket_extensions: Sequence[tls.Extension] | None = None,
+        ticket_known: bool = True,
+    ) -> None:
+        """
+        Check that resuming with 0-RTT data has the 0-RTT data rejected, when
+        the server's `server_options` differ from those of the connection which
+        issued the ticket, or the ticket's stored extensions are replaced with
+        `ticket_extensions`. The session is resumed unless `ticket_known` is
+        `False`, in which case the server no longer has the ticket.
+        """
+        options = {"max_datagram_frame_size": 65536}
+        client_ticket = None
+        ticket_store = SessionTicketStore()
+
+        def save_session_ticket(ticket: tls.SessionTicket) -> None:
+            nonlocal client_ticket
+            client_ticket = ticket
+
+        with client_and_server(
+            client_kwargs={"session_ticket_handler": save_session_ticket},
+            client_options=options,
+            server_kwargs={"session_ticket_handler": ticket_store.add},
+            server_options=options,
+        ):
+            pass
+
+        if ticket_extensions is not None:
+            for label, ticket in ticket_store.tickets.items():
+                ticket_store.tickets[label] = replace(
+                    ticket, other_extensions=list(ticket_extensions)
+                )
+        if not ticket_known:
+            ticket_store.tickets.clear()
+
+        with client_and_server(
+            client_options={**options, "session_ticket": client_ticket},
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+            server_options={**options, **server_options},
+            handshake=False,
+        ) as (client, server):
+            client.connect(SERVER_ADDR, now=time.time())
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, b"hello")
+
+            # A full handshake sends the server's certificate.
+            self.assertEqual(roundtrip(client, server), (1, 1 if ticket_known else 2))
+
+            # The server cannot decrypt the 0-RTT packet.
+            event = server.next_event()
+            assert isinstance(event, events.ProtocolNegotiated)
+            self.assertIsNone(server.next_event())
+
+            event = client.next_event()
+            assert isinstance(event, events.ProtocolNegotiated)
+            self.assertEqual(
+                client.next_event(),
+                events.HandshakeCompleted(
+                    alpn_protocol=None,
+                    early_data_accepted=False,
+                    session_resumed=ticket_known,
+                ),
+            )
+
     def check_handshake(
         self,
         client: QuicConnection,
@@ -3416,6 +3494,40 @@ class QuicConnectionTest(QuicConnectionTestCase):
                     reason_phrase="Invalid max_early_data value 12345",
                 ),
             )
+
+    def test_connect_with_0rtt_invalid_ticket_parameters(self) -> None:
+        """
+        A server which cannot read the transport parameters stored in the session
+        ticket resumes the session but rejects 0-RTT data, as it cannot tell whether
+        the limits the client remembers are still supported (RFC 9000 section 7.4.1).
+        """
+        for name, ticket_extensions in [
+            ("missing", []),
+            ("malformed", [(tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS, b"0")]),
+        ]:
+            with self.subTest(name=name):
+                self.check_0rtt_rejected(ticket_extensions=ticket_extensions)
+
+    def test_connect_with_0rtt_lowered_limits(self) -> None:
+        """
+        A server whose limits are lower than those stored in the session ticket
+        resumes the session but rejects 0-RTT data (RFC 9000 section 7.4.1,
+        RFC 9221 section 3).
+        """
+        for name, value in [
+            ("max_data", 65536),
+            ("max_datagram_frame_size", None),
+            ("max_stream_data", 65536),
+        ]:
+            with self.subTest(name=name):
+                self.check_0rtt_rejected(server_options={name: value})
+
+    def test_connect_with_0rtt_unknown_ticket(self) -> None:
+        """
+        A server which no longer has the session ticket falls back to a full
+        handshake, so 0-RTT data is rejected (RFC 9846 section 4.3.10).
+        """
+        self.check_0rtt_rejected(ticket_known=False)
 
     def test_change_connection_id(self) -> None:
         with client_and_server() as (client, server):
@@ -5501,36 +5613,36 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_parse_transport_parameters(self) -> None:
         client = create_standalone_client(self)
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 original_destination_connection_id=client.original_destination_connection_id
             )
         )
-        client._parse_transport_parameters(data)
+        client._parse_transport_parameters(extensions)
 
     def test_parse_transport_parameters_idle_time(self) -> None:
         # Remote idle of 10s and local idle of 60s.
         client = create_standalone_client(self)
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             # Note the timeout parameter here is in milliseconds.
             QuicTransportParameters(
                 original_destination_connection_id=client.original_destination_connection_id,
                 max_idle_timeout=10000,
             )
         )
-        client._parse_transport_parameters(data)
+        client._parse_transport_parameters(extensions)
         self.assertAlmostEqual(client._remote_max_idle_timeout, 10.0)
         self.assertAlmostEqual(client._idle_timeout(), 10.0)
 
         # Remote idle of 120s and local idle of 60s.
         client = create_standalone_client(self)
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 original_destination_connection_id=client.original_destination_connection_id,
                 max_idle_timeout=120000,
             )
         )
-        client._parse_transport_parameters(data)
+        client._parse_transport_parameters(extensions)
         self.assertAlmostEqual(client._remote_max_idle_timeout, 120.0)
         self.assertAlmostEqual(client._idle_timeout(), 60.0)
 
@@ -5540,13 +5652,13 @@ class QuicConnectionTest(QuicConnectionTestCase):
         # and since RTT is not initialized get_probe_timeout() will return 2 * the
         # initial RTT as the PTO, i.e. 0.2, so 3 * PTO == 0.6.
         client = create_standalone_client(self)
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 original_destination_connection_id=client.original_destination_connection_id,
                 max_idle_timeout=1,
             )
         )
-        client._parse_transport_parameters(data)
+        client._parse_transport_parameters(extensions)
         self.assertAlmostEqual(client._remote_max_idle_timeout, 0.001)
         self.assertAlmostEqual(client._idle_timeout(), 0.6)
 
@@ -5554,7 +5666,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client = create_standalone_client(self)
 
         with self.assertRaises(QuicConnectionError) as cm:
-            client._parse_transport_parameters(b"0")
+            client._parse_transport_parameters(
+                [(tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS, b"0")]
+            )
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
@@ -5566,14 +5680,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_parse_transport_parameters_with_bad_ack_delay_exponent(self) -> None:
         client = create_standalone_client(self)
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 ack_delay_exponent=21,
                 original_destination_connection_id=client.original_destination_connection_id,
             )
         )
         with self.assertRaises(QuicConnectionError) as cm:
-            client._parse_transport_parameters(data)
+            client._parse_transport_parameters(extensions)
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
@@ -5586,14 +5700,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client = create_standalone_client(self)
 
         for active_connection_id_limit in [0, 1]:
-            data = encode_transport_parameters(
+            extensions = transport_parameters_extensions(
                 QuicTransportParameters(
                     active_connection_id_limit=active_connection_id_limit,
                     original_destination_connection_id=client.original_destination_connection_id,
                 )
             )
             with self.assertRaises(QuicConnectionError) as cm:
-                client._parse_transport_parameters(data)
+                client._parse_transport_parameters(extensions)
             self.assertEqual(
                 cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
             )
@@ -5606,14 +5720,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_parse_transport_parameters_with_bad_max_ack_delay(self) -> None:
         client = create_standalone_client(self)
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 max_ack_delay=2**14,
                 original_destination_connection_id=client.original_destination_connection_id,
             )
         )
         with self.assertRaises(QuicConnectionError) as cm:
-            client._parse_transport_parameters(data)
+            client._parse_transport_parameters(extensions)
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
@@ -5623,14 +5737,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_parse_transport_parameters_with_bad_max_streams_bidi(self) -> None:
         client = create_standalone_client(self)
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 initial_max_streams_bidi=STREAM_COUNT_MAX + 1,
                 original_destination_connection_id=client.original_destination_connection_id,
             )
         )
         with self.assertRaises(QuicConnectionError) as cm:
-            client._parse_transport_parameters(data)
+            client._parse_transport_parameters(extensions)
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
@@ -5642,14 +5756,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_parse_transport_parameters_with_bad_max_streams_uni(self) -> None:
         client = create_standalone_client(self)
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 initial_max_streams_uni=STREAM_COUNT_MAX + 1,
                 original_destination_connection_id=client.original_destination_connection_id,
             )
         )
         with self.assertRaises(QuicConnectionError) as cm:
-            client._parse_transport_parameters(data)
+            client._parse_transport_parameters(extensions)
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
@@ -5661,14 +5775,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_parse_transport_parameters_with_bad_max_udp_payload_size(self) -> None:
         client = create_standalone_client(self)
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 max_udp_payload_size=1199,
                 original_destination_connection_id=client.original_destination_connection_id,
             )
         )
         with self.assertRaises(QuicConnectionError) as cm:
-            client._parse_transport_parameters(data)
+            client._parse_transport_parameters(extensions)
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
@@ -5683,14 +5797,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client = create_standalone_client(self)
         client._remote_initial_source_connection_id = bytes.fromhex("0011223344556677")
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 initial_source_connection_id=bytes.fromhex("1122334455667788"),
                 original_destination_connection_id=client.original_destination_connection_id,
             )
         )
         with self.assertRaises(QuicConnectionError) as cm:
-            client._parse_transport_parameters(data)
+            client._parse_transport_parameters(extensions)
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
@@ -5701,7 +5815,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
     def test_parse_transport_parameters_with_bad_version_information_1(self) -> None:
         server = create_standalone_server(self)
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 version_information=QuicVersionInformation(
                     chosen_version=QuicProtocolVersion.VERSION_1,
@@ -5710,7 +5824,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             )
         )
         with self.assertRaises(QuicConnectionError) as cm:
-            server._parse_transport_parameters(data)
+            server._parse_transport_parameters(extensions)
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
@@ -5723,7 +5837,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
     def test_parse_transport_parameters_with_bad_version_information_2(self) -> None:
         server = create_standalone_server(self)
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 version_information=QuicVersionInformation(
                     chosen_version=QuicProtocolVersion.VERSION_1,
@@ -5736,7 +5850,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         )
         server._crypto_packet_version = QuicProtocolVersion.VERSION_2
         with self.assertRaises(QuicConnectionError) as cm:
-            server._parse_transport_parameters(data)
+            server._parse_transport_parameters(extensions)
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.VERSION_NEGOTIATION_ERROR
         )
@@ -5756,14 +5870,14 @@ class QuicConnectionTest(QuicConnectionTestCase):
             stateless_reset_token=b"\x02" * 16,
         )
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 initial_source_connection_id=bytes(8),
                 original_destination_connection_id=client.original_destination_connection_id,
                 preferred_address=preferred_address,
             )
         )
-        client._parse_transport_parameters(data)
+        client._parse_transport_parameters(extensions)
         self.assertEqual(client._remote_preferred_address, preferred_address)
         self.assertEqual(sequence_numbers(client._peer_cid_available), [1])
         self.assertEqual(client._peer_cid_available[0].cid, b"\x01" * 8)
@@ -5778,7 +5892,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client = create_standalone_client(self)
         client._remote_initial_source_connection_id = b""
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(
                 initial_source_connection_id=b"",
                 original_destination_connection_id=client.original_destination_connection_id,
@@ -5786,7 +5900,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             )
         )
         with self.assertRaises(QuicConnectionError) as cm:
-            client._parse_transport_parameters(data)
+            client._parse_transport_parameters(extensions)
         self.assertEqual(
             cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
         )
@@ -5801,24 +5915,24 @@ class QuicConnectionTest(QuicConnectionTestCase):
     ) -> None:
         client = create_standalone_client(self)
 
-        data = encode_transport_parameters(
+        extensions = transport_parameters_extensions(
             QuicTransportParameters(preferred_address=SERVER_PREFERRED_ADDRESS)
         )
-        client._parse_transport_parameters(data, from_session_ticket=True)
+        client._parse_transport_parameters(extensions, from_session_ticket=True)
         self.assertIsNone(client._remote_preferred_address)
         self.assertEqual(client._peer_cid_available, [])
 
     def test_parse_transport_parameters_with_server_only_parameter(self) -> None:
         server = create_standalone_server(self)
         for active_connection_id_limit in [0, 1]:
-            data = encode_transport_parameters(
+            extensions = transport_parameters_extensions(
                 QuicTransportParameters(
                     active_connection_id_limit=active_connection_id_limit,
                     original_destination_connection_id=bytes(8),
                 )
             )
             with self.assertRaises(QuicConnectionError) as cm:
-                server._parse_transport_parameters(data)
+                server._parse_transport_parameters(extensions)
             self.assertEqual(
                 cm.exception.error_code, QuicErrorCode.TRANSPORT_PARAMETER_ERROR
             )
