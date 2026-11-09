@@ -52,3 +52,26 @@ Events
 
     .. autoclass:: StreamReset
         :members:
+
+Exceptions
+----------
+
+.. automodule:: aioquic.quic.exceptions
+
+    .. autoclass:: QuicError
+        :members:
+
+    .. autoclass:: ConnectionConfigurationError
+        :members:
+
+    .. autoclass:: ConnectionStateError
+        :members:
+
+    .. autoclass:: OutOfRangeError
+        :members:
+
+    .. autoclass:: StreamStateError
+        :members:
+
+    .. autoclass:: StreamTypeError
+        :members:

@@ -27,6 +27,13 @@ from aioquic.quic.connection import (
     dump_cid,
 )
 from aioquic.quic.crypto import CryptoPair
+from aioquic.quic.exceptions import (
+    ConnectionConfigurationError,
+    ConnectionStateError,
+    OutOfRangeError,
+    StreamStateError,
+    StreamTypeError,
+)
 from aioquic.quic.logger import QuicLogger
 from aioquic.quic.packet import (
     QuicErrorCode,
@@ -3039,6 +3046,32 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(type(server.next_event()), events.ConnectionIdIssued)
         self.assertIsNone(server.next_event())
 
+    def test_close_out_of_range(self) -> None:
+        with client_and_server() as (client, server):
+            for error_code in (-1, UINT_VAR_MAX + 1):
+                with self.subTest(error_code=error_code):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Error code must be between 0 and 2^62 - 1"
+                    ):
+                        client.close(error_code=error_code)
+            for frame_type in (-1, UINT_VAR_MAX + 1):
+                with self.subTest(frame_type=frame_type):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Frame type must be between 0 and 2^62 - 1"
+                    ):
+                        client.close(frame_type=frame_type)
+            self.assertIsNone(client._close_event)
+
+            # The largest error code and frame type are sent.
+            client.close(error_code=UINT_VAR_MAX, frame_type=UINT_VAR_MAX)
+            self.assertEqual(roundtrip(client, server), (1, 0))
+            self.assertEqual(
+                server._close_event,
+                events.ConnectionTerminated(
+                    error_code=UINT_VAR_MAX, frame_type=UINT_VAR_MAX, reason_phrase=""
+                ),
+            )
+
     def test_connect(self) -> None:
         with client_and_server() as (client, server):
             # check handshake completed
@@ -3086,7 +3119,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
         server = create_standalone_server(self)
 
         with self.assertRaisesMessage(
-            RuntimeError, "connect() can only be called for clients and a single time"
+            ConnectionStateError,
+            "connect() can only be called for clients and a single time",
         ):
             server.connect(CLIENT_ADDR, now=time.time())
 
@@ -3094,7 +3128,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client = create_standalone_client(self)
 
         with self.assertRaisesMessage(
-            RuntimeError, "connect() can only be called for clients and a single time"
+            ConnectionStateError,
+            "connect() can only be called for clients and a single time",
         ):
             client.connect(SERVER_ADDR, now=time.time())
 
@@ -3336,7 +3371,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         ]
         for configuration, kwargs, message in cases:
             with self.subTest(message=message):
-                with self.assertRaisesMessage(ValueError, message):
+                with self.assertRaisesMessage(ConnectionConfigurationError, message):
                     QuicConnection(configuration=configuration, **kwargs)
 
     def test_initial_that_is_too_small(self) -> None:
@@ -6884,7 +6919,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertFalse(server._remote_reset_stream_at)
             client.send_stream_data(0, b"abcdefgh")
             client.reset_stream_at(0, 7, 3)
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ConnectionStateError):
                 server.reset_stream_at(0, 7, 3)
             consume_events(server)
             roundtrip(client, server)
@@ -6974,27 +7009,68 @@ class QuicConnectionTest(QuicConnectionTestCase):
         ):
             client.send_stream_data(0, b"abcdefgh")
             client.reset_stream_at(0, 7, 4)
-            with self.assertRaisesRegex(RuntimeError, "after the stream was reset"):
+            with self.assertRaisesMessage(
+                StreamStateError, "Cannot send data after the stream was reset"
+            ):
                 client.send_stream_data(0, b"more")
-            with self.assertRaises(ValueError):
+            with self.assertRaises(StreamStateError):
                 client.reset_stream_at(0, 7, 5)
-            with self.assertRaises(ValueError):
+            with self.assertRaises(StreamStateError):
                 client.reset_stream_at(0, 8, 4)
             client.reset_stream(0, 8)
-            with self.assertRaises(ValueError):
+            with self.assertRaises(StreamStateError):
                 client.reset_stream_at(0, 7, 1)
 
     def test_send_reset_stream_at_not_supported(self) -> None:
         # The server did not advertise support.
         with client_and_server() as (client, server):
-            with self.assertRaises(ValueError):
+            with self.assertRaisesMessage(
+                ConnectionStateError,
+                "Cannot reset a stream reliably without peer support",
+            ):
                 client.reset_stream_at(0, 7, 0)
             self.assertNotIn(0, client._streams)
 
         # The handshake is not complete.
         with client_and_server(handshake=False) as (client, server):
-            with self.assertRaises(ValueError):
+            with self.assertRaisesMessage(
+                ConnectionStateError,
+                "Cannot reset a stream reliably before the handshake completes",
+            ):
                 client.reset_stream_at(0, 7, 0)
+
+    def test_send_reset_stream_at_out_of_range(self) -> None:
+        with client_and_server(server_options={"reliable_stream_reset": True}) as (
+            client,
+            server,
+        ):
+            for stream_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        client.reset_stream_at(stream_id, QuicErrorCode.NO_ERROR, 0)
+            for error_code in (-1, UINT_VAR_MAX + 1):
+                with self.subTest(error_code=error_code):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Error code must be between 0 and 2^62 - 1"
+                    ):
+                        client.reset_stream_at(0, error_code, 0)
+            for reliable_size in (-1, UINT_VAR_MAX + 1):
+                with self.subTest(reliable_size=reliable_size):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Reliable size must be between 0 and 2^62 - 1"
+                    ):
+                        client.reset_stream_at(0, QuicErrorCode.NO_ERROR, reliable_size)
+            self.assertNotIn(0, client._streams)
+            consume_events(server)
+
+            # The largest error code is sent.
+            client.reset_stream_at(0, UINT_VAR_MAX, 0)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertEventsEqual(
+                server, [events.StreamReset(error_code=UINT_VAR_MAX, stream_id=0)]
+            )
 
     def test_send_reset_stream_at_over_max_streams_bidi(self) -> None:
         with client_and_server(server_options={"reliable_stream_reset": True}) as (
@@ -7125,6 +7201,30 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 self.assertTrue(client._streams[0].sender.is_finished)
                 self.assertEqual(client._remote_max_data_used, 0)
 
+    def test_send_reset_stream_out_of_range(self) -> None:
+        with client_and_server() as (client, server):
+            for stream_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        client.reset_stream(stream_id, QuicErrorCode.NO_ERROR)
+            for error_code in (-1, UINT_VAR_MAX + 1):
+                with self.subTest(error_code=error_code):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Error code must be between 0 and 2^62 - 1"
+                    ):
+                        client.reset_stream(0, error_code)
+            self.assertNotIn(0, client._streams)
+            consume_events(server)
+
+            # The largest error code is sent.
+            client.reset_stream(0, UINT_VAR_MAX)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertEventsEqual(
+                server, [events.StreamReset(error_code=UINT_VAR_MAX, stream_id=0)]
+            )
+
     def test_send_reset_stream_over_max_streams_bidi(self) -> None:
         with client_and_server() as (client, server):
             # The client opens as many streams as the server allows.
@@ -7206,6 +7306,33 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(event.error_code, 0x11)
             self.assertEqual(event.stream_id, 0)
 
+    def test_send_stop_sending_out_of_range(self) -> None:
+        with client_and_server() as (client, server):
+            client.send_stream_data(0, b"hello")
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            consume_events(server)
+
+            for stream_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        client.stop_stream(stream_id, QuicErrorCode.NO_ERROR)
+            for error_code in (-1, UINT_VAR_MAX + 1):
+                with self.subTest(error_code=error_code):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Error code must be between 0 and 2^62 - 1"
+                    ):
+                        client.stop_stream(0, error_code)
+
+            # The largest error code is sent.
+            client.stop_stream(0, UINT_VAR_MAX)
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertEventsEqual(
+                server,
+                [events.StopSendingReceived(error_code=UINT_VAR_MAX, stream_id=0)],
+            )
+
     def test_send_stop_sending_over_max_streams_bidi(self) -> None:
         with client_and_server() as (client, server):
             # The client opens as many streams as the server allows.
@@ -7246,7 +7373,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
             # client sends STOP_SENDING frame
             with self.assertRaisesMessage(
-                ValueError,
+                StreamTypeError,
                 "Cannot stop receiving on a local-initiated unidirectional stream",
             ):
                 client.stop_stream(2, QuicErrorCode.NO_ERROR)
@@ -7258,7 +7385,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
             # client sends STOP_SENDING frame
             with self.assertRaisesMessage(
-                ValueError, "Cannot stop receiving on an unknown stream"
+                StreamStateError, "Cannot stop receiving on an unknown stream"
             ):
                 client.stop_stream(0, QuicErrorCode.NO_ERROR)
 
@@ -7280,7 +7407,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
             # The client tries to send data on the finished stream.
             with self.assertRaisesMessage(
-                ValueError, "Cannot send data on a finished stream"
+                StreamStateError, "Cannot send data on a finished stream"
             ):
                 client.send_stream_data(0, b"hello")
 
@@ -7311,6 +7438,16 @@ class QuicConnectionTest(QuicConnectionTestCase):
             client.reset_stream(2, QuicErrorCode.NO_ERROR)
             self.assertNotIn(2, client._streams)
             self.assertEqual(roundtrip(client, server), (0, 0))
+
+    def test_send_stream_data_out_of_range(self) -> None:
+        with client_and_server() as (client, server):
+            for stream_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        client.send_stream_data(stream_id, b"hello")
+            self.assertEqual(client._streams, {})
 
     def test_send_stream_data_over_max_streams_bidi(self) -> None:
         with client_and_server() as (client, server):
@@ -7390,25 +7527,27 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
             # client tries to reset server-initiated unidirectional stream
             with self.assertRaisesMessage(
-                ValueError, "Cannot send data on peer-initiated unidirectional stream"
+                StreamTypeError,
+                "Cannot send data on peer-initiated unidirectional stream",
             ):
                 client.reset_stream(3, QuicErrorCode.NO_ERROR)
 
             # client tries to reset unknown server-initiated bidirectional stream
             with self.assertRaisesMessage(
-                ValueError, "Cannot send data on unknown peer-initiated stream"
+                StreamStateError, "Cannot send data on unknown peer-initiated stream"
             ):
                 client.reset_stream(5, QuicErrorCode.NO_ERROR)
 
             # client tries to send data on server-initiated unidirectional stream
             with self.assertRaisesMessage(
-                ValueError, "Cannot send data on peer-initiated unidirectional stream"
+                StreamTypeError,
+                "Cannot send data on peer-initiated unidirectional stream",
             ):
                 client.send_stream_data(3, b"hello")
 
             # client tries to send data on unknown server-initiated bidirectional stream
             with self.assertRaisesMessage(
-                ValueError, "Cannot send data on unknown peer-initiated stream"
+                StreamStateError, "Cannot send data on unknown peer-initiated stream"
             ):
                 client.send_stream_data(5, b"hello")
 
@@ -7420,7 +7559,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
             # The client tries to send data on a skipped stream.
             with self.assertRaisesMessage(
-                ValueError, "Cannot send data on a finished stream"
+                StreamStateError, "Cannot send data on a finished stream"
             ):
                 client.send_stream_data(0, b"hello")
             self.assertEqual(client.get_next_available_stream_id(), 12)

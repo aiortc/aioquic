@@ -1,4 +1,5 @@
 from . import events
+from .exceptions import StreamStateError
 from .packet import (
     QuicErrorCode,
     QuicResetStreamFrame,
@@ -9,15 +10,15 @@ from .packet_builder import QuicDeliveryState
 from .rangeset import RangeSet
 
 
+class ErrorCodeChangedError(Exception):
+    pass
+
+
 class FinalSizeError(Exception):
     pass
 
 
 class StreamFinishedError(Exception):
-    pass
-
-
-class StreamStateError(Exception):
     pass
 
 
@@ -170,7 +171,7 @@ class QuicStreamReceiver:
             self._reset_at_received = True
         if self._reset_error_code is not None and error_code != self._reset_error_code:
             if self._reset_at_received:
-                raise StreamStateError("Cannot change error code")
+                raise ErrorCodeChangedError("Cannot change error code")
             # Only a RESET_STREAM_AT fixes the error code, so a repeated
             # RESET_STREAM keeps the first one
             # (draft-ietf-quic-reliable-stream-reset section 5.2).
@@ -453,14 +454,14 @@ class QuicStreamSender:
         Abruptly terminate the sending part of the QUIC stream at a specific offset.
         """
         if self._reset_error_code is not None and error_code != self._reset_error_code:
-            raise ValueError("Cannot change the error code of a reset")
-        if reliable_size < 0 or reliable_size > self._buffer_stop:
-            raise ValueError("Cannot set reliable size outside the data written")
+            raise StreamStateError("Cannot change the error code of a reset")
+        if reliable_size > self._buffer_stop:
+            raise StreamStateError("Cannot set reliable size beyond the data written")
         if (
             self._reset_reliable_size is not None
             and reliable_size > self._reset_reliable_size
         ):
-            raise ValueError("Cannot increase reliable size")
+            raise StreamStateError("Cannot increase reliable size")
         if self.is_finished or reliable_size == self._reset_reliable_size:
             return
 
@@ -478,9 +479,9 @@ class QuicStreamSender:
         Write some data bytes to the QUIC stream.
         """
         if self._buffer_fin is not None:
-            raise RuntimeError("Cannot send data after FIN")
+            raise StreamStateError("Cannot send data after FIN")
         if self._reset_error_code is not None:
-            raise RuntimeError("Cannot send data after the stream was reset")
+            raise StreamStateError("Cannot send data after the stream was reset")
         size = len(data)
 
         if size:
