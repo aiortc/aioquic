@@ -175,6 +175,15 @@ class Limit:
 
 
 class QuicConnectionError(Exception):
+    """
+    An error which closes the connection, carrying the CONNECTION_CLOSE fields.
+
+    This error is internal and MUST NOT be exposed to API users. It is raised
+    while handling received packets, and :meth:`QuicConnection.receive_datagram`
+    catches it to close the connection. Any other code path which a public
+    method reaches MUST catch it, or check its input so that it is never raised.
+    """
+
     def __init__(self, error_code: int, frame_type: int, reason_phrase: str):
         self.error_code = error_code
         self.frame_type = frame_type
@@ -1881,11 +1890,25 @@ class QuicConnection:
         ):
             self.tls.session_ticket = self._configuration.session_ticket
 
-            # parse saved QUIC transport parameters - for 0-RTT
-            if session_ticket.max_early_data_size == MAX_EARLY_DATA:
-                self._parse_transport_parameters(
-                    session_ticket.other_extensions, from_session_ticket=True
-                )
+            # 0-RTT requires a max_early_data_size of 0xffffffff (RFC 9001 section
+            # 4.6.1) and the server's transport parameters (RFC 9000 section 7.4.1).
+            if session_ticket.max_early_data_size is not None:
+                usable = session_ticket.max_early_data_size == MAX_EARLY_DATA
+                if usable:
+                    try:
+                        self._parse_transport_parameters(
+                            session_ticket.other_extensions, from_session_ticket=True
+                        )
+                    except QuicConnectionError:
+                        usable = False
+                if not usable:
+                    self._logger.info(
+                        "Not sending 0-RTT data as the ticket's 0-RTT parameters "
+                        "are invalid"
+                    )
+                    self.tls.session_ticket = replace(
+                        session_ticket, max_early_data_size=None
+                    )
 
         # TLS callbacks
         self.tls.alpn_cb = self._alpn_handler
@@ -3202,6 +3225,9 @@ class QuicConnection:
 
         `from_session_ticket` is `True` when restoring saved transport parameters,
         and `False` when handling received transport parameters.
+
+        All parameters are validated before any is stored, so none is stored
+        when QuicConnectionError is raised.
         """
 
         try:

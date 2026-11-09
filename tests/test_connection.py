@@ -381,6 +381,26 @@ class QuicConnectionTestCase(TestCase):
         counts = [len(space.sent_packets) for space in connection._loss.spaces]
         self.assertEqual(counts, expected)
 
+    def create_session_ticket(
+        self,
+        client_options: dict[str, Any] = {},
+        server_options: dict[str, Any] = {},
+    ) -> tuple[tls.SessionTicket, SessionTicketStore]:
+        """
+        Perform a handshake and return the client's session ticket, along with
+        the server's ticket store.
+        """
+        client_tickets: list[tls.SessionTicket] = []
+        ticket_store = SessionTicketStore()
+        with client_and_server(
+            client_kwargs={"session_ticket_handler": client_tickets.append},
+            client_options=client_options,
+            server_kwargs={"session_ticket_handler": ticket_store.add},
+            server_options=server_options,
+        ):
+            pass
+        return client_tickets[0], ticket_store
+
 
 class QuicConnectionTimelineTest(QuicConnectionTestCase):
     """
@@ -426,20 +446,6 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             if timer is not None:
                 role = "client" if connection._is_client else "server"
                 self.assertGreaterEqual(timer, when, f"The {role}'s timer is overdue.")
-
-    def create_session_ticket(self) -> tuple[tls.SessionTicket, SessionTicketStore]:
-        """
-        Perform a handshake and return the client's session ticket, along with
-        the server's ticket store.
-        """
-        client_tickets: list[tls.SessionTicket] = []
-        ticket_store = SessionTicketStore()
-        with client_and_server(
-            client_kwargs={"session_ticket_handler": client_tickets.append},
-            server_kwargs={"session_ticket_handler": ticket_store.add},
-        ):
-            pass
-        return client_tickets[0], ticket_store
 
     def handshake(
         self, client: QuicConnection, server: QuicConnection, now: float
@@ -2885,20 +2891,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
         `False`, in which case the server no longer has the ticket.
         """
         options = {"max_datagram_frame_size": 65536}
-        client_ticket = None
-        ticket_store = SessionTicketStore()
-
-        def save_session_ticket(ticket: tls.SessionTicket) -> None:
-            nonlocal client_ticket
-            client_ticket = ticket
-
-        with client_and_server(
-            client_kwargs={"session_ticket_handler": save_session_ticket},
-            client_options=options,
-            server_kwargs={"session_ticket_handler": ticket_store.add},
-            server_options=options,
-        ):
-            pass
+        client_ticket, ticket_store = self.create_session_ticket(
+            client_options=options, server_options=options
+        )
 
         if ticket_extensions is not None:
             for label, ticket in ticket_store.tickets.items():
@@ -3428,18 +3423,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(received, b"hello")
 
     def test_connect_with_0rtt(self) -> None:
-        client_ticket = None
-        ticket_store = SessionTicketStore()
-
-        def save_session_ticket(ticket: tls.SessionTicket) -> None:
-            nonlocal client_ticket
-            client_ticket = ticket
-
-        with client_and_server(
-            client_kwargs={"session_ticket_handler": save_session_ticket},
-            server_kwargs={"session_ticket_handler": ticket_store.add},
-        ) as (client, server):
-            pass
+        client_ticket, ticket_store = self.create_session_ticket()
 
         with client_and_server(
             client_options={"session_ticket": client_ticket},
@@ -3494,6 +3478,86 @@ class QuicConnectionTest(QuicConnectionTestCase):
                     reason_phrase="Invalid max_early_data value 12345",
                 ),
             )
+
+    def test_connect_with_0rtt_client_invalid_ticket_parameters(self) -> None:
+        """
+        A client whose session ticket has an invalid max_early_data_size, or
+        transport parameters it cannot read, resumes the session without sending
+        0-RTT data, as doing so requires a max_early_data_size of 0xffffffff
+        (RFC 9001 section 4.6.1) and remembering the server's transport
+        parameters (RFC 9000 section 7.4.1).
+        """
+        cases: list[tuple[str, dict[str, Any]]] = [
+            ("invalid max_early_data_size", {"max_early_data_size": 12345}),
+            ("missing parameters", {"other_extensions": []}),
+            (
+                "malformed parameters",
+                {
+                    "other_extensions": [
+                        (tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS, b"0")
+                    ]
+                },
+            ),
+        ]
+        for name, ticket_changes in cases:
+            with self.subTest(name=name):
+                client_ticket, ticket_store = self.create_session_ticket()
+                with client_and_server(
+                    client_options={
+                        "session_ticket": replace(client_ticket, **ticket_changes)
+                    },
+                    server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+                    handshake=False,
+                ) as (client, server):
+                    with self.assertLogs("quic", level="INFO") as cm:
+                        client.connect(SERVER_ADDR, now=time.time())
+                    self.assertIn(
+                        "Not sending 0-RTT data as the ticket's 0-RTT parameters "
+                        "are invalid",
+                        "\n".join(cm.output),
+                    )
+                    self.assertFalse(
+                        client._cryptos[tls.Epoch.ZERO_RTT].send.is_valid()
+                    )
+
+                    # None of the server's transport parameters was restored.
+                    self.assertEqual(client._remote_max_data, 0)
+                    stream_id = client.get_next_available_stream_id()
+                    client.send_stream_data(stream_id, b"hello")
+
+                    # The server resumes the session, so it does not send its
+                    # certificate.
+                    self.assertEqual(roundtrip(client, server), (1, 1))
+                    event = client.next_event()
+                    assert isinstance(event, events.ProtocolNegotiated)
+                    self.assertEqual(
+                        client.next_event(),
+                        events.HandshakeCompleted(
+                            alpn_protocol=None,
+                            early_data_accepted=False,
+                            session_resumed=True,
+                        ),
+                    )
+
+                    # The data is sent in 1-RTT packets.
+                    event = server.next_event()
+                    assert isinstance(event, events.ProtocolNegotiated)
+                    self.assertIsNone(server.next_event())
+                    self.assertEqual(roundtrip(client, server), (1, 1))
+                    self.assertEqual(
+                        server.next_event(),
+                        events.HandshakeCompleted(
+                            alpn_protocol=None,
+                            early_data_accepted=False,
+                            session_resumed=True,
+                        ),
+                    )
+                    self.assertEqual(
+                        server.next_event(),
+                        events.StreamDataReceived(
+                            data=b"hello", end_stream=False, stream_id=stream_id
+                        ),
+                    )
 
     def test_connect_with_0rtt_invalid_ticket_parameters(self) -> None:
         """
