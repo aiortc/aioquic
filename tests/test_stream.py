@@ -1,9 +1,9 @@
-from unittest import TestCase
-
 from aioquic.quic.events import StreamDataReceived, StreamReset
 from aioquic.quic.packet import QuicErrorCode, QuicStreamFrame
 from aioquic.quic.packet_builder import QuicDeliveryState
 from aioquic.quic.stream import FinalSizeError, QuicStream, StreamStateError
+
+from .utils import TestCase
 
 
 class QuicStreamTest(TestCase):
@@ -196,11 +196,12 @@ class QuicStreamTest(TestCase):
         stream.receiver.handle_frame(QuicStreamFrame(offset=4, data=b"4567"))
 
         # The final size is below data already received.
-        with self.assertRaises(FinalSizeError) as cm:
+        with self.assertRaisesMessage(
+            FinalSizeError, "Data received beyond final size"
+        ):
             stream.receiver.handle_frame(
                 QuicStreamFrame(offset=0, data=b"01", fin=True)
             )
-        self.assertEqual(str(cm.exception), "Data received beyond final size")
 
     def test_receiver_fin_out_of_order(self) -> None:
         stream = QuicStream(stream_id=0)
@@ -228,16 +229,16 @@ class QuicStreamTest(TestCase):
         stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"0123", fin=True))
 
         # data beyond final size
-        with self.assertRaises(FinalSizeError) as cm:
+        with self.assertRaisesMessage(
+            FinalSizeError, "Data received beyond final size"
+        ):
             stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"01234567"))
-        self.assertEqual(str(cm.exception), "Data received beyond final size")
 
         # final size would be lowered
-        with self.assertRaises(FinalSizeError) as cm:
+        with self.assertRaisesMessage(FinalSizeError, "Cannot change final size"):
             stream.receiver.handle_frame(
                 QuicStreamFrame(offset=0, data=b"01", fin=True)
             )
-        self.assertEqual(str(cm.exception), "Cannot change final size")
 
     def test_receiver_fin_twice(self) -> None:
         stream = QuicStream(stream_id=0)
@@ -386,9 +387,10 @@ class QuicStreamTest(TestCase):
         stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"01234567"))
 
         # The final size is below data already received.
-        with self.assertRaises(FinalSizeError) as cm:
+        with self.assertRaisesMessage(
+            FinalSizeError, "Data received beyond final size"
+        ):
             stream.receiver.handle_reset(final_size=4)
-        self.assertEqual(str(cm.exception), "Data received beyond final size")
 
     def test_receiver_reset_then_data(self) -> None:
         stream = QuicStream(stream_id=0)
@@ -404,9 +406,10 @@ class QuicStreamTest(TestCase):
         )
 
         # data beyond final size
-        with self.assertRaises(FinalSizeError) as cm:
+        with self.assertRaisesMessage(
+            FinalSizeError, "Data received beyond final size"
+        ):
             stream.receiver.handle_frame(QuicStreamFrame(offset=0, data=b"01234567"))
-        self.assertEqual(str(cm.exception), "Data received beyond final size")
 
     def test_receiver_reset_twice(self) -> None:
         stream = QuicStream(stream_id=0)
@@ -448,9 +451,8 @@ class QuicStreamTest(TestCase):
             StreamReset(error_code=QuicErrorCode.NO_ERROR, stream_id=0),
         )
 
-        with self.assertRaises(FinalSizeError) as cm:
+        with self.assertRaisesMessage(FinalSizeError, "Cannot change final size"):
             stream.receiver.handle_reset(final_size=5)
-        self.assertEqual(str(cm.exception), "Cannot change final size")
 
     def test_receiver_stop(self) -> None:
         stream = QuicStream()
@@ -926,9 +928,8 @@ class QuicStreamTest(TestCase):
         stream.sender.on_reset_delivery(QuicDeliveryState.LOST, 4)
         frame = stream.sender.get_reset_frame()
         self.assertEqual((frame.final_size, frame.reliable_size), (8, None))
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Cannot increase reliable size"):
             stream.sender.reset_at(error_code=7, reliable_size=1)
-        self.assertEqual(str(cm.exception), "Cannot increase reliable size")
 
     def test_sender_reset_after_reset_at_error_code(self) -> None:
         stream = QuicStream(stream_id=0)
@@ -1059,12 +1060,12 @@ class QuicStreamTest(TestCase):
         self.assertEqual(second.reliable_size, 3)
 
         # The reliable size cannot increase, nor the error code change.
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Cannot increase reliable size"):
             stream.sender.reset_at(error_code=7, reliable_size=4)
-        self.assertEqual(str(cm.exception), "Cannot increase reliable size")
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Cannot change the error code of a reset"
+        ):
             stream.sender.reset_at(error_code=8, reliable_size=3)
-        self.assertEqual(str(cm.exception), "Cannot change the error code of a reset")
         self.assertEqual(stream.sender.get_reset_frame().reliable_size, 3)
 
     def test_sender_reset_at_decrease_reliable_size_after_ack(self) -> None:
@@ -1299,16 +1300,14 @@ class QuicStreamTest(TestCase):
         stream = QuicStream()
         stream.sender.write(b"data", end_stream=True)
 
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaisesMessage(RuntimeError, "Cannot send data after FIN"):
             stream.sender.write(b"more")
-        self.assertEqual(str(cm.exception), "Cannot send data after FIN")
 
     def test_sender_write_after_reset(self) -> None:
         stream = QuicStream()
         stream.sender.reset(error_code=QuicErrorCode.NO_ERROR)
 
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaisesMessage(
+            RuntimeError, "Cannot send data after the stream was reset"
+        ):
             stream.sender.write(b"data")
-        self.assertEqual(
-            str(cm.exception), "Cannot send data after the stream was reset"
-        )

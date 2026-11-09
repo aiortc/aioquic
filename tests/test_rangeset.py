@@ -1,6 +1,6 @@
-from unittest import TestCase
-
 from aioquic.quic.rangeset import RangeSet
+
+from .utils import TestCase
 
 
 class RangeSetTest(TestCase):

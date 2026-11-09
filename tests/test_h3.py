@@ -3,7 +3,6 @@ import copy
 from collections import deque
 from collections.abc import Iterator
 from typing import Any
-from unittest import TestCase
 
 from aioquic.buffer import Buffer, encode_uint_var
 from aioquic.h3.connection import (
@@ -44,6 +43,7 @@ from aioquic.quic.logger import QuicLogger
 from aioquic.quic.packet import QuicErrorCode
 
 from .test_connection import client_and_server, transfer
+from .utils import TestCase
 
 DUMMY_SETTINGS: dict[int, int] = {
     Setting.QPACK_MAX_TABLE_CAPACITY: 4096,
@@ -2359,9 +2359,10 @@ class H3ConnectionTest(TestCase):
         )
         h3_client = H3Connection(quic_client)
 
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaisesMessage(
+            RuntimeError, "Only servers may send a push promise."
+        ):
             h3_client.send_push_promise(stream_id=0, headers=[])
-        self.assertEqual(str(cm.exception), "Only servers may send a push promise.")
 
     def test_blocked_stream(self) -> None:
         quic_client = FakeQuicConnection(
@@ -3526,10 +3527,8 @@ class H3ConnectionTest(TestCase):
             end_stream=True,
         )
 
-        with self.assertRaises(FrameUnexpected) as assert_err:
+        with self.assertRaisesMessage(FrameUnexpected, "stream was already ended"):
             h3_client.send_data(stream_id, b"data", end_stream=True)
-
-        self.assertEqual(str(assert_err.exception), "stream was already ended")
 
 
 class H3ParserTest(TestCase):

@@ -1,6 +1,6 @@
-from unittest import TestCase
-
 from aioquic.quic.retry import QuicRetryTokenHandler
+
+from .utils import TestCase
 
 
 class QuicRetryTokenHandlerTest(TestCase):
@@ -44,68 +44,63 @@ class QuicRetryTokenHandlerTest(TestCase):
         )
 
         # validate token - expired
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Token has expired."):
             handler.validate_token(
                 address=address,
                 destination_cid=retry_source_connection_id,
                 token=token,
                 now=40.001,
             )
-        self.assertEqual(str(cm.exception), "Token has expired.")
 
         # validate token - empty
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Token is invalid."):
             handler.validate_token(
                 address=address,
                 destination_cid=retry_source_connection_id,
                 token=b"",
                 now=10.0,
             )
-        self.assertEqual(str(cm.exception), "Token is invalid.")
 
         # validate token - truncated
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Token is invalid."):
             handler.validate_token(
                 address=address,
                 destination_cid=retry_source_connection_id,
                 token=token[:20],
                 now=10.0,
             )
-        self.assertEqual(str(cm.exception), "Token is invalid.")
 
         # validate token - tampered
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Token is invalid."):
             handler.validate_token(
                 address=address,
                 destination_cid=retry_source_connection_id,
                 token=token[:-1] + bytes([token[-1] ^ 1]),
                 now=10.0,
             )
-        self.assertEqual(str(cm.exception), "Token is invalid.")
 
         # validate token - issued by another handler
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Token is invalid."):
             QuicRetryTokenHandler().validate_token(
                 address=address,
                 destination_cid=retry_source_connection_id,
                 token=token,
                 now=10.0,
             )
-        self.assertEqual(str(cm.exception), "Token is invalid.")
 
         # validate token - wrong address
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Remote address does not match."):
             handler.validate_token(
                 address=("1.2.3.4", 12345),
                 destination_cid=retry_source_connection_id,
                 token=token,
                 now=10.0,
             )
-        self.assertEqual(str(cm.exception), "Remote address does not match.")
 
         # validate token - wrong destination connection ID
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Destination connection ID does not match."
+        ):
             handler.validate_token(
                 address=address, destination_cid=b"12345678", token=token, now=10.0
             )
-        self.assertEqual(str(cm.exception), "Destination connection ID does not match.")

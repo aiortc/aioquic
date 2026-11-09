@@ -1,5 +1,3 @@
-from unittest import TestCase
-
 from aioquic.buffer import Buffer, BufferReadError
 from aioquic.quic import packet
 from aioquic.quic.packet import (
@@ -24,6 +22,7 @@ from .test_crypto_v1 import LONG_CLIENT_ENCRYPTED_PACKET as CLIENT_INITIAL_V1
 from .test_crypto_v1 import LONG_SERVER_ENCRYPTED_PACKET as SERVER_INITIAL_V1
 from .test_crypto_v2 import LONG_CLIENT_ENCRYPTED_PACKET as CLIENT_INITIAL_V2
 from .test_crypto_v2 import LONG_SERVER_ENCRYPTED_PACKET as SERVER_INITIAL_V2
+from .utils import TestCase
 
 
 class PacketTest(TestCase):
@@ -68,9 +67,8 @@ class PacketTest(TestCase):
 
     def test_pull_initial_client_v1_truncated(self) -> None:
         buf = Buffer(data=CLIENT_INITIAL_V1[0:100])
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Packet payload is truncated"):
             pull_quic_header(buf, host_cid_length=8)
-        self.assertEqual(str(cm.exception), "Packet payload is truncated")
 
     def test_pull_initial_client_v2(self) -> None:
         buf = Buffer(data=CLIENT_INITIAL_V2)
@@ -223,9 +221,10 @@ class PacketTest(TestCase):
                 "01c514f99ec4bbf1f7a30f9b0c94fef717f1c1d07fec24c99a864da7ede"
             )
         )
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Destination CID is too long (21 bytes)"
+        ):
             pull_quic_header(buf, host_cid_length=8)
-        self.assertEqual(str(cm.exception), "Destination CID is too long (21 bytes)")
 
     def test_pull_long_header_scid_too_long(self) -> None:
         buf = Buffer(
@@ -234,15 +233,13 @@ class PacketTest(TestCase):
                 "01cfcee99ec4bbf1f7a30f9b0c9417b8c263cdd8cc972a4439d68a46320"
             )
         )
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Source CID is too long (21 bytes)"):
             pull_quic_header(buf, host_cid_length=8)
-        self.assertEqual(str(cm.exception), "Source CID is too long (21 bytes)")
 
     def test_pull_long_header_no_fixed_bit(self) -> None:
         buf = Buffer(data=b"\x80\xff\x00\x00\x11\x00\x00")
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Packet fixed bit is zero"):
             pull_quic_header(buf, host_cid_length=8)
-        self.assertEqual(str(cm.exception), "Packet fixed bit is zero")
 
     def test_pull_long_header_too_short(self) -> None:
         buf = Buffer(data=b"\xc0\x00")
@@ -263,9 +260,8 @@ class PacketTest(TestCase):
 
     def test_pull_short_header_no_fixed_bit(self) -> None:
         buf = Buffer(data=b"\x00")
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Packet fixed bit is zero"):
             pull_quic_header(buf, host_cid_length=8)
-        self.assertEqual(str(cm.exception), "Packet fixed bit is zero")
 
 
 class ParamsTest(TestCase):
@@ -330,9 +326,10 @@ class ParamsTest(TestCase):
 
     def test_params_max_ack_delay_length_mismatch(self) -> None:
         buf = Buffer(data=bytes.fromhex("0b020a"))
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Transport parameter length does not match"
+        ):
             pull_quic_transport_parameters(buf)
-        self.assertEqual(str(cm.exception), "Transport parameter length does not match")
 
     def test_params_preferred_address(self) -> None:
         data = bytes.fromhex(
@@ -375,9 +372,10 @@ class ParamsTest(TestCase):
 
     def test_params_reset_stream_at_not_empty(self) -> None:
         buf = Buffer(data=bytes.fromhex("1d0100"))
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Transport parameter length does not match"
+        ):
             pull_quic_transport_parameters(buf)
-        self.assertEqual(str(cm.exception), "Transport parameter length does not match")
 
     def test_params_unknown(self) -> None:
         data = bytes.fromhex("8000ff000100")
@@ -413,31 +411,29 @@ class ParamsTest(TestCase):
 
     def test_params_version_information_available_version_0(self) -> None:
         buf = Buffer(data=bytes.fromhex("11080000000100000000"))
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Version Information must not contain version 0"
+        ):
             pull_quic_transport_parameters(buf)
-        self.assertEqual(
-            str(cm.exception), "Version Information must not contain version 0"
-        )
 
     def test_params_version_information_chosen_version_0(self) -> None:
         buf = Buffer(data=bytes.fromhex("110400000000"))
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Version Information must not contain version 0"
+        ):
             pull_quic_transport_parameters(buf)
-        self.assertEqual(
-            str(cm.exception), "Version Information must not contain version 0"
-        )
 
     def test_params_version_information_length_not_divisible_by_four(self) -> None:
         buf = Buffer(data=bytes.fromhex("11050000000100"))
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "Transport parameter length does not match"
+        ):
             pull_quic_transport_parameters(buf)
-        self.assertEqual(str(cm.exception), "Transport parameter length does not match")
 
     def test_params_version_information_truncated(self) -> None:
         buf = Buffer(data=bytes.fromhex("110800000000"))
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(ValueError, "Read out of bounds"):
             pull_quic_transport_parameters(buf)
-        self.assertEqual(str(cm.exception), "Read out of bounds")
 
     def test_preferred_address_ipv4_only(self) -> None:
         data = bytes.fromhex(
@@ -471,13 +467,12 @@ class ParamsTest(TestCase):
                 buf.push_uint8(connection_id_length)
                 buf.push_bytes(bytes(connection_id_length + 16))
                 buf.seek(0)
-                with self.assertRaises(ValueError) as cm:
-                    pull_quic_preferred_address(buf)
-                self.assertEqual(
-                    str(cm.exception),
+                with self.assertRaisesMessage(
+                    ValueError,
                     "Invalid preferred address CID length "
                     f"({connection_id_length} bytes)",
-                )
+                ):
+                    pull_quic_preferred_address(buf)
 
     def test_preferred_address_ipv6_only(self) -> None:
         data = bytes.fromhex(
@@ -552,20 +547,18 @@ class FrameTest(TestCase):
     def test_ack_frame_with_negative_first_range(self) -> None:
         # Largest acknowledged 0, first ACK range 1.
         buf = Buffer(data=b"\x00\x02\x00\x01")
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "ACK range contains a negative packet number"
+        ):
             packet.pull_ack_frame(buf)
-        self.assertEqual(
-            str(cm.exception), "ACK range contains a negative packet number"
-        )
 
     def test_ack_frame_with_negative_gap(self) -> None:
         # Largest acknowledged 2, first ACK range 0, gap 1, ACK range 0.
         buf = Buffer(data=b"\x02\x02\x01\x00\x01\x00")
-        with self.assertRaises(ValueError) as cm:
+        with self.assertRaisesMessage(
+            ValueError, "ACK range contains a negative packet number"
+        ):
             packet.pull_ack_frame(buf)
-        self.assertEqual(
-            str(cm.exception), "ACK range contains a negative packet number"
-        )
 
     def test_ack_frame_with_one_range(self) -> None:
         data = b"\x02\x02\x01\x00\x00\x00"

@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import replace
 from typing import Any
-from unittest import TestCase, skipIf
+from unittest import skipIf
 
 from aioquic import tls
 from aioquic.buffer import UINT_VAR_MAX, Buffer, encode_uint_var
@@ -52,6 +52,7 @@ from .utils import (
     SERVER_CERTFILE_WITH_CHAIN,
     SERVER_KEYFILE,
     SKIP_TESTS,
+    TestCase,
 )
 
 CLIENT_ADDR = ("1.2.3.4", 1234)
@@ -3084,22 +3085,18 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_connect_as_server(self) -> None:
         server = create_standalone_server(self)
 
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaisesMessage(
+            RuntimeError, "connect() can only be called for clients and a single time"
+        ):
             server.connect(CLIENT_ADDR, now=time.time())
-        self.assertEqual(
-            str(cm.exception),
-            "connect() can only be called for clients and a single time",
-        )
 
     def test_connect_twice(self) -> None:
         client = create_standalone_client(self)
 
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaisesMessage(
+            RuntimeError, "connect() can only be called for clients and a single time"
+        ):
             client.connect(SERVER_ADDR, now=time.time())
-        self.assertEqual(
-            str(cm.exception),
-            "connect() can only be called for clients and a single time",
-        )
 
     def test_connect_with_alpn(self) -> None:
         with client_and_server(
@@ -3339,9 +3336,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
         ]
         for configuration, kwargs, message in cases:
             with self.subTest(message=message):
-                with self.assertRaises(ValueError) as cm:
+                with self.assertRaisesMessage(ValueError, message):
                     QuicConnection(configuration=configuration, **kwargs)
-                self.assertEqual(str(cm.exception), message)
 
     def test_initial_that_is_too_small(self) -> None:
         """
@@ -7249,12 +7245,11 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.check_handshake(client=client, server=server)
 
             # client sends STOP_SENDING frame
-            with self.assertRaises(ValueError) as cm:
-                client.stop_stream(2, QuicErrorCode.NO_ERROR)
-            self.assertEqual(
-                str(cm.exception),
+            with self.assertRaisesMessage(
+                ValueError,
                 "Cannot stop receiving on a local-initiated unidirectional stream",
-            )
+            ):
+                client.stop_stream(2, QuicErrorCode.NO_ERROR)
 
     def test_send_stop_sending_unknown_stream(self) -> None:
         with client_and_server() as (client, server):
@@ -7262,11 +7257,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.check_handshake(client=client, server=server)
 
             # client sends STOP_SENDING frame
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaisesMessage(
+                ValueError, "Cannot stop receiving on an unknown stream"
+            ):
                 client.stop_stream(0, QuicErrorCode.NO_ERROR)
-            self.assertEqual(
-                str(cm.exception), "Cannot stop receiving on an unknown stream"
-            )
 
     def test_send_stream_data_finished_stream(self) -> None:
         with client_and_server() as (client, server):
@@ -7285,9 +7279,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(client.get_next_available_stream_id(), 8)
 
             # The client tries to send data on the finished stream.
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaisesMessage(
+                ValueError, "Cannot send data on a finished stream"
+            ):
                 client.send_stream_data(0, b"hello")
-            self.assertEqual(str(cm.exception), "Cannot send data on a finished stream")
 
             # The client resets and stops the finished stream, which has no effect.
             client.reset_stream(0, QuicErrorCode.NO_ERROR)
@@ -7394,34 +7389,28 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(roundtrip(client, server), (1, 1))
 
             # client tries to reset server-initiated unidirectional stream
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaisesMessage(
+                ValueError, "Cannot send data on peer-initiated unidirectional stream"
+            ):
                 client.reset_stream(3, QuicErrorCode.NO_ERROR)
-            self.assertEqual(
-                str(cm.exception),
-                "Cannot send data on peer-initiated unidirectional stream",
-            )
 
             # client tries to reset unknown server-initiated bidirectional stream
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaisesMessage(
+                ValueError, "Cannot send data on unknown peer-initiated stream"
+            ):
                 client.reset_stream(5, QuicErrorCode.NO_ERROR)
-            self.assertEqual(
-                str(cm.exception), "Cannot send data on unknown peer-initiated stream"
-            )
 
             # client tries to send data on server-initiated unidirectional stream
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaisesMessage(
+                ValueError, "Cannot send data on peer-initiated unidirectional stream"
+            ):
                 client.send_stream_data(3, b"hello")
-            self.assertEqual(
-                str(cm.exception),
-                "Cannot send data on peer-initiated unidirectional stream",
-            )
 
             # client tries to send data on unknown server-initiated bidirectional stream
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaisesMessage(
+                ValueError, "Cannot send data on unknown peer-initiated stream"
+            ):
                 client.send_stream_data(5, b"hello")
-            self.assertEqual(
-                str(cm.exception), "Cannot send data on unknown peer-initiated stream"
-            )
 
     def test_send_stream_data_skipped_stream(self) -> None:
         with client_and_server() as (client, server):
@@ -7430,9 +7419,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(client.get_next_available_stream_id(), 12)
 
             # The client tries to send data on a skipped stream.
-            with self.assertRaises(ValueError) as cm:
+            with self.assertRaisesMessage(
+                ValueError, "Cannot send data on a finished stream"
+            ):
                 client.send_stream_data(0, b"hello")
-            self.assertEqual(str(cm.exception), "Cannot send data on a finished stream")
             self.assertEqual(client.get_next_available_stream_id(), 12)
 
     def test_stream_direction(self) -> None:

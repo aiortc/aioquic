@@ -1,15 +1,14 @@
-from unittest import TestCase
-
 from aioquic.quic.congestion.base import QuicRttMonitor, create_congestion_control
+
+from .utils import TestCase
 
 
 class QuicCongestionControlTest(TestCase):
     def test_create_unknown_congestion_control(self) -> None:
-        with self.assertRaises(Exception) as cm:
+        with self.assertRaisesMessage(
+            Exception, "Unknown congestion control algorithm: bogus"
+        ):
             create_congestion_control("bogus", max_datagram_size=1280)
-        self.assertEqual(
-            str(cm.exception), "Unknown congestion control algorithm: bogus"
-        )
 
 
 class QuicRttMonitorTest(TestCase):
