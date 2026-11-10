@@ -11,6 +11,7 @@ from collections.abc import Callable, Coroutine, Iterator
 from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
 from aioquic import tls
+from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.packet import QuicPacketType
 from aioquic.quic.packet_builder import QuicSentPacket
 from cryptography import x509
@@ -344,6 +345,28 @@ def generate_rsa_certificate(
         hash_algorithm=hashes.SHA256(),
         key=key,
     )
+
+
+def load_cert_chain(
+    configuration: QuicConfiguration, certfile: str, keyfile: str
+) -> None:
+    """
+    Load a certificate chain and private key into a configuration.
+
+    Each pair of files is only parsed once, as cryptography validates RSA keys
+    when loading them, which is slow for the 3072-bit default server key.
+    """
+    loaded = _parse_cert_chain(certfile, keyfile)
+    configuration.certificate = loaded.certificate
+    configuration.certificate_chain = list(loaded.certificate_chain)
+    configuration.private_key = loaded.private_key
+
+
+@functools.cache
+def _parse_cert_chain(certfile: str, keyfile: str) -> QuicConfiguration:
+    configuration = QuicConfiguration(is_client=False)
+    configuration.load_cert_chain(certfile, keyfile)
+    return configuration
 
 
 # Generate the default certificates in a temporary directory, which is removed

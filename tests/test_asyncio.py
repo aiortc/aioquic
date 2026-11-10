@@ -34,6 +34,7 @@ from .utils import (
     generate_ed448_certificate,
     generate_ed25519_certificate,
     generate_rsa_certificate,
+    load_cert_chain,
 )
 
 real_sendto = socket.socket.sendto
@@ -132,7 +133,7 @@ class HighLevelTest(TestCase):
     ) -> AsyncGenerator[int, None]:
         if configuration is None:
             configuration = QuicConfiguration(is_client=False)
-            configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+            load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
         server = await serve(
             host=host,
             port=0,
@@ -337,7 +338,7 @@ class HighLevelTest(TestCase):
         server_configuration = QuicConfiguration(
             is_client=False, quic_logger=QuicLogger()
         )
-        server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        load_cert_chain(server_configuration, SERVER_CERTFILE, SERVER_KEYFILE)
         async with self.run_server(configuration=server_configuration) as server_port:
             response = await self.run_client(
                 configuration=QuicConfiguration(
@@ -549,7 +550,7 @@ class HighLevelTest(TestCase):
     @asynctest
     async def test_server_receives_garbage(self) -> None:
         configuration = QuicConfiguration(is_client=False)
-        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
         server = await serve(
             host=self.server_host,
             port=0,
@@ -568,7 +569,7 @@ class HighLevelTest(TestCase):
         servers with spoofed source addresses could loop forever.
         """
         configuration = QuicConfiguration(is_client=False)
-        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
         server = await serve(
             host=self.server_host,
             port=0,

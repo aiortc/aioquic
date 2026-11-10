@@ -60,6 +60,7 @@ from .utils import (
     SERVER_KEYFILE,
     SKIP_TESTS,
     TestCase,
+    load_cert_chain,
 )
 
 CLIENT_ADDR = ("1.2.3.4", 1234)
@@ -172,7 +173,7 @@ def create_standalone_server(
     self: TestCase, original_destination_connection_id: bytes = bytes(8)
 ) -> QuicConnection:
     server_configuration = QuicConfiguration(is_client=False, quic_logger=QuicLogger())
-    server_configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+    load_cert_chain(server_configuration, SERVER_CERTFILE, SERVER_KEYFILE)
 
     server = QuicConnection(
         configuration=server_configuration,
@@ -229,7 +230,7 @@ def client_and_server(
     server_configuration = QuicConfiguration(
         is_client=False, quic_logger=QuicLogger(), **server_options
     )
-    server_configuration.load_cert_chain(server_certfile, server_keyfile)
+    load_cert_chain(server_configuration, server_certfile, server_keyfile)
 
     server = QuicConnection(
         configuration=server_configuration,
@@ -3319,7 +3320,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
     def test_init_with_invalid_arguments(self) -> None:
         def server_configuration(**kwargs: Any) -> QuicConfiguration:
             configuration = QuicConfiguration(is_client=False, **kwargs)
-            configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+            load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
             return configuration
 
         cases: list[tuple[QuicConfiguration, dict[str, Any], str]] = [
