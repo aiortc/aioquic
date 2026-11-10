@@ -55,7 +55,6 @@ class WebTransportTest(TestCase):
                     ],
                     stream_id=stream_id,
                     stream_ended=False,
-                    push_id=None,
                 )
             ],
         )
@@ -341,14 +340,14 @@ class WebTransportTest(TestCase):
             )
             with self.assertRaisesMessage(
                 InvalidStreamTypeError,
-                "Headers and data can only be sent on request and push streams",
+                "Headers and data can only be sent on request streams",
             ):
                 h3_server.send_headers(
                     stream_id=stream_id, headers=[(b":status", b"200")]
                 )
             with self.assertRaisesMessage(
                 InvalidStreamTypeError,
-                "Headers and data can only be sent on request and push streams",
+                "Headers and data can only be sent on request streams",
             ):
                 h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
             self.assertNotIn(stream_id, h3_server._stream)

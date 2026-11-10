@@ -17,12 +17,7 @@ from aioquic.asyncio.client import connect
 from aioquic.asyncio.protocol import QuicConnectionProtocol
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.connection import H3_ALPN, ErrorCode, H3Connection
-from aioquic.h3.events import (
-    DataReceived,
-    H3Event,
-    HeadersReceived,
-    PushPromiseReceived,
-)
+from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import ConnectionTerminated, QuicEvent
 from aioquic.quic.logger import QuicFileLogger
@@ -138,7 +133,6 @@ class HttpClient(QuicConnectionProtocol):
         super().__init__(*args, **kwargs)
 
         self.key_update = False
-        self.pushes: dict[int, deque[H3Event]] = {}
         self._http: HttpConnection | None = None
         self._request_events: dict[int, deque[H3Event]] = {}
         self._request_waiter: dict[int, asyncio.Future[deque[H3Event]]] = {}
@@ -215,19 +209,11 @@ class HttpClient(QuicConnectionProtocol):
                 websocket = self._websockets[stream_id]
                 websocket.http_event_received(event)
 
-            elif event.push_id in self.pushes:
-                # push
-                self.pushes[event.push_id].append(event)
-
             # Request a key update for interoperability testing.
             if self.key_update:
                 logger.info("Requesting key update")
                 self.request_key_update()
                 self.key_update = False
-
-        elif isinstance(event, PushPromiseReceived):
-            self.pushes[event.push_id] = deque()
-            self.pushes[event.push_id].append(event)
 
     def quic_event_received(self, event: QuicEvent) -> None:
         # Pass the event to the HTTP layer.
@@ -321,37 +307,6 @@ async def perform_http_request(
             write_response(
                 http_events=http_events, include=include, output_file=output_file
             )
-
-
-def process_http_pushes(
-    client: HttpClient,
-    include: bool,
-    output_dir: str | None,
-) -> None:
-    for _, http_events in client.pushes.items():
-        method = ""
-        octets = 0
-        path = ""
-        for http_event in http_events:
-            if isinstance(http_event, DataReceived):
-                octets += len(http_event.data)
-            elif isinstance(http_event, PushPromiseReceived):
-                for header, value in http_event.headers:
-                    if header == b":method":
-                        method = value.decode()
-                    elif header == b":path":
-                        path = value.decode()
-        logger.info("Push received for %s %s : %s bytes", method, path, octets)
-
-        # output response
-        if output_dir is not None:
-            output_path = os.path.join(
-                output_dir, os.path.basename(path) or "index.html"
-            )
-            with open(output_path, "wb") as output_file:
-                write_response(
-                    http_events=http_events, include=include, output_file=output_file
-                )
 
 
 def write_response(
@@ -458,9 +413,6 @@ async def main(
                 for url in urls
             ]
             await asyncio.gather(*coros)
-
-            # process http pushes
-            process_http_pushes(client=client, include=include, output_dir=output_dir)
         client.close(error_code=ErrorCode.H3_NO_ERROR)
 
 

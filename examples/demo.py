@@ -28,7 +28,6 @@ async def homepage(request: Request) -> Response:
     """
     Simple homepage.
     """
-    await request.send_push_promise("/style.css")
     return templates.TemplateResponse(request, "index.html")
 
 

@@ -6,7 +6,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from email.utils import formatdate
-from typing import Any, cast
+from typing import Any
 
 import aioquic
 import wsproto
@@ -21,7 +21,6 @@ from aioquic.h3.events import (
     HeadersReceived,
     WebTransportStreamDataReceived,
 )
-from aioquic.h3.exceptions import NoAvailablePushIDError
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import ProtocolNegotiated, QuicEvent
 from aioquic.quic.logger import QuicFileLogger
@@ -42,17 +41,13 @@ class HttpRequestHandler:
     def __init__(
         self,
         *,
-        authority: bytes,
         connection: HttpConnection,
-        protocol: QuicConnectionProtocol,
         scope: dict,
         stream_ended: bool,
         stream_id: int,
         transmit: Callable[[], None],
     ) -> None:
-        self.authority = authority
         self.connection = connection
-        self.protocol = protocol
         self.queue: asyncio.Queue[dict] = asyncio.Queue()
         self.scope = scope
         self.stream_id = stream_id
@@ -97,30 +92,6 @@ class HttpRequestHandler:
                 stream_id=self.stream_id,
                 data=message.get("body", b""),
                 end_stream=not message.get("more_body", False),
-            )
-        elif message["type"] == "http.response.push" and isinstance(
-            self.connection, H3Connection
-        ):
-            request_headers = [
-                (b":method", b"GET"),
-                (b":scheme", b"https"),
-                (b":authority", self.authority),
-                (b":path", message["path"].encode()),
-            ] + [(k, v) for k, v in message["headers"]]
-
-            # send push promise
-            try:
-                push_stream_id = self.connection.send_push_promise(
-                    stream_id=self.stream_id, headers=request_headers
-                )
-            except NoAvailablePushIDError:
-                return
-
-            # fake request
-            cast(HttpServerProtocol, self.protocol).http_event_received(
-                HeadersReceived(
-                    headers=request_headers, stream_ended=True, stream_id=push_stream_id
-                )
             )
         self.transmit()
 
@@ -331,7 +302,6 @@ class HttpServerProtocol(QuicConnectionProtocol):
 
     def http_event_received(self, event: H3Event) -> None:
         if isinstance(event, HeadersReceived) and event.stream_id not in self._handlers:
-            authority = None
             headers = []
             http_version = "0.9" if isinstance(self._http, H0Connection) else "3"
             raw_path = b""
@@ -339,7 +309,6 @@ class HttpServerProtocol(QuicConnectionProtocol):
             protocol = None
             for header, value in event.headers:
                 if header == b":authority":
-                    authority = value
                     headers.append((b"host", value))
                 elif header == b":method":
                     method = value.decode()
@@ -410,12 +379,8 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     transmit=self.transmit,
                 )
             else:
-                extensions: dict[str, dict] = {}
-                if isinstance(self._http, H3Connection):
-                    extensions["http.response.push"] = {}
                 scope = {
                     "client": client,
-                    "extensions": extensions,
                     "headers": headers,
                     "http_version": http_version,
                     "method": method,
@@ -427,9 +392,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     "type": "http",
                 }
                 handler = HttpRequestHandler(
-                    authority=authority,
                     connection=self._http,
-                    protocol=self,
                     scope=scope,
                     stream_ended=event.stream_ended,
                     stream_id=event.stream_id,

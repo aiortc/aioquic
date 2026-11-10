@@ -64,7 +64,6 @@ Features
    * logging QUIC events in QLOG format
    * version negotiation conforming with `RFC 9368`_
 - HTTP/3 stack conforming with `RFC 9114`_
-   * server push support
    * WebSocket bootstrapping conforming with `RFC 9220`_
    * datagram support conforming with `RFC 9297`_
 
