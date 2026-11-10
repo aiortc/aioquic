@@ -84,6 +84,12 @@ class WebTransportStreamDataReceived(H3Event):
     """
     The WebTransportStreamDataReceived is fired whenever data is received
     for a WebTransport stream.
+
+    .. warning::
+
+        This event is experimental, as WebTransport over HTTP/3 is still an
+        Internet-Draft (draft-ietf-webtrans-http3). It could change or be
+        removed in a future release.
     """
 
     data: bytes

@@ -440,10 +440,19 @@ class H3Connection:
     """
     A low-level HTTP/3 connection object.
 
+    .. warning::
+
+        The ``enable_webtransport`` option is experimental, as WebTransport over
+        HTTP/3 is still an Internet-Draft (draft-ietf-webtrans-http3). It could
+        change or be removed in a future release.
+
     :param quic: A :class:`~aioquic.quic.connection.QuicConnection` instance.
+    :param enable_webtransport: Whether to enable WebTransport.
     """
 
-    def __init__(self, quic: QuicConnection, enable_webtransport: bool = False) -> None:
+    def __init__(
+        self, quic: QuicConnection, *, enable_webtransport: bool = False
+    ) -> None:
         # settings
         self._max_table_capacity = 4096
         self._blocked_streams = 16
@@ -484,6 +493,12 @@ class H3Connection:
     ) -> int:
         """
         Create a WebTransport stream and return the stream ID.
+
+        .. warning::
+
+            This method is experimental, as WebTransport over HTTP/3 is still an
+            Internet-Draft (draft-ietf-webtrans-http3). It could change or be
+            removed in a future release.
 
         .. aioquic_transmit::
 
