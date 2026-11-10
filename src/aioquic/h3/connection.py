@@ -15,7 +15,11 @@ from aioquic.h3.events import (
     PushPromiseReceived,
     WebTransportStreamDataReceived,
 )
-from aioquic.h3.exceptions import InvalidStreamTypeError, NoAvailablePushIDError
+from aioquic.h3.exceptions import (
+    InvalidStreamStateError,
+    InvalidStreamTypeError,
+    NoAvailablePushIDError,
+)
 from aioquic.quic.connection import (
     QuicConnection,
     stream_is_client_initiated,
@@ -430,11 +434,6 @@ class H3Stream:
     def is_ended(self) -> bool:
         return self.sending_ended and self.receiving_ended and not self.blocked
 
-    def finish_sending(self) -> None:
-        if self.sending_ended:
-            raise FrameUnexpected("stream was already ended")
-        self.sending_ended = True
-
 
 class H3Connection:
     """
@@ -534,13 +533,12 @@ class H3Connection:
         """
         Send a datagram for the specified stream.
 
-        If the stream ID is not a client-initiated bidirectional stream, an
-        :class:`~aioquic.h3.exceptions.InvalidStreamTypeError` exception is raised.
-
         .. aioquic_transmit::
 
         :param stream_id: The stream ID.
         :param data: The HTTP/3 datagram payload.
+        :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
+            If the stream is not a client-initiated bidirectional stream.
         """
 
         # check stream ID is valid
@@ -557,18 +555,18 @@ class H3Connection:
 
         Returns the stream ID on which headers and data can be sent.
 
-        If the stream ID is not a client-initiated bidirectional stream, an
-        :class:`~aioquic.h3.exceptions.InvalidStreamTypeError` exception is raised.
-
-        If there are not available push IDs, an
-        :class:`~aioquic.h3.exceptions.NoAvailablePushIDError` exception is raised.
-
-        If called by a client, a :class:`RuntimeError` exception is raised.
-
         .. aioquic_transmit::
 
         :param stream_id: The stream ID on which to send the data.
         :param headers: The HTTP request headers for this push.
+        :raises RuntimeError:
+            If called by a client.
+        :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
+            If the stream is not a client-initiated bidirectional stream.
+        :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
+            If sending on the stream has ended.
+        :raises ~aioquic.h3.exceptions.NoAvailablePushIDError:
+            If no push ID is available.
         """
         if self._is_client:
             raise RuntimeError("Only servers may send a push promise.")
@@ -579,6 +577,11 @@ class H3Connection:
                 "Push promises can only be sent for client-initiated bidirectional "
                 "streams"
             )
+
+        # Refuse to send once the stream has ended, before a push ID is used up.
+        stream = self._stream.get(stream_id)
+        if stream is not None and stream.sending_ended:
+            raise InvalidStreamStateError("Cannot send after the stream was ended")
 
         # check a push ID is available
         if self._max_push_id is None or self._next_push_id > self._max_push_id:
@@ -599,6 +602,10 @@ class H3Connection:
         push_stream_id = self._create_uni_stream(StreamType.PUSH, push_id=push_id)
         self._quic.send_stream_data(push_stream_id, encode_uint_var(push_id))
 
+        # Create the push stream's state, so that the pushed response can be sent.
+        with self._get_or_create_stream(push_stream_id) as push_stream:
+            push_stream.push_id = push_id
+
         return push_stream_id
 
     def send_data(self, stream_id: int, data: bytes, end_stream: bool) -> None:
@@ -610,13 +617,24 @@ class H3Connection:
         :param stream_id: The stream ID on which to send the data.
         :param data: The data to send.
         :param end_stream: Whether to end the stream.
+        :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
+            If the stream is not a request stream or one of our push streams.
+        :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
+            If data is sent before the headers, after the trailers, or after the
+            stream was ended.
         """
+        self._check_stream_type_for_sending(stream_id)
+
         # check DATA frame is allowed
         with self._get_or_create_stream(stream_id) as stream:
-            if stream.headers_send_state != HeadersState.AFTER_HEADERS:
-                raise FrameUnexpected("DATA frame is not allowed in this state")
+            if stream.sending_ended:
+                raise InvalidStreamStateError("Cannot send after the stream was ended")
+            if stream.headers_send_state == HeadersState.INITIAL:
+                raise InvalidStreamStateError("Cannot send data before the headers")
+            if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
+                raise InvalidStreamStateError("Cannot send data after the trailers")
             if end_stream:
-                stream.finish_sending()
+                stream.sending_ended = True
 
         # log frame
         if self._quic_logger is not None:
@@ -643,11 +661,20 @@ class H3Connection:
         :param stream_id: The stream ID on which to send the headers.
         :param headers: The HTTP headers to send.
         :param end_stream: Whether to end the stream.
+        :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
+            If the stream is not a request stream or one of our push streams.
+        :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
+            If headers are sent after the trailers or after the stream was ended,
+            or an interim response would end the stream.
         """
+        self._check_stream_type_for_sending(stream_id)
+
         # check HEADERS frame is allowed
         with self._get_or_create_stream(stream_id) as stream:
+            if stream.sending_ended:
+                raise InvalidStreamStateError("Cannot send after the stream was ended")
             if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
-                raise FrameUnexpected("HEADERS frame is not allowed in this state")
+                raise InvalidStreamStateError("Cannot send headers after the trailers")
 
             # Interim responses precede the final response (RFC 9114 section 4.1).
             interim = (
@@ -657,8 +684,10 @@ class H3Connection:
             )
             if end_stream:
                 if interim:
-                    raise FrameUnexpected("Interim response cannot end the stream")
-                stream.finish_sending()
+                    raise InvalidStreamStateError(
+                        "Cannot end the stream with an interim response"
+                    )
+                stream.sending_ended = True
 
             frame_data = self._encode_headers(stream_id, headers)
 
@@ -702,6 +731,36 @@ class H3Connection:
         request's headers were passed to the application (RFC 9114 section 4.1).
         """
         self._quic.reset_stream(stream_id, ErrorCode.H3_REQUEST_INCOMPLETE)
+
+    def _check_stream_type_for_sending(self, stream_id: int) -> None:
+        """
+        Check the stream is a request stream or one of our push streams, before
+        any state is created for it.
+        """
+        if stream_is_request_response(stream_id):
+            return
+
+        if stream_is_unidirectional(stream_id) and (
+            stream_is_client_initiated(stream_id) != self._is_client
+        ):
+            raise InvalidStreamTypeError(
+                "Cannot send on the peer's unidirectional streams"
+            )
+
+        # HTTP messages are only sent on request streams and push streams, not
+        # on server-initiated bidirectional streams (RFC 9114 section 6.1) nor on
+        # unidirectional streams of other types (RFC 9114 section 6.2), such as
+        # the control and QPACK streams. Our push streams have state from the
+        # moment they are created.
+        stream = self._stream.get(stream_id)
+        if not (
+            stream_is_unidirectional(stream_id)
+            and stream is not None
+            and stream.push_id is not None
+        ):
+            raise InvalidStreamTypeError(
+                "Headers and data can only be sent on request and push streams"
+            )
 
     def _create_uni_stream(self, stream_type: int, push_id: int | None = None) -> int:
         """
