@@ -5,13 +5,11 @@ from aioquic.h3.events import (
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import InvalidStreamTypeError
-from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import DatagramFrameReceived
 
 from .test_h3 import (
-    FakeQuicConnection,
+    closed,
     h3_client_and_server,
-    h3_fake_client_and_server,
     h3_transfer,
 )
 from .utils import TestCase
@@ -115,7 +113,12 @@ class WebTransportTest(TestCase):
             )
 
     def test_bidirectional_stream_fragmented_frame(self) -> None:
-        with h3_fake_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+        """
+        A bidirectional WebTransport stream's frame header and session ID can be
+        received one byte at a time, and its data is passed on as each byte
+        arrives.
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
         ):
@@ -130,7 +133,7 @@ class WebTransportTest(TestCase):
             quic_client.send_stream_data(stream_id, b"foo", end_stream=True)
 
             # receive data
-            events = h3_transfer(quic_client, h3_server)
+            events = h3_transfer(quic_client, h3_server, split=True)
             self.assertEqual(
                 events,
                 [
@@ -247,7 +250,12 @@ class WebTransportTest(TestCase):
             self.assertNotIn(stream_id, h3_server._stream)
 
     def test_unidirectional_stream_fragmented_frame(self) -> None:
-        with h3_fake_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+        """
+        A unidirectional WebTransport stream's stream type and session ID can be
+        received one byte at a time, and its data is passed on as each byte
+        arrives.
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
         ):
@@ -264,7 +272,7 @@ class WebTransportTest(TestCase):
             quic_client.send_stream_data(stream_id, b"foo", end_stream=True)
 
             # receive data
-            events = h3_transfer(quic_client, h3_server)
+            events = h3_transfer(quic_client, h3_server, split=True)
             self.assertEqual(
                 events,
                 [
@@ -381,14 +389,12 @@ class WebTransportTest(TestCase):
             )
 
     def test_handle_datagram_truncated(self) -> None:
-        quic_server = FakeQuicConnection(
-            configuration=QuicConfiguration(is_client=False)
-        )
-        h3_server = H3Connection(quic_server)
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_server = H3Connection(quic_server)
 
-        # receive a datagram with a truncated session ID
-        h3_server.handle_event(DatagramFrameReceived(data=b"\xff"))
-        self.assertEqual(
-            quic_server.closed,
-            (ErrorCode.H3_DATAGRAM_ERROR, "Could not parse quarter stream ID"),
-        )
+            # receive a datagram with a truncated session ID
+            h3_server.handle_event(DatagramFrameReceived(data=b"\xff"))
+            self.assertEqual(
+                closed(quic_server),
+                (ErrorCode.H3_DATAGRAM_ERROR, "Could not parse quarter stream ID"),
+            )
