@@ -312,10 +312,10 @@ def verify_certificate(
 
 
 class CipherSuite(IntEnum):
-    AES_128_GCM_SHA256 = 0x1301
-    AES_256_GCM_SHA384 = 0x1302
-    CHACHA20_POLY1305_SHA256 = 0x1303
-    EMPTY_RENEGOTIATION_INFO_SCSV = 0x00FF
+    TLS_AES_128_GCM_SHA256 = 0x1301
+    TLS_AES_256_GCM_SHA384 = 0x1302
+    TLS_CHACHA20_POLY1305_SHA256 = 0x1303
+    TLS_EMPTY_RENEGOTIATION_INFO_SCSV = 0x00FF
 
 
 class CompressionMethod(IntEnum):
@@ -1160,9 +1160,9 @@ class KeyScheduleProxy:
 
 
 CIPHER_SUITES: dict = {
-    CipherSuite.AES_128_GCM_SHA256: hashes.SHA256,
-    CipherSuite.AES_256_GCM_SHA384: hashes.SHA384,
-    CipherSuite.CHACHA20_POLY1305_SHA256: hashes.SHA256,
+    CipherSuite.TLS_AES_128_GCM_SHA256: hashes.SHA256,
+    CipherSuite.TLS_AES_256_GCM_SHA384: hashes.SHA384,
+    CipherSuite.TLS_CHACHA20_POLY1305_SHA256: hashes.SHA256,
 }
 
 SIGNATURE_ALGORITHMS: dict = {
@@ -1362,9 +1362,9 @@ class Context:
             self._cipher_suites = cipher_suites
         else:
             self._cipher_suites = [
-                CipherSuite.AES_256_GCM_SHA384,
-                CipherSuite.AES_128_GCM_SHA256,
-                CipherSuite.CHACHA20_POLY1305_SHA256,
+                CipherSuite.TLS_AES_256_GCM_SHA384,
+                CipherSuite.TLS_AES_128_GCM_SHA256,
+                CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
             ]
         self._legacy_compression_methods: list[int] = [CompressionMethod.NULL]
         self._psk_key_exchange_modes: list[int] = [PskKeyExchangeMode.PSK_DHE_KE]

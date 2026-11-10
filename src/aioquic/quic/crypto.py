@@ -9,11 +9,11 @@ from .packet import (
 )
 
 CIPHER_SUITES = {
-    CipherSuite.AES_128_GCM_SHA256: (b"aes-128-ecb", b"aes-128-gcm"),
-    CipherSuite.AES_256_GCM_SHA384: (b"aes-256-ecb", b"aes-256-gcm"),
-    CipherSuite.CHACHA20_POLY1305_SHA256: (b"chacha20", b"chacha20-poly1305"),
+    CipherSuite.TLS_AES_128_GCM_SHA256: (b"aes-128-ecb", b"aes-128-gcm"),
+    CipherSuite.TLS_AES_256_GCM_SHA384: (b"aes-256-ecb", b"aes-256-gcm"),
+    CipherSuite.TLS_CHACHA20_POLY1305_SHA256: (b"chacha20", b"chacha20-poly1305"),
 }
-INITIAL_CIPHER_SUITE = CipherSuite.AES_128_GCM_SHA256
+INITIAL_CIPHER_SUITE = CipherSuite.TLS_AES_128_GCM_SHA256
 INITIAL_SALT_VERSION_1 = bytes.fromhex("38762cf7f55934b34d179ae6a4c80cadccbb7f0a")
 INITIAL_SALT_VERSION_2 = bytes.fromhex("0dede3def700a6db819381be6e269dcbf9bd2ed9")
 SAMPLE_SIZE = 16
@@ -35,8 +35,8 @@ def derive_key_iv_hp(
 ) -> tuple[bytes, bytes, bytes]:
     algorithm = cipher_suite_hash(cipher_suite)
     if cipher_suite in [
-        CipherSuite.AES_256_GCM_SHA384,
-        CipherSuite.CHACHA20_POLY1305_SHA256,
+        CipherSuite.TLS_AES_256_GCM_SHA384,
+        CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
     ]:
         key_size = 32
     else:

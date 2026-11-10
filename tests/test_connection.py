@@ -3196,38 +3196,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
     def test_connect_with_cipher_suite_aes128(self) -> None:
         with client_and_server(
-            client_options={"cipher_suites": [tls.CipherSuite.AES_128_GCM_SHA256]}
-        ) as (client, server):
-            # check handshake completed
-            self.check_handshake(client=client, server=server)
-
-            # check selected cipher suite
-            self.assertEqual(
-                client.tls.key_schedule.cipher_suite, tls.CipherSuite.AES_128_GCM_SHA256
-            )
-            self.assertEqual(
-                server.tls.key_schedule.cipher_suite, tls.CipherSuite.AES_128_GCM_SHA256
-            )
-
-    def test_connect_with_cipher_suite_aes256(self) -> None:
-        with client_and_server(
-            client_options={"cipher_suites": [tls.CipherSuite.AES_256_GCM_SHA384]}
-        ) as (client, server):
-            # check handshake completed
-            self.check_handshake(client=client, server=server)
-
-            # check selected cipher suite
-            self.assertEqual(
-                client.tls.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
-            )
-            self.assertEqual(
-                server.tls.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
-            )
-
-    @skipIf("chacha20" in SKIP_TESTS, "Skipping chacha20 tests")
-    def test_connect_with_cipher_suite_chacha20(self) -> None:
-        with client_and_server(
-            client_options={"cipher_suites": [tls.CipherSuite.CHACHA20_POLY1305_SHA256]}
+            client_options={"cipher_suites": [tls.CipherSuite.TLS_AES_128_GCM_SHA256]}
         ) as (client, server):
             # check handshake completed
             self.check_handshake(client=client, server=server)
@@ -3235,11 +3204,48 @@ class QuicConnectionTest(QuicConnectionTestCase):
             # check selected cipher suite
             self.assertEqual(
                 client.tls.key_schedule.cipher_suite,
-                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
+                tls.CipherSuite.TLS_AES_128_GCM_SHA256,
             )
             self.assertEqual(
                 server.tls.key_schedule.cipher_suite,
-                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
+                tls.CipherSuite.TLS_AES_128_GCM_SHA256,
+            )
+
+    def test_connect_with_cipher_suite_aes256(self) -> None:
+        with client_and_server(
+            client_options={"cipher_suites": [tls.CipherSuite.TLS_AES_256_GCM_SHA384]}
+        ) as (client, server):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+
+            # check selected cipher suite
+            self.assertEqual(
+                client.tls.key_schedule.cipher_suite,
+                tls.CipherSuite.TLS_AES_256_GCM_SHA384,
+            )
+            self.assertEqual(
+                server.tls.key_schedule.cipher_suite,
+                tls.CipherSuite.TLS_AES_256_GCM_SHA384,
+            )
+
+    @skipIf("chacha20" in SKIP_TESTS, "Skipping chacha20 tests")
+    def test_connect_with_cipher_suite_chacha20(self) -> None:
+        with client_and_server(
+            client_options={
+                "cipher_suites": [tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256]
+            }
+        ) as (client, server):
+            # check handshake completed
+            self.check_handshake(client=client, server=server)
+
+            # check selected cipher suite
+            self.assertEqual(
+                client.tls.key_schedule.cipher_suite,
+                tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
+            )
+            self.assertEqual(
+                server.tls.key_schedule.cipher_suite,
+                tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
             )
 
     def test_connect_with_custom_packet_size(self) -> None:
@@ -3894,7 +3900,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         with client_and_server() as (client, server):
             # mess with encryption key
             server._cryptos[tls.Epoch.ONE_RTT].send.setup(
-                cipher_suite=tls.CipherSuite.AES_128_GCM_SHA256,
+                cipher_suite=tls.CipherSuite.TLS_AES_128_GCM_SHA256,
                 secret=bytes(48),
                 version=server._version,
             )

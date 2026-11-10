@@ -88,12 +88,12 @@ def create_buffers() -> dict[tls.Epoch, Buffer]:
 
 def create_session_ticket() -> SessionTicket:
     """
-    Create an AES_256_GCM_SHA384 session ticket, valid for an hour.
+    Create an TLS_AES_256_GCM_SHA384 session ticket, valid for an hour.
     """
     now = datetime.datetime.now(datetime.UTC)
     return SessionTicket(
         age_add=0,
-        cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
+        cipher_suite=tls.CipherSuite.TLS_AES_256_GCM_SHA384,
         not_valid_after=now + datetime.timedelta(hours=1),
         not_valid_before=now,
         resumption_secret=bytes(48),
@@ -830,9 +830,13 @@ class ContextTest(TestCase):
             self._server_fail_hello(client, server)
 
     def test_server_bad_hello_unsupported_cipher_suite(self) -> None:
-        client = self.create_client(cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256])
+        client = self.create_client(
+            cipher_suites=[tls.CipherSuite.TLS_AES_128_GCM_SHA256]
+        )
 
-        server = self.create_server(cipher_suites=[tls.CipherSuite.AES_256_GCM_SHA384])
+        server = self.create_server(
+            cipher_suites=[tls.CipherSuite.TLS_AES_256_GCM_SHA384]
+        )
 
         with self.assertRaisesMessage(
             tls.AlertHandshakeFailure, "ClientHello has no supported cipher suite"
@@ -1036,10 +1040,10 @@ class ContextTest(TestCase):
 
         # check cipher suite
         self.assertEqual(
-            client.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+            client.key_schedule.cipher_suite, tls.CipherSuite.TLS_AES_256_GCM_SHA384
         )
         self.assertEqual(
-            server.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+            server.key_schedule.cipher_suite, tls.CipherSuite.TLS_AES_256_GCM_SHA384
         )
 
     def test_handshake(self) -> None:
@@ -1143,10 +1147,10 @@ class ContextTest(TestCase):
 
         # check cipher suite
         self.assertEqual(
-            client.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+            client.key_schedule.cipher_suite, tls.CipherSuite.TLS_AES_256_GCM_SHA384
         )
         self.assertEqual(
-            server.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+            server.key_schedule.cipher_suite, tls.CipherSuite.TLS_AES_256_GCM_SHA384
         )
 
     def test_handshake_with_certificate_request_with_certificate(self) -> None:
@@ -1202,10 +1206,10 @@ class ContextTest(TestCase):
 
         # check cipher suite
         self.assertEqual(
-            client.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+            client.key_schedule.cipher_suite, tls.CipherSuite.TLS_AES_256_GCM_SHA384
         )
         self.assertEqual(
-            server.key_schedule.cipher_suite, tls.CipherSuite.AES_256_GCM_SHA384
+            server.key_schedule.cipher_suite, tls.CipherSuite.TLS_AES_256_GCM_SHA384
         )
 
     def _test_handshake_with_certificate(
@@ -1535,13 +1539,13 @@ class ContextTest(TestCase):
         self, client_cipher_suites: list[tls.CipherSuite]
     ) -> tuple[Context, Context]:
         """
-        Create a client with an AES_128_GCM_SHA256 session ticket, and a server
-        which only supports CHACHA20_POLY1305_SHA256.
+        Create a client with an TLS_AES_128_GCM_SHA256 session ticket, and a server
+        which only supports TLS_CHACHA20_POLY1305_SHA256.
         """
         now = datetime.datetime.now(datetime.UTC)
         ticket = SessionTicket(
             age_add=0,
-            cipher_suite=tls.CipherSuite.AES_128_GCM_SHA256,
+            cipher_suite=tls.CipherSuite.TLS_AES_128_GCM_SHA256,
             not_valid_after=now + datetime.timedelta(hours=1),
             not_valid_before=now,
             resumption_secret=bytes(32),
@@ -1552,13 +1556,13 @@ class ContextTest(TestCase):
         client.session_ticket = ticket
 
         # The PSK is associated with SHA-256, so the server may accept it with
-        # CHACHA20_POLY1305_SHA256. Our server requires the ticket's cipher suite,
+        # TLS_CHACHA20_POLY1305_SHA256. Our server requires the ticket's cipher suite,
         # so it is given the ticket with that cipher suite.
         server = self.create_server(
-            cipher_suites=[tls.CipherSuite.CHACHA20_POLY1305_SHA256]
+            cipher_suites=[tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256]
         )
         server.get_session_ticket_cb = lambda label: dataclasses.replace(
-            ticket, cipher_suite=tls.CipherSuite.CHACHA20_POLY1305_SHA256
+            ticket, cipher_suite=tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256
         )
         return client, server
 
@@ -1569,18 +1573,20 @@ class ContextTest(TestCase):
         """
         client, server = self._create_other_cipher_suite_contexts(
             [
-                tls.CipherSuite.AES_128_GCM_SHA256,
-                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
+                tls.CipherSuite.TLS_AES_128_GCM_SHA256,
+                tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
             ]
         )
         self._resume(client, server)
 
-        # Check session resumption used CHACHA20_POLY1305_SHA256.
+        # Check session resumption used TLS_CHACHA20_POLY1305_SHA256.
         self.assertEqual(
-            client.key_schedule.cipher_suite, tls.CipherSuite.CHACHA20_POLY1305_SHA256
+            client.key_schedule.cipher_suite,
+            tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
         )
         self.assertEqual(
-            server.key_schedule.cipher_suite, tls.CipherSuite.CHACHA20_POLY1305_SHA256
+            server.key_schedule.cipher_suite,
+            tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
         )
 
     def test_session_ticket_other_cipher_suite_other_hash(self) -> None:
@@ -1590,16 +1596,16 @@ class ContextTest(TestCase):
         """
         client, server = self._create_other_cipher_suite_contexts(
             [
-                tls.CipherSuite.AES_128_GCM_SHA256,
-                tls.CipherSuite.AES_256_GCM_SHA384,
-                tls.CipherSuite.CHACHA20_POLY1305_SHA256,
+                tls.CipherSuite.TLS_AES_128_GCM_SHA256,
+                tls.CipherSuite.TLS_AES_256_GCM_SHA384,
+                tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
             ]
         )
 
-        # Tamper with the ServerHello to select AES_256_GCM_SHA384.
+        # Tamper with the ServerHello to select TLS_AES_256_GCM_SHA384.
         client_input = modify_server_hello(
             self._resume_server_flight(client, server),
-            cipher_suite=tls.CipherSuite.AES_256_GCM_SHA384,
+            cipher_suite=tls.CipherSuite.TLS_AES_256_GCM_SHA384,
         )
 
         # Handle server hello and abort.
@@ -1649,7 +1655,7 @@ class TlsTest(TestCase):
         hello = ClientHello(
             random=bytes(32),
             legacy_session_id=b"",
-            cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256],
+            cipher_suites=[tls.CipherSuite.TLS_AES_128_GCM_SHA256],
             legacy_compression_methods=[tls.CompressionMethod.NULL],
             key_share=[],
             psk_key_exchange_modes=[tls.PskKeyExchangeMode.PSK_DHE_KE],
@@ -1684,7 +1690,7 @@ class TlsTest(TestCase):
             ClientHello(
                 random=bytes(32),
                 legacy_session_id=b"",
-                cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256],
+                cipher_suites=[tls.CipherSuite.TLS_AES_128_GCM_SHA256],
                 legacy_compression_methods=[tls.CompressionMethod.NULL],
                 key_share=[],
                 signature_algorithms=[],
@@ -1705,7 +1711,7 @@ class TlsTest(TestCase):
             ServerHello(
                 random=bytes(32),
                 legacy_session_id=b"",
-                cipher_suite=tls.CipherSuite.AES_128_GCM_SHA256,
+                cipher_suite=tls.CipherSuite.TLS_AES_128_GCM_SHA256,
                 compression_method=tls.CompressionMethod.NULL,
                 supported_version=tls.TLS_VERSION_1_3,
             ),
@@ -1773,7 +1779,7 @@ class TlsTest(TestCase):
                 ClientHello(
                     random=bytes(32),
                     legacy_session_id=b"",
-                    cipher_suites=[tls.CipherSuite.AES_128_GCM_SHA256],
+                    cipher_suites=[tls.CipherSuite.TLS_AES_128_GCM_SHA256],
                     legacy_compression_methods=[tls.CompressionMethod.NULL],
                     key_share=[],
                     signature_algorithms=[],
@@ -1817,7 +1823,7 @@ class TlsTest(TestCase):
                 ServerHello(
                     random=bytes(32),
                     legacy_session_id=b"",
-                    cipher_suite=tls.CipherSuite.AES_128_GCM_SHA256,
+                    cipher_suite=tls.CipherSuite.TLS_AES_128_GCM_SHA256,
                     compression_method=tls.CompressionMethod.NULL,
                     other_extensions=[
                         (
