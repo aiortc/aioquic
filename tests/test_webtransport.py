@@ -298,6 +298,35 @@ class WebTransportTest(TestCase):
             # the stream is no longer tracked
             self.assertNotIn(stream_id, h3_server._stream)
 
+    def test_unidirectional_stream_headers(self) -> None:
+        """
+        HTTP messages cannot be sent on a WebTransport unidirectional stream.
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+            session_id = self._make_session(h3_client, h3_server)
+
+            stream_id = h3_server.create_webtransport_stream(
+                session_id, is_unidirectional=True
+            )
+            with self.assertRaisesMessage(
+                InvalidStreamTypeError,
+                "Headers and data can only be sent on request and push streams",
+            ):
+                h3_server.send_headers(
+                    stream_id=stream_id, headers=[(b":status", b"200")]
+                )
+            with self.assertRaisesMessage(
+                InvalidStreamTypeError,
+                "Headers and data can only be sent on request and push streams",
+            ):
+                h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
+            self.assertNotIn(stream_id, h3_server._stream)
+
     def test_unidirectional_stream_reset(self) -> None:
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
@@ -335,7 +364,10 @@ class WebTransportTest(TestCase):
             session_id = self._make_session(h3_client, h3_server)
 
             # send datagram on a server-initiated stream
-            with self.assertRaises(InvalidStreamTypeError):
+            with self.assertRaisesMessage(
+                InvalidStreamTypeError,
+                "Datagrams can only be sent for client-initiated bidirectional streams",
+            ):
                 h3_client.send_datagram(data=b"foo", stream_id=1)
 
             # send datagram

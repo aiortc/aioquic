@@ -46,6 +46,9 @@ Exceptions
     .. autoclass:: H3Error
         :members:
 
+    .. autoclass:: InvalidStreamStateError
+        :members:
+
     .. autoclass:: InvalidStreamTypeError
         :members:
 
