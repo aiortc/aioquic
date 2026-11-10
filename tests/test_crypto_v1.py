@@ -171,7 +171,7 @@ class CryptoTest(TestCase):
             "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
         )
         key, iv, hp = derive_key_iv_hp(
-            cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
+            cipher_suite=CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
             secret=secret,
             version=PROTOCOL_VERSION,
         )
@@ -193,7 +193,7 @@ class CryptoTest(TestCase):
     def test_decrypt_chacha20(self) -> None:
         pair = CryptoPair()
         pair.recv.setup(
-            cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
+            cipher_suite=CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
             secret=bytes.fromhex(
                 "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
             ),
@@ -211,7 +211,7 @@ class CryptoTest(TestCase):
     def test_decrypt_chacha20_truncated(self) -> None:
         pair = CryptoPair()
         pair.recv.setup(
-            cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
+            cipher_suite=CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
             secret=bytes.fromhex(
                 "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
             ),
@@ -293,7 +293,7 @@ class CryptoTest(TestCase):
     def test_encrypt_chacha20(self) -> None:
         pair = CryptoPair()
         pair.send.setup(
-            cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
+            cipher_suite=CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
             secret=bytes.fromhex(
                 "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
             ),
@@ -413,7 +413,7 @@ class CryptoTest(TestCase):
         # https://datatracker.ietf.org/doc/html/rfc9001#appendix-A.5
         crypto = CryptoContext()
         crypto.setup(
-            cipher_suite=CipherSuite.CHACHA20_POLY1305_SHA256,
+            cipher_suite=CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
             secret=bytes.fromhex(
                 "9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b"
             ),

@@ -483,8 +483,8 @@ if __name__ == "__main__":
         "--cipher-suites",
         type=str,
         help=(
-            "only advertise the given cipher suites, e.g. `AES_256_GCM_SHA384,"
-            "CHACHA20_POLY1305_SHA256`"
+            "only advertise the given cipher suites, e.g. `TLS_AES_256_GCM_SHA384,"
+            "TLS_CHACHA20_POLY1305_SHA256`"
         ),
     )
     parser.add_argument(
