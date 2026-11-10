@@ -31,9 +31,6 @@ Events
     .. autoclass:: HeadersReceived
         :members:
 
-    .. autoclass:: PushPromiseReceived
-        :members:
-
     .. autoclass:: WebTransportStreamDataReceived
         :members:
 
@@ -50,7 +47,4 @@ Exceptions
         :members:
 
     .. autoclass:: InvalidStreamTypeError
-        :members:
-
-    .. autoclass:: NoAvailablePushIDError
         :members:

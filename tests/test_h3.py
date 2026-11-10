@@ -17,22 +17,12 @@ from aioquic.h3.connection import (
     encode_settings,
     is_interim_response,
     parse_settings,
-    validate_push_promise_headers,
     validate_request_headers,
     validate_response_headers,
     validate_trailers,
 )
-from aioquic.h3.events import (
-    DataReceived,
-    H3Event,
-    HeadersReceived,
-    PushPromiseReceived,
-)
-from aioquic.h3.exceptions import (
-    InvalidStreamStateError,
-    InvalidStreamTypeError,
-    NoAvailablePushIDError,
-)
+from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
+from aioquic.h3.exceptions import InvalidStreamStateError, InvalidStreamTypeError
 from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import (
     QuicEvent,
@@ -211,6 +201,35 @@ class H3ConnectionTest(TestCase):
         h3_transfer(quic_client, h3_server)
         self.assertIn(stream_id, h3_server._stream)
         return stream_id
+
+    def test_handle_control_frame_cancel_push(self) -> None:
+        """
+        No push ID can be cancelled, as servers never push and clients never
+        send MAX_PUSH_ID, see RFC 9114 section 7.2.3.
+        """
+        for is_client in (True, False):
+            with (
+                self.subTest(is_client=is_client),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                quic = quic_client if is_client else quic_server
+                h3 = H3Connection(quic)
+
+                h3.handle_event(
+                    StreamDataReceived(
+                        stream_id=3 if is_client else 2,
+                        data=encode_uint_var(StreamType.CONTROL)
+                        + encode_frame(
+                            FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)
+                        )
+                        + encode_frame(FrameType.CANCEL_PUSH, encode_uint_var(0)),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(
+                    closed(quic),
+                    (ErrorCode.H3_ID_ERROR, "Server push is not supported"),
+                )
 
     def test_handle_control_frame_headers(self) -> None:
         """
@@ -720,96 +739,6 @@ class H3ConnectionTest(TestCase):
                 ),
             )
 
-    def test_handle_push_frame_wrong_frame_type(self) -> None:
-        """
-        We should not received SETTINGS on a push stream.
-        """
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-
-            h3_client.handle_event(
-                StreamDataReceived(
-                    stream_id=15,
-                    data=encode_uint_var(StreamType.PUSH)
-                    + encode_uint_var(0)  # push ID
-                    + encode_frame(FrameType.SETTINGS, b""),
-                    end_stream=False,
-                )
-            )
-            self.assertEqual(
-                closed(quic_client),
-                (ErrorCode.H3_FRAME_UNEXPECTED, "Invalid frame type on push stream"),
-            )
-
-    def test_handle_push_frame_reserved(self) -> None:
-        """
-        Frame types reserved from HTTP/2 must be rejected on a push stream,
-        see RFC 9114 section 7.2.8.
-        """
-        for frame_type in [0x2, 0x6, 0x8, 0x9]:
-            with (
-                self.subTest(frame_type=frame_type),
-                h3_client_and_server() as (quic_client, quic_server),
-            ):
-                h3_client = H3Connection(quic_client)
-
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=15,
-                        data=encode_uint_var(StreamType.PUSH)
-                        + encode_uint_var(0)  # push ID
-                        + encode_frame(frame_type, b""),
-                        end_stream=False,
-                    )
-                )
-                self.assertEqual(
-                    closed(quic_client),
-                    (
-                        ErrorCode.H3_FRAME_UNEXPECTED,
-                        "Invalid frame type on push stream",
-                    ),
-                )
-
-    def test_handle_push_frame_wrong_frame_type_header_only(self) -> None:
-        """
-        Frames which are not allowed on a push stream must be rejected from
-        the frame header alone, without buffering their payload.
-        """
-        for frame_type in [
-            FrameType.CANCEL_PUSH,
-            FrameType.SETTINGS,
-            FrameType.PUSH_PROMISE,
-            FrameType.GOAWAY,
-            FrameType.MAX_PUSH_ID,
-            0x2,
-            0x6,
-            0x8,
-            0x9,
-        ]:
-            with (
-                self.subTest(frame_type=frame_type),
-                h3_client_and_server() as (quic_client, quic_server),
-            ):
-                h3_client = H3Connection(quic_client)
-
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=15,
-                        data=encode_uint_var(StreamType.PUSH)
-                        + encode_uint_var(0)  # push ID
-                        + encode_uint_var(frame_type)
-                        + encode_uint_var(1000000),
-                        end_stream=False,
-                    )
-                )
-                self.assertEqual(
-                    closed(quic_client),
-                    (
-                        ErrorCode.H3_FRAME_UNEXPECTED,
-                        "Invalid frame type on push stream",
-                    ),
-                )
-
     def test_handle_push_stream_from_client(self) -> None:
         """
         A server must reject a push stream, see RFC 9114 section 6.2.2.
@@ -832,30 +761,25 @@ class H3ConnectionTest(TestCase):
                 ),
             )
 
-    def test_handle_push_stream_push_id_exceeds_max(self) -> None:
+    def test_handle_push_stream_from_server(self) -> None:
         """
-        A client must reject a push stream whose push ID exceeds the
-        MAX_PUSH_ID it sent, see RFC 9114 section 4.6.
+        A client must reject a push stream, as it never sends MAX_PUSH_ID, see
+        RFC 9114 section 4.6.
         """
-        for push_id, expected_closed in [
-            (8, None),
-            (9, (ErrorCode.H3_ID_ERROR, "Push ID exceeds the maximum push ID")),
-        ]:
-            with (
-                self.subTest(push_id=push_id),
-                h3_client_and_server() as (quic_client, quic_server),
-            ):
-                h3_client = H3Connection(quic_client)
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
 
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=15,
-                        data=encode_uint_var(StreamType.PUSH)
-                        + encode_uint_var(push_id),
-                        end_stream=False,
-                    )
+            h3_client.handle_event(
+                StreamDataReceived(
+                    stream_id=15,
+                    data=encode_uint_var(StreamType.PUSH),
+                    end_stream=False,
                 )
-                self.assertEqual(closed(quic_client), expected_closed)
+            )
+            self.assertEqual(
+                closed(quic_client),
+                (ErrorCode.H3_ID_ERROR, "Server push is not supported"),
+            )
 
     def test_handle_qpack_decoder_duplicate(self) -> None:
         """
@@ -1141,66 +1065,6 @@ class H3ConnectionTest(TestCase):
             h3_transfer(quic_server, h3_client)
             self.assertIsNone(closed(quic_client))
 
-    def test_handle_request_frame_push_promise_at_end(self) -> None:
-        """
-        PUSH_PROMISE can be the last frame on a request stream, see
-        RFC 9114 section 4.1.
-        """
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-            h3_server = H3Connection(quic_server)
-
-            # send request
-            stream_id = quic_client.get_next_available_stream_id()
-            h3_client.send_headers(
-                stream_id=stream_id,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/"),
-                ],
-                end_stream=True,
-            )
-            h3_transfer(quic_client, h3_server)
-
-            # send response followed by a push promise
-            h3_server.send_headers(
-                stream_id=stream_id,
-                headers=[(b":status", b"200")],
-                end_stream=False,
-            )
-            h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=False)
-            push_headers = [
-                (b":method", b"GET"),
-                (b":scheme", b"https"),
-                (b":authority", b"localhost"),
-                (b":path", b"/app.css"),
-            ]
-            h3_server.send_push_promise(stream_id=stream_id, headers=push_headers)
-            quic_server.send_stream_data(stream_id, b"", end_stream=True)
-
-            # receive response
-            events = h3_transfer(quic_server, h3_client)
-            self.assertIsNone(closed(quic_client))
-            self.assertEqual(
-                events,
-                [
-                    HeadersReceived(
-                        headers=[(b":status", b"200")],
-                        stream_id=stream_id,
-                        stream_ended=False,
-                    ),
-                    DataReceived(
-                        data=b"hello", stream_id=stream_id, stream_ended=False
-                    ),
-                    PushPromiseReceived(
-                        headers=push_headers, push_id=0, stream_id=stream_id
-                    ),
-                    DataReceived(data=b"", stream_id=stream_id, stream_ended=True),
-                ],
-            )
-
     def test_handle_request_frame_push_promise_from_client(self) -> None:
         """
         A server should not receive PUSH_PROMISE on a request stream.
@@ -1220,66 +1084,26 @@ class H3ConnectionTest(TestCase):
                 (ErrorCode.H3_FRAME_UNEXPECTED, "Clients must not send PUSH_PROMISE"),
             )
 
-    def test_handle_request_frame_push_promise_id_exceeds_max(self) -> None:
+    def test_handle_request_frame_push_promise_from_server(self) -> None:
         """
-        A client must reject a PUSH_PROMISE whose push ID exceeds the
-        MAX_PUSH_ID it sent, see RFC 9114 section 7.2.5.
-        """
-        push_headers = [
-            (b":method", b"GET"),
-            (b":scheme", b"https"),
-            (b":authority", b"localhost"),
-            (b":path", b"/app.css"),
-        ]
-        for push_id, expected_events, expected_closed in [
-            (
-                8,
-                [PushPromiseReceived(headers=push_headers, push_id=8, stream_id=0)],
-                None,
-            ),
-            (
-                9,
-                [],
-                (ErrorCode.H3_ID_ERROR, "Push ID exceeds the maximum push ID"),
-            ),
-        ]:
-            with (
-                self.subTest(push_id=push_id),
-                h3_client_and_server() as (quic_client, quic_server),
-            ):
-                h3_client = H3Connection(quic_client)
-
-                events = h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=0,
-                        data=encode_frame(
-                            FrameType.PUSH_PROMISE,
-                            encode_uint_var(push_id)
-                            + bytes.fromhex("0000d1d75086a0e41d139d0951866075d6b9108f"),
-                        ),
-                        end_stream=False,
-                    )
-                )
-                self.assertEqual(events, expected_events)
-                self.assertEqual(closed(quic_client), expected_closed)
-
-    def test_handle_request_frame_push_promise_truncated(self) -> None:
-        """
-        A client should reject a PUSH_PROMISE frame without a push ID.
+        A client must reject a PUSH_PROMISE, as it never sends MAX_PUSH_ID, see
+        RFC 9114 section 7.2.5. It is rejected from the frame header alone.
         """
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
 
-            h3_client.handle_event(
+            events = h3_client.handle_event(
                 StreamDataReceived(
                     stream_id=0,
-                    data=encode_frame(FrameType.PUSH_PROMISE, b""),
+                    data=encode_uint_var(FrameType.PUSH_PROMISE)
+                    + encode_uint_var(1000000),
                     end_stream=False,
                 )
             )
+            self.assertEqual(events, [])
             self.assertEqual(
                 closed(quic_client),
-                (ErrorCode.H3_FRAME_ERROR, "Could not parse PUSH_PROMISE frame"),
+                (ErrorCode.H3_ID_ERROR, "Server push is not supported"),
             )
 
     def test_handle_request_frame_wrong_frame_type(self) -> None:
@@ -1632,6 +1456,19 @@ class H3ConnectionTest(TestCase):
                 [DataReceived(data=b"hello", stream_id=stream_id, stream_ended=True)],
             )
 
+    def test_max_push_id_not_sent(self) -> None:
+        """
+        A client never sends MAX_PUSH_ID, so servers cannot push, see RFC 9114
+        section 4.6.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertTrue(h3_server._settings_received)
+            self.assertIsNone(h3_server._max_push_id)
+
     def test_request(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
@@ -1760,18 +1597,6 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-            # send push promise
-            push_stream_id = h3_server.send_push_promise(
-                stream_id=stream_id,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/app.txt"),
-                ],
-            )
-            self.assertEqual(push_stream_id, 15)
-
             # send response
             h3_server.send_headers(
                 stream_id=stream_id,
@@ -1783,29 +1608,11 @@ class H3ConnectionTest(TestCase):
             )
             h3_server.send_data(stream_id=stream_id, data=b"html", end_stream=True)
 
-            #  fulfill push promise
-            h3_server.send_headers(
-                stream_id=push_stream_id,
-                headers=[(b":status", b"200"), (b"content-type", b"text/plain")],
-                end_stream=False,
-            )
-            h3_server.send_data(stream_id=push_stream_id, data=b"text", end_stream=True)
-
-            # receive push promise / response
+            # receive response
             events = h3_transfer(quic_server, h3_client, split=True)
             self.assertEqual(
                 events,
                 [
-                    PushPromiseReceived(
-                        headers=[
-                            (b":method", b"GET"),
-                            (b":scheme", b"https"),
-                            (b":authority", b"localhost"),
-                            (b":path", b"/app.txt"),
-                        ],
-                        push_id=0,
-                        stream_id=stream_id,
-                    ),
                     HeadersReceived(
                         headers=[
                             (b":status", b"200"),
@@ -1819,278 +1626,8 @@ class H3ConnectionTest(TestCase):
                     DataReceived(data=b"m", stream_id=0, stream_ended=False),
                     DataReceived(data=b"l", stream_id=0, stream_ended=False),
                     DataReceived(data=b"", stream_id=0, stream_ended=True),
-                    HeadersReceived(
-                        headers=[
-                            (b":status", b"200"),
-                            (b"content-type", b"text/plain"),
-                        ],
-                        stream_id=15,
-                        stream_ended=False,
-                        push_id=0,
-                    ),
-                    DataReceived(
-                        data=b"t", stream_id=15, stream_ended=False, push_id=0
-                    ),
-                    DataReceived(
-                        data=b"e", stream_id=15, stream_ended=False, push_id=0
-                    ),
-                    DataReceived(
-                        data=b"x", stream_id=15, stream_ended=False, push_id=0
-                    ),
-                    DataReceived(
-                        data=b"t", stream_id=15, stream_ended=False, push_id=0
-                    ),
-                    DataReceived(data=b"", stream_id=15, stream_ended=True, push_id=0),
                 ],
             )
-
-    def test_request_with_server_push(self) -> None:
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-            h3_server = H3Connection(quic_server)
-
-            # send request
-            stream_id = quic_client.get_next_available_stream_id()
-            h3_client.send_headers(
-                stream_id=stream_id,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/"),
-                ],
-                end_stream=True,
-            )
-
-            # receive request
-            events = h3_transfer(quic_client, h3_server)
-            self.assertEqual(
-                events,
-                [
-                    HeadersReceived(
-                        headers=[
-                            (b":method", b"GET"),
-                            (b":scheme", b"https"),
-                            (b":authority", b"localhost"),
-                            (b":path", b"/"),
-                        ],
-                        stream_id=stream_id,
-                        stream_ended=True,
-                    )
-                ],
-            )
-
-            # send push promises
-            push_stream_id_css = h3_server.send_push_promise(
-                stream_id=stream_id,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/app.css"),
-                ],
-            )
-            self.assertEqual(push_stream_id_css, 15)
-
-            push_stream_id_js = h3_server.send_push_promise(
-                stream_id=stream_id,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/app.js"),
-                ],
-            )
-            self.assertEqual(push_stream_id_js, 19)
-
-            # send response
-            h3_server.send_headers(
-                stream_id=stream_id,
-                headers=[
-                    (b":status", b"200"),
-                    (b"content-type", b"text/html; charset=utf-8"),
-                ],
-                end_stream=False,
-            )
-            h3_server.send_data(
-                stream_id=stream_id,
-                data=b"<html><body>hello</body></html>",
-                end_stream=True,
-            )
-
-            #  fulfill push promises
-            h3_server.send_headers(
-                stream_id=push_stream_id_css,
-                headers=[(b":status", b"200"), (b"content-type", b"text/css")],
-                end_stream=False,
-            )
-            h3_server.send_data(
-                stream_id=push_stream_id_css,
-                data=b"body { color: pink }",
-                end_stream=True,
-            )
-
-            h3_server.send_headers(
-                stream_id=push_stream_id_js,
-                headers=[
-                    (b":status", b"200"),
-                    (b"content-type", b"application/javascript"),
-                ],
-                end_stream=False,
-            )
-            h3_server.send_data(
-                stream_id=push_stream_id_js, data=b"alert('howdee');", end_stream=True
-            )
-
-            # receive push promises, response and push responses
-
-            events = h3_transfer(quic_server, h3_client)
-            self.assertEqual(
-                events,
-                [
-                    PushPromiseReceived(
-                        headers=[
-                            (b":method", b"GET"),
-                            (b":scheme", b"https"),
-                            (b":authority", b"localhost"),
-                            (b":path", b"/app.css"),
-                        ],
-                        push_id=0,
-                        stream_id=stream_id,
-                    ),
-                    PushPromiseReceived(
-                        headers=[
-                            (b":method", b"GET"),
-                            (b":scheme", b"https"),
-                            (b":authority", b"localhost"),
-                            (b":path", b"/app.js"),
-                        ],
-                        push_id=1,
-                        stream_id=stream_id,
-                    ),
-                    HeadersReceived(
-                        headers=[
-                            (b":status", b"200"),
-                            (b"content-type", b"text/html; charset=utf-8"),
-                        ],
-                        stream_id=stream_id,
-                        stream_ended=False,
-                    ),
-                    DataReceived(
-                        data=b"<html><body>hello</body></html>",
-                        stream_id=stream_id,
-                        stream_ended=True,
-                    ),
-                    HeadersReceived(
-                        headers=[(b":status", b"200"), (b"content-type", b"text/css")],
-                        push_id=0,
-                        stream_id=push_stream_id_css,
-                        stream_ended=False,
-                    ),
-                    DataReceived(
-                        data=b"body { color: pink }",
-                        push_id=0,
-                        stream_id=push_stream_id_css,
-                        stream_ended=True,
-                    ),
-                    HeadersReceived(
-                        headers=[
-                            (b":status", b"200"),
-                            (b"content-type", b"application/javascript"),
-                        ],
-                        push_id=1,
-                        stream_id=push_stream_id_js,
-                        stream_ended=False,
-                    ),
-                    DataReceived(
-                        data=b"alert('howdee');",
-                        push_id=1,
-                        stream_id=push_stream_id_js,
-                        stream_ended=True,
-                    ),
-                ],
-            )
-
-            # push streams are no longer tracked
-            for push_stream_id in (push_stream_id_css, push_stream_id_js):
-                self.assertNotIn(push_stream_id, h3_client._stream)
-                self.assertNotIn(push_stream_id, h3_server._stream)
-
-    def test_request_with_server_push_max_push_id(self) -> None:
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-            h3_server = H3Connection(quic_server)
-
-            # send request
-            stream_id = quic_client.get_next_available_stream_id()
-            h3_client.send_headers(
-                stream_id=stream_id,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/"),
-                ],
-                end_stream=True,
-            )
-
-            # receive request
-            events = h3_transfer(quic_client, h3_server)
-            self.assertEqual(
-                events,
-                [
-                    HeadersReceived(
-                        headers=[
-                            (b":method", b"GET"),
-                            (b":scheme", b"https"),
-                            (b":authority", b"localhost"),
-                            (b":path", b"/"),
-                        ],
-                        stream_id=stream_id,
-                        stream_ended=True,
-                    )
-                ],
-            )
-
-            # send push promise on a server-initiated stream
-            with self.assertRaisesMessage(
-                InvalidStreamTypeError,
-                "Push promises can only be sent for client-initiated bidirectional "
-                "streams",
-            ):
-                h3_server.send_push_promise(
-                    stream_id=1,
-                    headers=[
-                        (b":method", b"GET"),
-                        (b":scheme", b"https"),
-                        (b":authority", b"localhost"),
-                        (b":path", b"/bad.css"),
-                    ],
-                )
-
-            # send push promises
-            for i in range(0, 9):
-                h3_server.send_push_promise(
-                    stream_id=stream_id,
-                    headers=[
-                        (b":method", b"GET"),
-                        (b":scheme", b"https"),
-                        (b":authority", b"localhost"),
-                        (b":path", f"/{i}.css".encode("ascii")),
-                    ],
-                )
-
-            # send one too many
-            with self.assertRaises(NoAvailablePushIDError):
-                h3_server.send_push_promise(
-                    stream_id=stream_id,
-                    headers=[
-                        (b":method", b"GET"),
-                        (b":scheme", b"https"),
-                        (b":authority", b"localhost"),
-                        (b":path", b"/9.css"),
-                    ],
-                )
 
     def test_send_after_stop_sending(self) -> None:
         """
@@ -2218,52 +1755,6 @@ class H3ConnectionTest(TestCase):
                 stream_id=stream_id, headers=[(b":status", b"200")], end_stream=True
             )
 
-    def test_send_on_cancelled_push_stream(self) -> None:
-        """
-        We should not send on a push stream once the client cancelled it.
-
-        This pins a known issue which needs resolving as future work: the push
-        stream's state is deleted at once, so it is no longer recognised as a
-        push stream and InvalidStreamTypeError is raised, where it should be
-        InvalidStreamStateError as for a request stream.
-        """
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-            h3_server = H3Connection(quic_server)
-            stream_id = self._send_request_headers(h3_client, h3_server)
-            push_stream_id = h3_server.send_push_promise(
-                stream_id=stream_id,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/app.txt"),
-                ],
-            )
-            h3_transfer(quic_server, h3_client)
-
-            # The client cancels the push.
-            quic_client.stop_stream(push_stream_id, ErrorCode.H3_REQUEST_CANCELLED)
-            self.assertEqual(h3_transfer(quic_client, h3_server), [])
-            self.assertNotIn(push_stream_id, h3_server._stream)
-
-            # The server can no longer send the pushed response.
-            with self.assertRaisesMessage(
-                InvalidStreamTypeError,
-                "Headers and data can only be sent on request and push streams",
-            ):
-                h3_server.send_headers(
-                    stream_id=push_stream_id, headers=[(b":status", b"200")]
-                )
-            with self.assertRaisesMessage(
-                InvalidStreamTypeError,
-                "Headers and data can only be sent on request and push streams",
-            ):
-                h3_server.send_data(
-                    stream_id=push_stream_id, data=b"hello", end_stream=True
-                )
-            self.assertNotIn(push_stream_id, h3_server._stream)
-
     def test_send_on_critical_stream(self) -> None:
         """
         We should not send HTTP messages on our control or QPACK streams, which
@@ -2283,14 +1774,14 @@ class H3ConnectionTest(TestCase):
                 with self.subTest(stream_id=stream_id):
                     with self.assertRaisesMessage(
                         InvalidStreamTypeError,
-                        "Headers and data can only be sent on request and push streams",
+                        "Headers and data can only be sent on request streams",
                     ):
                         h3_server.send_headers(
                             stream_id=stream_id, headers=[(b":status", b"200")]
                         )
                     with self.assertRaisesMessage(
                         InvalidStreamTypeError,
-                        "Headers and data can only be sent on request and push streams",
+                        "Headers and data can only be sent on request streams",
                     ):
                         h3_server.send_data(
                             stream_id=stream_id, data=b"hello", end_stream=True
@@ -2303,9 +1794,8 @@ class H3ConnectionTest(TestCase):
 
     def test_send_on_non_request_stream(self) -> None:
         """
-        We should only send HTTP messages on request streams and push streams,
-        not on a client's unidirectional streams nor on a server's bidirectional
-        streams.
+        We should only send HTTP messages on request streams, not on a client's
+        unidirectional streams nor on a server's bidirectional streams.
         """
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
@@ -2320,14 +1810,14 @@ class H3ConnectionTest(TestCase):
                 with self.subTest(stream_id=stream_id):
                     with self.assertRaisesMessage(
                         InvalidStreamTypeError,
-                        "Headers and data can only be sent on request and push streams",
+                        "Headers and data can only be sent on request streams",
                     ):
                         h3.send_headers(
                             stream_id=stream_id, headers=[(b"x-foo", b"bar")]
                         )
                     with self.assertRaisesMessage(
                         InvalidStreamTypeError,
-                        "Headers and data can only be sent on request and push streams",
+                        "Headers and data can only be sent on request streams",
                     ):
                         h3.send_data(
                             stream_id=stream_id, data=b"hello", end_stream=True
@@ -2373,49 +1863,6 @@ class H3ConnectionTest(TestCase):
                             stream_id=stream_id, data=b"hello", end_stream=True
                         )
             self.assertNotIn(unknown_stream_id, h3_server._stream)
-
-    def test_send_push_promise_after_stream_ended(self) -> None:
-        """
-        We should not send a push promise on a request stream once the response
-        was ended, nor use up a push ID.
-        """
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-            h3_server = H3Connection(quic_server)
-            stream_id = self._send_request_headers(h3_client, h3_server)
-
-            # The server sends the full response, the request body is still to
-            # come, so the stream's state is kept.
-            h3_server.send_headers(
-                stream_id=stream_id, headers=[(b":status", b"200")], end_stream=True
-            )
-            self.assertIn(stream_id, h3_server._stream)
-
-            with self.assertRaisesMessage(
-                InvalidStreamStateError, "Cannot send after the stream was ended"
-            ):
-                h3_server.send_push_promise(
-                    stream_id=stream_id,
-                    headers=[
-                        (b":method", b"GET"),
-                        (b":scheme", b"https"),
-                        (b":authority", b"localhost"),
-                        (b":path", b"/app.txt"),
-                    ],
-                )
-            self.assertEqual(h3_server._next_push_id, 0)
-
-    def test_send_push_promise_from_client(self) -> None:
-        """
-        Clients cannot send a push promise.
-        """
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-
-            with self.assertRaisesMessage(
-                RuntimeError, "Only servers may send a push promise."
-            ):
-                h3_client.send_push_promise(stream_id=0, headers=[])
 
     def test_blocked_stream(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
@@ -2496,142 +1943,6 @@ class H3ConnectionTest(TestCase):
                     ),
                 ],
             )
-
-            # The stream is no longer tracked.
-            self.assertNotIn(0, h3_client._stream)
-
-    def test_blocked_stream_push_promise(self) -> None:
-        """
-        A PUSH_PROMISE whose header block is blocked must be resumed as a
-        PUSH_PROMISE, see RFC 9204 section 2.1.2.
-        """
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-
-            # Send request.
-            h3_client.send_headers(
-                stream_id=0,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/"),
-                ],
-                end_stream=True,
-            )
-
-            # Receive a response ending with a PUSH_PROMISE which references
-            # dynamic table entries which have not been received yet.
-            self.assertEqual(
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=0,
-                        data=bytes.fromhex("01030000d90507000381d1d71011"),
-                        end_stream=True,
-                    )
-                ),
-                [
-                    HeadersReceived(
-                        headers=[(b":status", b"200")],
-                        stream_id=0,
-                        stream_ended=False,
-                    )
-                ],
-            )
-
-            # Receive the dynamic table entries on the QPACK encoder stream.
-            self.assertEqual(
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=3,
-                        data=bytes.fromhex("023fe11fc086a0e41d139d09c1866075d6b9108f"),
-                        end_stream=False,
-                    )
-                ),
-                [
-                    PushPromiseReceived(
-                        headers=[
-                            (b":method", b"GET"),
-                            (b":scheme", b"https"),
-                            (b":authority", b"localhost"),
-                            (b":path", b"/app.css"),
-                        ],
-                        push_id=0,
-                        stream_id=0,
-                    ),
-                    DataReceived(data=b"", stream_id=0, stream_ended=True),
-                ],
-            )
-            self.assertIsNone(closed(quic_client))
-
-            # The stream is no longer tracked.
-            self.assertNotIn(0, h3_client._stream)
-
-    def test_blocked_stream_push_promise_then_data(self) -> None:
-        """
-        Frames following a blocked PUSH_PROMISE must be processed once it
-        is resumed.
-        """
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-
-            # Send request.
-            h3_client.send_headers(
-                stream_id=0,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/"),
-                ],
-                end_stream=True,
-            )
-
-            # Receive a response with a PUSH_PROMISE which references dynamic
-            # table entries which have not been received yet, followed by DATA.
-            self.assertEqual(
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=0,
-                        data=bytes.fromhex(
-                            "01030000d90507000381d1d71011000568656c6c6f"
-                        ),
-                        end_stream=True,
-                    )
-                ),
-                [
-                    HeadersReceived(
-                        headers=[(b":status", b"200")],
-                        stream_id=0,
-                        stream_ended=False,
-                    )
-                ],
-            )
-
-            # Receive the dynamic table entries on the QPACK encoder stream.
-            self.assertEqual(
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=3,
-                        data=bytes.fromhex("023fe11fc086a0e41d139d09c1866075d6b9108f"),
-                        end_stream=False,
-                    )
-                ),
-                [
-                    PushPromiseReceived(
-                        headers=[
-                            (b":method", b"GET"),
-                            (b":scheme", b"https"),
-                            (b":authority", b"localhost"),
-                            (b":path", b"/app.css"),
-                        ],
-                        push_id=0,
-                        stream_id=0,
-                    ),
-                    DataReceived(data=b"hello", stream_id=0, stream_ended=True),
-                ],
-            )
-            self.assertIsNone(closed(quic_client))
 
             # The stream is no longer tracked.
             self.assertNotIn(0, h3_client._stream)
@@ -2816,7 +2127,6 @@ class H3ConnectionTest(TestCase):
                         headers=[(b"x-some-trailer", b"foo")],
                         stream_id=0,
                         stream_ended=True,
-                        push_id=None,
                     )
                 ],
             )
@@ -3576,109 +2886,6 @@ class H3ParserTest(TestCase):
             parse_settings(buf.data)
         self.assertEqual(
             cm.exception.reason_phrase, "Setting identifier 0x0 is reserved"
-        )
-
-    def test_validate_push_promise_headers(self) -> None:
-        # OK
-        validate_push_promise_headers(
-            [
-                (b":method", b"GET"),
-                (b":scheme", b"https"),
-                (b":path", b"/"),
-                (b":authority", b"localhost"),
-            ]
-        )
-        validate_push_promise_headers(
-            [
-                (b":method", b"GET"),
-                (b":scheme", b"https"),
-                (b":path", b"/"),
-                (b":authority", b"localhost"),
-                (b"x-foo", b"bar"),
-            ]
-        )
-
-        # TE is allowed in a promised request, but only as trailers.
-        for value in (b"trailers", b"Trailers"):
-            with self.subTest(value=value):
-                validate_push_promise_headers(
-                    [
-                        (b":method", b"GET"),
-                        (b":scheme", b"https"),
-                        (b":path", b"/"),
-                        (b":authority", b"localhost"),
-                        (b"te", value),
-                    ]
-                )
-        with self.assertRaises(MessageError) as cm:
-            validate_push_promise_headers([(b"te", b"bogus")])
-        self.assertEqual(
-            cm.exception.reason_phrase, "Header b'te' value is not trailers"
-        )
-
-        # Other connection-specific fields are forbidden.
-        for name in (
-            b"connection",
-            b"keep-alive",
-            b"proxy-connection",
-            b"transfer-encoding",
-            b"upgrade",
-        ):
-            with self.subTest(header=name):
-                with self.assertRaises(MessageError) as cm:
-                    validate_push_promise_headers([(name, b"trailers")])
-                self.assertEqual(
-                    cm.exception.reason_phrase,
-                    f"Header {name!r} is connection-specific",
-                )
-
-        # invalid pseudo-header
-        with self.assertRaises(MessageError) as cm:
-            validate_push_promise_headers([(b":status", b"foo")])
-        self.assertEqual(
-            cm.exception.reason_phrase, "Pseudo-header b':status' is not valid"
-        )
-
-        # duplicate pseudo-header
-        with self.assertRaises(MessageError) as cm:
-            validate_push_promise_headers(
-                [
-                    (b":method", b"GET"),
-                    (b":method", b"POST"),
-                ]
-            )
-        self.assertEqual(
-            cm.exception.reason_phrase, "Pseudo-header b':method' is included twice"
-        )
-
-        # pseudo-header after regular headers
-        with self.assertRaises(MessageError) as cm:
-            validate_push_promise_headers(
-                [
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":path", b"/"),
-                    (b"x-foo", b"bar"),
-                    (b":authority", b"foo"),
-                ]
-            )
-        self.assertEqual(
-            cm.exception.reason_phrase,
-            "Pseudo-header b':authority' is not allowed after regular headers",
-        )
-
-        # missing pseudo-headers
-        with self.assertRaises(MessageError) as cm:
-            validate_push_promise_headers(
-                [
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":path", b"/"),
-                ]
-            )
-        self.assertEqual(
-            cm.exception.reason_phrase,
-            "Pseudo-headers [b':authority'] are missing",
         )
 
     def test_validate_request_headers(self) -> None:

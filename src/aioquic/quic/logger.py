@@ -239,19 +239,6 @@ class QuicLoggerTrace:
             "stream_id": stream_id,
         }
 
-    def encode_http3_push_promise_frame(
-        self, length: int, headers: Headers, push_id: int, stream_id: int
-    ) -> dict:
-        return {
-            "frame": {
-                "frame_type": "push_promise",
-                "headers": self._encode_http3_headers(headers),
-                "push_id": push_id,
-            },
-            "length": length,
-            "stream_id": stream_id,
-        }
-
     def _encode_http3_headers(self, headers: Headers) -> list[dict]:
         return [
             {"name": h[0].decode("utf8"), "value": h[1].decode("utf8")} for h in headers
