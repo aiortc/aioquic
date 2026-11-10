@@ -5,6 +5,7 @@ from typing import Any
 from aioquic.buffer import Buffer, encode_uint_var
 from aioquic.h3.connection import (
     H3_ALPN,
+    MAX_SETTINGS_SIZE,
     ErrorCode,
     FrameType,
     H3Connection,
@@ -337,6 +338,41 @@ class H3ConnectionTest(TestCase):
             self.assertIsNone(closed(quic_server))
             self.assertEqual(h3_server.received_settings, DUMMY_SETTINGS)
 
+    def test_handle_control_frame_settings_too_large(self) -> None:
+        """
+        A SETTINGS frame of up to 4 KiB is accepted, a larger one is rejected
+        from its header alone.
+        """
+        # 1365 unknown settings, one with a 2-byte value, make 4096 bytes.
+        settings = {0x40 + i: 0 for i in range(1364)} | {0x40 + 1364: 0x40}
+        payload = encode_settings(settings)
+        self.assertEqual(len(payload), MAX_SETTINGS_SIZE)
+
+        for frame_size, data, expected_closed, expected_settings in [
+            (4096, encode_frame(FrameType.SETTINGS, payload), None, settings),
+            (
+                4097,
+                encode_uint_var(FrameType.SETTINGS) + encode_uint_var(4097),
+                (ErrorCode.H3_EXCESSIVE_LOAD, "SETTINGS frame is too large"),
+                None,
+            ),
+        ]:
+            with (
+                self.subTest(frame_size=frame_size),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_server = H3Connection(quic_server)
+
+                h3_server.handle_event(
+                    StreamDataReceived(
+                        stream_id=2,
+                        data=encode_uint_var(StreamType.CONTROL) + data,
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(closed(quic_server), expected_closed)
+                self.assertEqual(h3_server.received_settings, expected_settings)
+
     def test_handle_control_frame_settings_truncated(self) -> None:
         """
         We should reject a SETTINGS frame which ends in the middle of a setting.
@@ -585,6 +621,46 @@ class H3ConnectionTest(TestCase):
                         + encode_frame(
                             FrameType.MAX_PUSH_ID, encode_uint_var(max_push_id)
                         ),
+                        end_stream=False,
+                    )
+                )
+                self.assertEqual(closed(quic_server), expected_closed)
+                self.assertEqual(h3_server._max_push_id, expected_max_push_id)
+
+    def test_handle_control_frame_max_push_id_too_long(self) -> None:
+        """
+        A MAX_PUSH_ID frame carries a single variable-length integer, so one
+        which is longer than 8 bytes is rejected from its header alone, see
+        RFC 9114 sections 7.1 and 7.2.7.
+        """
+        for frame_size, data, expected_closed, expected_max_push_id in [
+            (
+                8,
+                encode_frame(FrameType.MAX_PUSH_ID, encode_uint_var(2**30)),
+                None,
+                2**30,
+            ),
+            (
+                9,
+                encode_uint_var(FrameType.MAX_PUSH_ID) + encode_uint_var(9),
+                (ErrorCode.H3_FRAME_ERROR, "MAX_PUSH_ID frame has trailing data"),
+                None,
+            ),
+        ]:
+            with (
+                self.subTest(frame_size=frame_size),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_server = H3Connection(quic_server)
+
+                h3_server.handle_event(
+                    StreamDataReceived(
+                        stream_id=2,
+                        data=encode_uint_var(StreamType.CONTROL)
+                        + encode_frame(
+                            FrameType.SETTINGS, encode_settings(DUMMY_SETTINGS)
+                        )
+                        + data,
                         end_stream=False,
                     )
                 )

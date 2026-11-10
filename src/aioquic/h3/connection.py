@@ -45,6 +45,9 @@ CONNECTION_SPECIFIC_HEADERS = frozenset(
     )
 )
 H3_ALPN = ["h3"]
+# The largest SETTINGS frame payload we send or accept, far above the few dozen
+# bytes of real SETTINGS frames.
+MAX_SETTINGS_SIZE = 4096
 # Frame types used in HTTP/2 which have no HTTP/3 equivalent, receiving them
 # is an error (RFC 9114 section 7.2.8 and section 11.2.1).
 RESERVED_FRAME_TYPES = (0x2, 0x6, 0x8, 0x9)
@@ -161,6 +164,10 @@ class DatagramError(ProtocolError):
     error_code = ErrorCode.H3_DATAGRAM_ERROR
 
 
+class ExcessiveLoad(ProtocolError):
+    error_code = ErrorCode.H3_EXCESSIVE_LOAD
+
+
 class FrameError(ProtocolError):
     error_code = ErrorCode.H3_FRAME_ERROR
 
@@ -199,7 +206,7 @@ def encode_frame(frame_type: int, frame_data: bytes) -> bytes:
 
 
 def encode_settings(settings: dict[int, int]) -> bytes:
-    buf = Buffer(capacity=1024)
+    buf = Buffer(capacity=MAX_SETTINGS_SIZE)
     for setting, value in settings.items():
         buf.push_uint_var(setting)
         buf.push_uint_var(value)
@@ -671,6 +678,44 @@ class H3Connection:
         """
         self._quic.reset_stream(stream_id, ErrorCode.H3_REQUEST_INCOMPLETE)
 
+    def _check_control_frame_header(self, frame_type: int, frame_size: int) -> None:
+        """
+        Check a frame header received on the peer's control stream.
+
+        This is called as soon as the frame header is parsed, so that invalid
+        frames are rejected without buffering their payload.
+        """
+        # The first frame on the control stream MUST be SETTINGS, and unknown
+        # frame types do not satisfy this requirement (RFC 9114 section 6.2.1
+        # and section 9).
+        if frame_type != FrameType.SETTINGS and not self._settings_received:
+            raise MissingSettingsError
+
+        if frame_type == FrameType.SETTINGS and self._settings_received:
+            # RFC 9114 section 7.2.4
+            raise FrameUnexpected("SETTINGS have already been received")
+        elif frame_type == FrameType.MAX_PUSH_ID and self._is_client:
+            # RFC 9114 section 7.2.7
+            raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
+        elif frame_type == FrameType.MAX_PUSH_ID and frame_size > UINT_VAR_MAX_SIZE:
+            # The payload is a single variable-length integer, so a longer one
+            # has trailing data (RFC 9114 sections 7.1 and 7.2.7).
+            raise FrameError("MAX_PUSH_ID frame has trailing data")
+        elif frame_type == FrameType.SETTINGS and frame_size > MAX_SETTINGS_SIZE:
+            raise ExcessiveLoad("SETTINGS frame is too large")
+        elif frame_type == FrameType.CANCEL_PUSH:
+            # We never push and clients never allow a push ID, so no push ID can
+            # be cancelled (RFC 9114 section 7.2.3).
+            raise IdError("Server push is not supported")
+        elif frame_type in (
+            FrameType.DATA,
+            FrameType.HEADERS,
+            FrameType.PUSH_PROMISE,
+            *RESERVED_FRAME_TYPES,
+        ):
+            # RFC 9114 sections 7.2.1, 7.2.2, 7.2.5 and 7.2.8
+            raise FrameUnexpected("Invalid frame type on control stream")
+
     def _check_stream_type_for_sending(self, stream_id: int) -> None:
         """
         Check the stream is a request stream, before any state is created for it.
@@ -760,44 +805,12 @@ class H3Connection:
             settings[Setting.ENABLE_WEBTRANSPORT] = 1
         return settings
 
-    def _check_control_frame_type(self, frame_type: int) -> None:
-        """
-        Check a frame type received on the peer's control stream.
-
-        This is called as soon as the frame header is parsed, so that invalid
-        frames are rejected without buffering their payload.
-        """
-        # The first frame on the control stream MUST be SETTINGS, and unknown
-        # frame types do not satisfy this requirement (RFC 9114 section 6.2.1
-        # and section 9).
-        if frame_type != FrameType.SETTINGS and not self._settings_received:
-            raise MissingSettingsError
-
-        if frame_type == FrameType.SETTINGS and self._settings_received:
-            # RFC 9114 section 7.2.4
-            raise FrameUnexpected("SETTINGS have already been received")
-        elif frame_type == FrameType.MAX_PUSH_ID and self._is_client:
-            # RFC 9114 section 7.2.7
-            raise FrameUnexpected("Servers must not send MAX_PUSH_ID")
-        elif frame_type == FrameType.CANCEL_PUSH:
-            # We never push and clients never allow a push ID, so no push ID can
-            # be cancelled (RFC 9114 section 7.2.3).
-            raise IdError("Server push is not supported")
-        elif frame_type in (
-            FrameType.DATA,
-            FrameType.HEADERS,
-            FrameType.PUSH_PROMISE,
-            *RESERVED_FRAME_TYPES,
-        ):
-            # RFC 9114 sections 7.2.1, 7.2.2, 7.2.5 and 7.2.8
-            raise FrameUnexpected("Invalid frame type on control stream")
-
     def _handle_control_frame(self, frame_type: int, frame_data: bytes) -> None:
         """
         Handle a SETTINGS or MAX_PUSH_ID frame received on the peer's control
         stream.
 
-        The frame type must have been validated by `_check_control_frame_type`.
+        The frame header must have been validated by `_check_control_frame_header`.
         """
         if frame_type == FrameType.SETTINGS:
             settings = parse_settings(frame_data)
@@ -1283,7 +1296,9 @@ class H3Connection:
                         break
                     consumed = buf.tell()
 
-                    self._check_control_frame_type(stream.frame_type)
+                    self._check_control_frame_header(
+                        stream.frame_type, stream.frame_size
+                    )
 
                 frame_type = stream.frame_type
                 frame_size = stream.frame_size
