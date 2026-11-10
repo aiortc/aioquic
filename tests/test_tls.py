@@ -55,6 +55,7 @@ from .utils import (
     generate_ed448_certificate,
     generate_ed25519_certificate,
     generate_rsa_certificate,
+    load_cert_chain,
 )
 
 # TLS treats the QUIC transport parameters as opaque data.
@@ -194,7 +195,7 @@ class ContextTest(TestCase):
         cipher_suites: list[tls.CipherSuite] | None = None,
     ) -> Context:
         configuration = QuicConfiguration(is_client=False)
-        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
 
         server = Context(
             alpn_protocols=alpn_protocols,
@@ -569,7 +570,7 @@ class ContextTest(TestCase):
             return buf.data
 
         configuration = QuicConfiguration(is_client=False)
-        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
         certificate_data = configuration.certificate.public_bytes(
             serialization.Encoding.DER
         )
@@ -585,7 +586,7 @@ class ContextTest(TestCase):
 
     def test_client_invalid_certificate_key(self) -> None:
         configuration = QuicConfiguration(is_client=False)
-        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
         certificate_data = configuration.certificate.public_bytes(
             serialization.Encoding.DER
         )
@@ -603,7 +604,7 @@ class ContextTest(TestCase):
 
     def test_client_invalid_certificate_version(self) -> None:
         configuration = QuicConfiguration(is_client=False)
-        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
         certificate_data = configuration.certificate.public_bytes(
             serialization.Encoding.DER
         )
@@ -621,7 +622,7 @@ class ContextTest(TestCase):
 
     def test_client_malformed_certificate(self) -> None:
         configuration = QuicConfiguration(is_client=False)
-        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
         certificate_data = configuration.certificate.public_bytes(
             serialization.Encoding.DER
         )
@@ -634,7 +635,7 @@ class ContextTest(TestCase):
 
     def test_client_unsupported_certificate_key(self) -> None:
         configuration = QuicConfiguration(is_client=False)
-        configuration.load_cert_chain(SERVER_CERTFILE, SERVER_KEYFILE)
+        load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)
         certificate_data = configuration.certificate.public_bytes(
             serialization.Encoding.DER
         )
