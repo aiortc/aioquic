@@ -1,3 +1,4 @@
+from aioquic.buffer import UINT_VAR_MAX
 from aioquic.h3.connection import H3_ALPN, ErrorCode, H3Connection
 from aioquic.h3.events import (
     DatagramReceived,
@@ -6,6 +7,7 @@ from aioquic.h3.events import (
 )
 from aioquic.h3.exceptions import InvalidStreamTypeError
 from aioquic.quic.events import DatagramFrameReceived
+from aioquic.quic.exceptions import OutOfRangeError
 
 from .test_h3 import (
     closed,
@@ -163,6 +165,22 @@ class WebTransportTest(TestCase):
                     ),
                 ],
             )
+
+    def test_bidirectional_stream_out_of_range(self) -> None:
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+
+            stream_id = quic_client.get_next_available_stream_id()
+            for session_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(session_id=session_id):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        h3_client.create_webtransport_stream(session_id)
+            self.assertNotIn(stream_id, quic_client._streams)
 
     def test_bidirectional_stream_reset(self) -> None:
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
@@ -335,6 +353,24 @@ class WebTransportTest(TestCase):
                 h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
             self.assertNotIn(stream_id, h3_server._stream)
 
+    def test_unidirectional_stream_out_of_range(self) -> None:
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+
+            stream_id = quic_client.get_next_available_stream_id(is_unidirectional=True)
+            for session_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(session_id=session_id):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        h3_client.create_webtransport_stream(
+                            session_id, is_unidirectional=True
+                        )
+            self.assertNotIn(stream_id, quic_client._streams)
+
     def test_unidirectional_stream_reset(self) -> None:
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
@@ -386,6 +422,29 @@ class WebTransportTest(TestCase):
             self.assertEqual(
                 events,
                 [DatagramReceived(data=b"foo", stream_id=session_id)],
+            )
+
+    def test_datagram_out_of_range(self) -> None:
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            for stream_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        h3_client.send_datagram(data=b"foo", stream_id=stream_id)
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+
+            # The largest client-initiated bidirectional stream ID is sent.
+            h3_client.send_datagram(data=b"foo", stream_id=UINT_VAR_MAX - 3)
+            self.assertEqual(
+                h3_transfer(quic_client, h3_server),
+                [DatagramReceived(data=b"foo", stream_id=UINT_VAR_MAX - 3)],
             )
 
     def test_handle_datagram_truncated(self) -> None:

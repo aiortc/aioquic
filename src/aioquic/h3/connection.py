@@ -24,6 +24,7 @@ from aioquic.quic.connection import (
     QuicConnection,
     stream_is_client_initiated,
     stream_is_unidirectional,
+    validate_stream_id,
 )
 from aioquic.quic.events import (
     DatagramFrameReceived,
@@ -489,6 +490,8 @@ class H3Connection:
         :param session_id: The WebTransport session identifier.
         :param is_unidirectional: Whether to create a unidirectional stream.
         """
+        validate_stream_id(session_id)
+
         if is_unidirectional:
             stream_id = self._create_uni_stream(StreamType.WEBTRANSPORT)
             self._quic.send_stream_data(stream_id, encode_uint_var(session_id))
@@ -540,6 +543,7 @@ class H3Connection:
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a client-initiated bidirectional stream.
         """
+        validate_stream_id(stream_id)
 
         # check stream ID is valid
         if not stream_is_request_response(stream_id):
