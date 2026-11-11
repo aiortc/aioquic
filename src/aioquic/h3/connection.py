@@ -7,7 +7,13 @@ from enum import Enum, IntEnum
 
 import pylsqpack
 from aioquic._deprecations import deprecate_positional_argument
-from aioquic.buffer import UINT_VAR_MAX_SIZE, Buffer, BufferReadError, encode_uint_var
+from aioquic.buffer import (
+    UINT_VAR_MAX,
+    UINT_VAR_MAX_SIZE,
+    Buffer,
+    BufferReadError,
+    encode_uint_var,
+)
 from aioquic.h3.events import (
     DatagramReceived,
     DataReceived,
@@ -18,6 +24,7 @@ from aioquic.h3.events import (
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import (
+    InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
     NoAvailablePushIDError,
@@ -26,7 +33,6 @@ from aioquic.quic.connection import (
     QuicConnection,
     stream_is_client_initiated,
     stream_is_unidirectional,
-    validate_stream_id,
 )
 from aioquic.quic.events import (
     DatagramFrameReceived,
@@ -514,8 +520,20 @@ class H3Connection:
 
         :param session_id: The WebTransport session identifier.
         :param is_unidirectional: Whether to create a unidirectional stream.
+        :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
+            If the session ID is out of range.
+        :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
+            If the session ID is not a client-initiated bidirectional stream.
         """
-        validate_stream_id(session_id)
+        self._check_stream_id(session_id)
+
+        # The session ID is the ID of the CONNECT stream which established the
+        # session (draft-ietf-webtrans-http3).
+        if not stream_is_request_response(session_id):
+            raise InvalidStreamTypeError(
+                "WebTransport sessions can only be client-initiated bidirectional "
+                "streams"
+            )
 
         if is_unidirectional:
             stream_id = self._create_uni_stream(StreamType.WEBTRANSPORT)
@@ -565,10 +583,12 @@ class H3Connection:
 
         :param stream_id: The stream ID.
         :param data: The HTTP/3 datagram payload.
+        :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
+            If the stream ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a client-initiated bidirectional stream.
         """
-        validate_stream_id(stream_id)
+        self._check_stream_id(stream_id)
 
         # check stream ID is valid
         if not stream_is_request_response(stream_id):
@@ -587,6 +607,8 @@ class H3Connection:
         :param stream_id: The stream ID on which to send the data.
         :param data: The data to send.
         :param end_stream: Whether to end the stream.
+        :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
+            If the stream ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a request stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
@@ -631,6 +653,8 @@ class H3Connection:
         :param stream_id: The stream ID on which to send the headers.
         :param headers: The HTTP headers to send.
         :param end_stream: Whether to end the stream.
+        :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
+            If the stream ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a request stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
@@ -785,10 +809,19 @@ class H3Connection:
             # this makes them longer (RFC 9114 section 10.5.1).
             raise ExcessiveLoad("HEADERS frame is too large")
 
+    def _check_stream_id(self, stream_id: int) -> None:
+        """
+        Check the stream ID is one QUIC can represent (RFC 9000 section 2.1).
+        """
+        if not 0 <= stream_id <= UINT_VAR_MAX:
+            raise InvalidStreamIdError("Stream ID must be between 0 and 2^62 - 1")
+
     def _check_stream_type_for_sending(self, stream_id: int) -> None:
         """
-        Check the stream is a request stream, before any state is created for it.
+        Check the stream ID is in range and a request stream, before any state is
+        created for it.
         """
+        self._check_stream_id(stream_id)
         if stream_is_request_response(stream_id):
             return
 

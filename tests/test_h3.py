@@ -2,7 +2,7 @@ import contextlib
 import copy
 from typing import Any
 
-from aioquic.buffer import Buffer, encode_uint_var
+from aioquic.buffer import UINT_VAR_MAX, Buffer, encode_uint_var
 from aioquic.h3.connection import (
     H3_ALPN,
     MAX_FIELD_SECTION_SIZE,
@@ -31,6 +31,7 @@ from aioquic.h3.events import (
     HeadersReceived,
 )
 from aioquic.h3.exceptions import (
+    InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
     NoAvailablePushIDError,
@@ -2235,6 +2236,41 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
             self.assertEqual(h3_transfer(quic_server, h3_client), [])
             self.assertIsNone(closed(quic_client))
+            self.assertIsNone(closed(quic_server))
+
+    def test_send_on_out_of_range_stream(self) -> None:
+        """
+        Stream IDs outside 0 to 2^62 - 1 are refused (RFC 9000 section 2.1),
+        before any state is created for them.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            for stream_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        InvalidStreamIdError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        h3_client.send_headers(
+                            stream_id=stream_id,
+                            headers=[
+                                (b":method", b"GET"),
+                                (b":scheme", b"https"),
+                                (b":authority", b"localhost"),
+                                (b":path", b"/"),
+                            ],
+                        )
+                    with self.assertRaisesMessage(
+                        InvalidStreamIdError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        h3_client.send_data(
+                            stream_id=stream_id, data=b"hello", end_stream=True
+                        )
+                    self.assertNotIn(stream_id, h3_client._stream)
+
+            # Nothing was sent, so the server keeps the connection open.
+            h3_transfer(quic_client, h3_server)
             self.assertIsNone(closed(quic_server))
 
     def test_send_on_peer_unidirectional_stream(self) -> None:
