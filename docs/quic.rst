@@ -75,3 +75,19 @@ Exceptions
 
     .. autoclass:: StreamTypeError
         :members:
+
+TLS
+---
+
+.. automodule:: aioquic.tls
+
+    .. autoclass:: CipherSuite()
+
+        .. autoattribute:: TLS_AES_128_GCM_SHA256
+            :no-value:
+
+        .. autoattribute:: TLS_AES_256_GCM_SHA384
+            :no-value:
+
+        .. autoattribute:: TLS_CHACHA20_POLY1305_SHA256
+            :no-value:
