@@ -1614,6 +1614,30 @@ class ContextTest(TestCase):
 
 
 class TlsTest(TestCase):
+    def test_cipher_suite_aliases(self) -> None:
+        # The names used before the TLS_ prefix was added still work.
+        self.assertIs(
+            tls.CipherSuite.AES_128_GCM_SHA256, tls.CipherSuite.TLS_AES_128_GCM_SHA256
+        )
+        self.assertIs(
+            tls.CipherSuite["CHACHA20_POLY1305_SHA256"],
+            tls.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
+        )
+
+        # Only the new names are reported.
+        self.assertEqual(
+            tls.CipherSuite.AES_128_GCM_SHA256.name, "TLS_AES_128_GCM_SHA256"
+        )
+        self.assertEqual(
+            [suite.name for suite in tls.CipherSuite],
+            [
+                "TLS_AES_128_GCM_SHA256",
+                "TLS_AES_256_GCM_SHA384",
+                "TLS_CHACHA20_POLY1305_SHA256",
+                "TLS_EMPTY_RENEGOTIATION_INFO_SCSV",
+            ],
+        )
+
     def test_pull_block_incomplete_read(self) -> None:
         """
         If a block is not read until its end, an alert should be raised.
