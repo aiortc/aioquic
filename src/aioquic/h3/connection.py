@@ -1,8 +1,6 @@
-import contextlib
 import logging
 import re
 import warnings
-from collections.abc import Generator
 from enum import Enum, IntEnum
 from typing import Any
 
@@ -25,6 +23,7 @@ from aioquic.h3.events import (
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import (
+    H3Error,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -42,6 +41,7 @@ from aioquic.quic.events import (
     StreamDataReceived,
     StreamReset,
 )
+from aioquic.quic.exceptions import StreamStateError
 from aioquic.quic.logger import QuicLoggerTrace
 
 logger = logging.getLogger("http3")
@@ -610,20 +610,17 @@ class H3Connection:
             If the stream is not a request stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
             If data is sent before the headers, after the trailers, or after the
-            stream was ended.
+            stream was ended or reset.
         """
         self._check_stream_type_for_sending(stream_id)
 
-        # check DATA frame is allowed
-        with self._get_or_create_stream(stream_id) as stream:
-            if stream.sending_ended:
-                raise InvalidStreamStateError("Cannot send after the stream was ended")
-            if stream.headers_send_state == HeadersState.INITIAL:
-                raise InvalidStreamStateError("Cannot send data before the headers")
-            if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
-                raise InvalidStreamStateError("Cannot send data after the trailers")
-            if end_stream:
-                stream.sending_ended = True
+        stream = self._stream.get(stream_id)
+        if stream is not None and stream.sending_ended:
+            raise InvalidStreamStateError("Cannot send after the stream was ended")
+        if stream is None or stream.headers_send_state == HeadersState.INITIAL:
+            raise InvalidStreamStateError("Cannot send data before the headers")
+        if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
+            raise InvalidStreamStateError("Cannot send data after the trailers")
 
         # log frame
         if self._quic_logger is not None:
@@ -634,9 +631,12 @@ class H3Connection:
                 ),
             )
 
-        self._quic.send_stream_data(
+        self._send_request_stream_data(
             stream_id, encode_frame(FrameType.DATA, data), end_stream
         )
+        if end_stream:
+            stream.sending_ended = True
+            self._store_or_discard_stream(stream)
 
     def send_headers(
         self, stream_id: int, headers: Headers, end_stream: bool = False
@@ -654,51 +654,55 @@ class H3Connection:
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a request stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
-            If headers are sent after the trailers or after the stream was ended,
-            or an interim response would end the stream.
+            If headers are sent after the trailers, after the stream was ended or
+            reset, or on a stream the peer has not opened, or an interim response
+            would end the stream.
+        :raises ~aioquic.h3.exceptions.H3Error:
+            If the peer stopped the QPACK encoder stream.
         """
         self._check_stream_type_for_sending(stream_id)
 
-        # check HEADERS frame is allowed
-        with self._get_or_create_stream(stream_id) as stream:
-            if stream.sending_ended:
-                raise InvalidStreamStateError("Cannot send after the stream was ended")
-            if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
-                raise InvalidStreamStateError("Cannot send headers after the trailers")
+        # The stream's state is only stored once the headers are sent.
+        stream = self._stream.get(stream_id)
+        if stream is None:
+            stream = H3Stream(stream_id)
+        if stream.sending_ended:
+            raise InvalidStreamStateError("Cannot send after the stream was ended")
+        if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
+            raise InvalidStreamStateError("Cannot send headers after the trailers")
 
-            # Interim responses precede the final response (RFC 9114 section 4.1).
-            interim = (
-                not self._is_client
-                and stream.headers_send_state == HeadersState.INITIAL
-                and is_interim_response(headers)
+        # Interim responses precede the final response (RFC 9114 section 4.1).
+        interim = (
+            not self._is_client
+            and stream.headers_send_state == HeadersState.INITIAL
+            and is_interim_response(headers)
+        )
+        if end_stream and interim:
+            raise InvalidStreamStateError(
+                "Cannot end the stream with an interim response"
             )
-            if end_stream:
-                if interim:
-                    raise InvalidStreamStateError(
-                        "Cannot end the stream with an interim response"
-                    )
-                stream.sending_ended = True
 
-            frame_data = self._encode_headers(stream_id, headers)
+        frame_data = self._encode_headers(stream_id, headers)
 
-            # log frame
-            if self._quic_logger is not None:
-                self._quic_logger.log_event(
-                    name="http3:frame_created",
-                    data=self._quic_logger.encode_http3_headers_frame(
-                        length=len(frame_data), headers=headers, stream_id=stream_id
-                    ),
-                )
-
-            # update state and send headers
-            if stream.headers_send_state == HeadersState.INITIAL:
-                if not interim:
-                    stream.headers_send_state = HeadersState.AFTER_HEADERS
-            else:
-                stream.headers_send_state = HeadersState.AFTER_TRAILERS
-            self._quic.send_stream_data(
-                stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
+        # log frame
+        if self._quic_logger is not None:
+            self._quic_logger.log_event(
+                name="http3:frame_created",
+                data=self._quic_logger.encode_http3_headers_frame(
+                    length=len(frame_data), headers=headers, stream_id=stream_id
+                ),
             )
+
+        self._send_request_stream_data(
+            stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
+        )
+        if stream.headers_send_state != HeadersState.INITIAL:
+            stream.headers_send_state = HeadersState.AFTER_TRAILERS
+        elif not interim:
+            stream.headers_send_state = HeadersState.AFTER_HEADERS
+        if end_stream:
+            stream.sending_ended = True
+        self._store_or_discard_stream(stream)
 
     # Server push is no longer supported: this stub is kept for servers which
     # still call it, without a docstring so that it stays out of the docs.
@@ -862,25 +866,15 @@ class H3Connection:
         Encode a HEADERS block and send encoder updates on the encoder stream.
         """
         encoder, frame_data = self._encoder.encode(stream_id, headers)
-        self._quic.send_stream_data(self._local_encoder_stream_id, encoder)
-        return frame_data
-
-    @contextlib.contextmanager
-    def _get_or_create_stream(self, stream_id: int) -> Generator[H3Stream]:
-        if stream_id not in self._stream:
-            stream = H3Stream(stream_id)
-            if stream_is_unidirectional(stream_id):
-                # Only the peer's unidirectional streams have state, and we
-                # never send on them.
-                stream.sending_ended = True
-            self._stream[stream_id] = stream
-        stream = self._stream[stream_id]
         try:
-            yield stream
-        finally:
-            # Don't forget to delete stream objects when they are done
-            if stream.is_ended():
-                self._stream.pop(stream_id)
+            self._quic.send_stream_data(self._local_encoder_stream_id, encoder)
+        except StreamStateError as exc:
+            # The peer stopped the stream, which closes the connection (RFC 9204
+            # section 4.2).
+            raise H3Error(
+                "Cannot send headers once the QPACK encoder stream was stopped"
+            ) from exc
+        return frame_data
 
     def _get_local_settings(self) -> dict[int, int]:
         """
@@ -1137,18 +1131,28 @@ class H3Connection:
         stream = self._stream.get(stream_id)
         if stream is not None:
             stream.sending_ended = True
-            if stream.is_ended():
-                self._stream.pop(stream_id)
+            self._store_or_discard_stream(stream)
 
     def _receive_stream_data(self, event: StreamDataReceived) -> list[H3Event]:
         stream_id = event.stream_id
-        with self._get_or_create_stream(stream_id) as stream:
+        stream = self._stream.get(stream_id)
+        if stream is None:
+            stream = H3Stream(stream_id)
             if stream_is_unidirectional(stream_id):
-                return self._receive_stream_data_uni(
-                    stream, event.data, event.end_stream
-                )
-            else:
-                return self._receive_request_data(stream, event.data, event.end_stream)
+                # Only the peer's unidirectional streams have state, and we
+                # never send on them.
+                stream.sending_ended = True
+            self._stream[stream_id] = stream
+        if stream_is_unidirectional(stream_id):
+            http_events = self._receive_stream_data_uni(
+                stream, event.data, event.end_stream
+            )
+        else:
+            http_events = self._receive_request_data(
+                stream, event.data, event.end_stream
+            )
+        self._store_or_discard_stream(stream)
+        return http_events
 
     def _receive_request_data(
         self, stream: H3Stream, data: bytes, stream_ended: bool
@@ -1499,8 +1503,40 @@ class H3Connection:
             if stream is not None:
                 stream.sending_ended = True
 
-        if stream is not None and stream.is_ended():
-            self._stream.pop(stream_id)
+        if stream is not None:
+            self._store_or_discard_stream(stream)
+
+    def _send_request_stream_data(
+        self, stream_id: int, data: bytes, end_stream: bool
+    ) -> None:
+        """
+        Send data on a request stream, raising an H3 exception if QUIC refuses it.
+        """
+        try:
+            self._quic.send_stream_data(stream_id, data, end_stream)
+        except StreamStateError as exc:
+            message = {
+                "Cannot send data after FIN": "Cannot send after the stream was ended",
+                "Cannot send data after the stream was reset": (
+                    "Cannot send after the stream was reset"
+                ),
+                "Cannot send data on a finished stream": (
+                    "Cannot send after the stream was ended"
+                ),
+                "Cannot send data on unknown peer-initiated stream": (
+                    "Cannot send on a stream the peer has not opened"
+                ),
+            }.get(str(exc), str(exc))
+            raise InvalidStreamStateError(message) from exc
+
+    def _store_or_discard_stream(self, stream: H3Stream) -> None:
+        """
+        Store a stream's state, or discard it once both sides have ended.
+        """
+        if stream.is_ended():
+            self._stream.pop(stream.stream_id, None)
+        else:
+            self._stream[stream.stream_id] = stream
 
     def _validate_settings(self, settings: dict[int, int]) -> None:
         for setting in [

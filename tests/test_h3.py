@@ -31,6 +31,7 @@ from aioquic.h3.events import (
     HeadersReceived,
 )
 from aioquic.h3.exceptions import (
+    H3Error,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -2066,6 +2067,40 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
+    def test_send_after_quic_reset(self) -> None:
+        """
+        Once the application resets a stream through QUIC, H3 reports that it
+        can no longer send on it, and the failed attempts change no state.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+
+            quic_client.reset_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
+
+            # Neither the trailers nor the data count as sent.
+            for _ in range(2):
+                with self.assertRaisesMessage(
+                    InvalidStreamStateError,
+                    "Cannot send after the stream was reset",
+                ):
+                    h3_client.send_headers(
+                        stream_id=stream_id,
+                        headers=[(b"x-foo", b"bar")],
+                        end_stream=True,
+                    )
+                with self.assertRaisesMessage(
+                    InvalidStreamStateError,
+                    "Cannot send after the stream was reset",
+                ):
+                    h3_client.send_data(
+                        stream_id=stream_id, data=b"hello", end_stream=True
+                    )
+            stream = h3_client._stream[stream_id]
+            self.assertEqual(stream.headers_send_state, HeadersState.AFTER_HEADERS)
+            self.assertFalse(stream.sending_ended)
+
     def test_send_after_stop_sending(self) -> None:
         """
         We should not send on a stream once the peer asked us to stop sending,
@@ -2136,6 +2171,7 @@ class H3ConnectionTest(TestCase):
                 h3_client.send_data(
                     stream_id=stream_id, data=b"hello", end_stream=False
                 )
+            self.assertNotIn(stream_id, h3_client._stream)
 
     def test_send_headers_after_trailers(self) -> None:
         """
@@ -2168,6 +2204,49 @@ class H3ConnectionTest(TestCase):
                     end_stream=False,
                 )
 
+    def test_send_headers_encoder_stream_stopped(self) -> None:
+        """
+        Once the peer stops our QPACK encoder stream, which it must not do (RFC
+        9204 section 4.2), headers cannot be sent, whether or not the H3 layer
+        has handled the STOP_SENDING yet.
+        """
+        for handled in (False, True):
+            with (
+                self.subTest(handled=handled),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                h3_transfer(quic_server, h3_client)
+                stream_id = self._send_request_headers(h3_client, h3_server)
+
+                quic_client.stop_stream(
+                    h3_server._local_encoder_stream_id, ErrorCode.H3_NO_ERROR
+                )
+                if handled:
+                    h3_transfer(quic_client, h3_server)
+                    self.assertEqual(
+                        closed(quic_server),
+                        (
+                            ErrorCode.H3_CLOSED_CRITICAL_STREAM,
+                            "Stopping a critical stream is not allowed",
+                        ),
+                    )
+                else:
+                    transfer(quic_client, quic_server)
+
+                with self.assertRaisesMessage(
+                    H3Error,
+                    "Cannot send headers once the QPACK encoder stream was stopped",
+                ):
+                    h3_server.send_headers(
+                        stream_id=stream_id, headers=[(b":status", b"200")]
+                    )
+                self.assertEqual(
+                    h3_server._stream[stream_id].headers_send_state,
+                    HeadersState.INITIAL,
+                )
+
     def test_send_headers_interim_end_stream(self) -> None:
         """
         We should not end the stream with an interim response.
@@ -2191,6 +2270,100 @@ class H3ConnectionTest(TestCase):
             h3_server.send_headers(
                 stream_id=stream_id, headers=[(b":status", b"200")], end_stream=True
             )
+
+    def test_send_headers_on_finished_stream(self) -> None:
+        """
+        A client cannot send headers again on a request stream which has ended
+        on both sides, and the failed attempt leaves no state behind.
+        """
+        # QUIC refuses the data either after the FIN or, once the stream is
+        # acknowledged, because it was discarded.
+        for round_trips, quic_message in [
+            (0, "Cannot send data after FIN"),
+            (1, "Cannot send data on a finished stream"),
+        ]:
+            with (
+                self.subTest(round_trips=round_trips),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+
+                # The request and the response both end the stream.
+                stream_id = quic_client.get_next_available_stream_id()
+                request = [
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ]
+                h3_client.send_headers(
+                    stream_id=stream_id, headers=request, end_stream=True
+                )
+                h3_transfer(quic_client, h3_server)
+                h3_server.send_headers(
+                    stream_id=stream_id,
+                    headers=[(b":status", b"200")],
+                    end_stream=True,
+                )
+                h3_transfer(quic_server, h3_client)
+                self.assertNotIn(stream_id, h3_client._stream)
+
+                for _ in range(round_trips):
+                    h3_transfer(quic_client, h3_server)
+                    h3_transfer(quic_server, h3_client)
+
+                with self.assertRaisesMessage(
+                    InvalidStreamStateError, "Cannot send after the stream was ended"
+                ) as cm:
+                    h3_client.send_headers(stream_id=stream_id, headers=request)
+                self.assertEqual(str(cm.exception.__cause__), quic_message)
+                self.assertNotIn(stream_id, h3_client._stream)
+
+    def test_send_headers_on_unopened_stream(self) -> None:
+        """
+        A server cannot respond on a request stream the client has not opened,
+        and the failed attempt leaves no state behind.
+        """
+        for end_stream in (False, True):
+            with (
+                self.subTest(end_stream=end_stream),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+
+                stream_id = quic_client.get_next_available_stream_id()
+                with self.assertRaisesMessage(
+                    InvalidStreamStateError,
+                    "Cannot send on a stream the peer has not opened",
+                ):
+                    h3_server.send_headers(
+                        stream_id=stream_id,
+                        headers=[(b":status", b"200")],
+                        end_stream=end_stream,
+                    )
+                self.assertNotIn(stream_id, h3_server._stream)
+
+                # Once the client opens the stream, the server responds normally.
+                self._send_request_headers(h3_client, h3_server)
+                h3_server.send_headers(
+                    stream_id=stream_id, headers=[(b":status", b"200")]
+                )
+                h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
+                self.assertEqual(
+                    h3_transfer(quic_server, h3_client),
+                    [
+                        HeadersReceived(
+                            headers=[(b":status", b"200")],
+                            stream_id=stream_id,
+                            stream_ended=False,
+                        ),
+                        DataReceived(
+                            data=b"hello", stream_id=stream_id, stream_ended=True
+                        ),
+                    ],
+                )
 
     def test_send_on_critical_stream(self) -> None:
         """
