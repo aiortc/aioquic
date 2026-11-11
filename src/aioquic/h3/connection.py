@@ -46,6 +46,9 @@ CONNECTION_SPECIFIC_HEADERS = frozenset(
     )
 )
 H3_ALPN = ["h3"]
+# The largest decoded field section we accept, which we advertise in the
+# SETTINGS_MAX_FIELD_SECTION_SIZE setting (RFC 9114 section 4.2.2).
+MAX_FIELD_SECTION_SIZE = 65536
 # The largest SETTINGS frame payload we send or accept, far above the few dozen
 # bytes of real SETTINGS frames.
 MAX_SETTINGS_SIZE = 4096
@@ -454,7 +457,9 @@ class H3Connection:
         self._quic = quic
         self._quic_logger: QuicLoggerTrace | None = quic._quic_logger
         self._decoder = pylsqpack.Decoder(
-            self._max_table_capacity, self._blocked_streams
+            self._max_table_capacity,
+            self._blocked_streams,
+            max_field_section_size=MAX_FIELD_SECTION_SIZE,
         )
         self._decoder_bytes_received = 0
         self._decoder_bytes_sent = 0
@@ -725,6 +730,37 @@ class H3Connection:
             # RFC 9114 sections 7.2.1, 7.2.2, 7.2.5 and 7.2.8
             raise FrameUnexpected("Invalid frame type on control stream")
 
+    def _check_request_frame_header(self, frame_type: int, frame_size: int) -> None:
+        """
+        Check a frame header received on a request stream.
+
+        This is called as soon as the frame header is parsed, so that invalid
+        frames are rejected without buffering their payload.
+        """
+        if frame_type == FrameType.PUSH_PROMISE:
+            if self._is_client:
+                # We never send MAX_PUSH_ID, so any push ID is larger than the
+                # maximum push ID (RFC 9114 section 7.2.5).
+                raise IdError("Server push is not supported")
+            # RFC 9114 section 7.2.5
+            raise FrameUnexpected("Clients must not send PUSH_PROMISE")
+        elif frame_type in (
+            FrameType.CANCEL_PUSH,
+            FrameType.SETTINGS,
+            FrameType.GOAWAY,
+            FrameType.MAX_PUSH_ID,
+            *RESERVED_FRAME_TYPES,
+        ):
+            # RFC 9114 sections 4.1 and 7.2.3 to 7.2.8
+            raise FrameUnexpected("Invalid frame type on request stream")
+        elif (
+            frame_type == FrameType.HEADERS
+            and frame_size > MAX_FIELD_SECTION_SIZE * 3 // 2
+        ):
+            # The margin allows for encoders which Huffman-code strings even when
+            # this makes them longer (RFC 9114 section 10.5.1).
+            raise ExcessiveLoad("HEADERS frame is too large")
+
     def _check_stream_type_for_sending(self, stream_id: int) -> None:
         """
         Check the stream is a request stream, before any state is created for it.
@@ -768,6 +804,8 @@ class H3Connection:
                 decoder, headers = self._decoder.feed_header(stream_id, frame_data)
             self._decoder_bytes_sent += len(decoder)
             self._quic.send_stream_data(self._local_decoder_stream_id, decoder)
+        except pylsqpack.FieldSectionTooLarge as exc:
+            raise ExcessiveLoad("Field section is too large") from exc
         except pylsqpack.DecompressionFailed as exc:
             raise QpackDecompressionFailed() from exc
 
@@ -806,6 +844,7 @@ class H3Connection:
         settings: dict[int, int] = {
             Setting.QPACK_MAX_TABLE_CAPACITY: self._max_table_capacity,
             Setting.QPACK_BLOCKED_STREAMS: self._blocked_streams,
+            Setting.MAX_FIELD_SECTION_SIZE: MAX_FIELD_SECTION_SIZE,
             Setting.ENABLE_CONNECT_PROTOCOL: 1,
             Setting.DUMMY: 1,
         }
@@ -995,30 +1034,6 @@ class H3Connection:
             )
         ]
 
-    def _check_request_frame_type(self, frame_type: int) -> None:
-        """
-        Check a frame type received on a request stream.
-
-        This is called as soon as the frame header is parsed, so that invalid
-        frames are rejected without buffering their payload.
-        """
-        if frame_type == FrameType.PUSH_PROMISE:
-            if self._is_client:
-                # We never send MAX_PUSH_ID, so any push ID is larger than the
-                # maximum push ID (RFC 9114 section 7.2.5).
-                raise IdError("Server push is not supported")
-            # RFC 9114 section 7.2.5
-            raise FrameUnexpected("Clients must not send PUSH_PROMISE")
-        elif frame_type in (
-            FrameType.CANCEL_PUSH,
-            FrameType.SETTINGS,
-            FrameType.GOAWAY,
-            FrameType.MAX_PUSH_ID,
-            *RESERVED_FRAME_TYPES,
-        ):
-            # RFC 9114 sections 4.1 and 7.2.3 to 7.2.8
-            raise FrameUnexpected("Invalid frame type on request stream")
-
     def _init_connection(self) -> None:
         # send our settings
         self._local_control_stream_id = self._create_uni_stream(StreamType.CONTROL)
@@ -1159,7 +1174,7 @@ class H3Connection:
                     break
                 consumed = buf.tell()
 
-                self._check_request_frame_type(stream.frame_type)
+                self._check_request_frame_header(stream.frame_type, stream.frame_size)
 
                 # WEBTRANSPORT_STREAM frames last until the end of the stream
                 if stream.frame_type == FrameType.WEBTRANSPORT_STREAM:
