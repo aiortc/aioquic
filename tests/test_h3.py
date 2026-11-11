@@ -220,6 +220,32 @@ class H3ConnectionTest(TestCase):
         self.assertIn(stream_id, h3_server._stream)
         return stream_id
 
+    def test_enable_webtransport_positional(self) -> None:
+        with h3_client_and_server() as (quic_client, quic_server):
+            with self.assertWarns(DeprecationWarning) as cm:
+                h3_client = H3Connection(quic_client, True)  # type: ignore[call-arg]
+            self.assertEqual(
+                str(cm.warning),
+                "Passing enable_webtransport as a positional argument is "
+                "deprecated, pass it as a keyword argument instead",
+            )
+            self.assertEqual(cm.filename, __file__)
+            assert h3_client.sent_settings is not None
+            self.assertEqual(h3_client.sent_settings[Setting.ENABLE_WEBTRANSPORT], 1)
+
+    def test_enable_webtransport_positional_and_keyword(self) -> None:
+        with h3_client_and_server() as (quic_client, quic_server):
+            with self.assertRaisesMessage(
+                TypeError,
+                "H3Connection.__init__() takes 2 positional arguments but 3 "
+                "positional arguments (and 1 keyword-only argument) were given",
+            ):
+                H3Connection(
+                    quic_client,
+                    True,  # type: ignore[misc]
+                    enable_webtransport=False,
+                )
+
     def test_handle_control_frame_cancel_push(self) -> None:
         """
         No push ID can be cancelled, as servers never push and clients never
