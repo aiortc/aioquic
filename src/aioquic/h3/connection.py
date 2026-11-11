@@ -416,8 +416,6 @@ def validate_trailers(headers: Headers) -> None:
 
 class H3Stream:
     def __init__(self, stream_id: int) -> None:
-        self.blocked = False
-        self.blocked_frame_size: int | None = None
         self.buffer = b""
         self.receiving_ended = False
         self.sending_ended = False
@@ -433,7 +431,7 @@ class H3Stream:
         self.content_length: int = 0
 
     def is_ended(self) -> bool:
-        return self.sending_ended and self.receiving_ended and not self.blocked
+        return self.sending_ended and self.receiving_ended
 
 
 class H3Connection:
@@ -460,8 +458,11 @@ class H3Connection:
         self, quic: QuicConnection, *, enable_webtransport: bool = False
     ) -> None:
         # settings
-        self._max_table_capacity = 4096
-        self._blocked_streams = 16
+        # We use no dynamic table, so header blocks never wait for its entries
+        # and no stream data is held while they arrive (RFC 9204 sections 2.1.2
+        # and 3.2.3).
+        self._max_table_capacity = 0
+        self._blocked_streams = 0
         self._enable_webtransport = enable_webtransport
 
         self._is_client = quic.configuration.is_client
@@ -814,17 +815,12 @@ class H3Connection:
         self._quic.send_stream_data(stream_id, encode_uint_var(stream_type))
         return stream_id
 
-    def _decode_headers(self, stream_id: int, frame_data: bytes | None) -> Headers:
+    def _decode_headers(self, stream_id: int, frame_data: bytes) -> Headers:
         """
         Decode a HEADERS block and send decoder updates on the decoder stream.
-
-        This is called with frame_data=None when a stream becomes unblocked.
         """
         try:
-            if frame_data is None:
-                decoder, headers = self._decoder.resume_header(stream_id)
-            else:
-                decoder, headers = self._decoder.feed_header(stream_id, frame_data)
+            decoder, headers = self._decoder.feed_header(stream_id, frame_data)
             self._decoder_bytes_sent += len(decoder)
             self._quic.send_stream_data(self._local_decoder_stream_id, decoder)
         except pylsqpack.FieldSectionTooLarge as exc:
@@ -936,15 +932,12 @@ class H3Connection:
     def _handle_request_frame(
         self,
         frame_type: int,
-        frame_data: bytes | None,
+        frame_data: bytes,
         stream: H3Stream,
         stream_ended: bool,
     ) -> list[H3Event]:
         """
         Handle a DATA or HEADERS frame received on a request stream.
-
-        This is called with frame_data=None to resume a HEADERS frame when a
-        stream becomes unblocked.
         """
         http_events: list[H3Event] = []
 
@@ -972,7 +965,6 @@ class H3Connection:
             if stream.headers_recv_state == HeadersState.AFTER_TRAILERS:
                 raise FrameUnexpected("HEADERS frame is not allowed in this state")
 
-            # try to decode HEADERS, may raise pylsqpack.StreamBlocked
             headers = self._decode_headers(stream.stream_id, frame_data)
 
             # validate headers
@@ -1004,11 +996,7 @@ class H3Connection:
                     category="http",
                     event="frame_parsed",
                     data=self._quic_logger.encode_http3_headers_frame(
-                        length=(
-                            stream.blocked_frame_size
-                            if frame_data is None
-                            else len(frame_data)
-                        ),
+                        length=len(frame_data),
                         headers=headers,
                         stream_id=stream.stream_id,
                     ),
@@ -1141,8 +1129,6 @@ class H3Connection:
         stream.buffer += data
         if stream_ended:
             stream.receiving_ended = True
-        if stream.blocked:
-            return http_events
 
         # shortcut for WEBTRANSPORT_STREAM frame fragments
         if (
@@ -1269,34 +1255,25 @@ class H3Connection:
                 stream.frame_size = None
                 stream.frame_type = None
 
-            try:
-                http_events.extend(
-                    self._handle_request_frame(
-                        frame_type=frame_type,
-                        frame_data=frame_data,
-                        stream=stream,
-                        stream_ended=(
-                            stream.receiving_ended
-                            and buf.eof()
-                            and stream.frame_size is None
-                        ),
-                    )
+            http_events.extend(
+                self._handle_request_frame(
+                    frame_type=frame_type,
+                    frame_data=frame_data,
+                    stream=stream,
+                    stream_ended=(
+                        stream.receiving_ended
+                        and buf.eof()
+                        and stream.frame_size is None
+                    ),
                 )
-            except pylsqpack.StreamBlocked:
-                stream.blocked = True
-                stream.blocked_frame_size = len(frame_data)
-                break
+            )
 
         # remove processed data from buffer
         stream.buffer = stream.buffer[consumed:]
 
         # A frame truncated by the end of the stream is an error, see
         # RFC 9114 section 7.1.
-        if (
-            stream.receiving_ended
-            and not stream.blocked
-            and (stream.buffer or stream.frame_size is not None)
-        ):
+        if stream.receiving_ended and (stream.buffer or stream.frame_size is not None):
             raise FrameError("Frame is truncated by the end of the stream")
 
         return http_events
@@ -1312,7 +1289,6 @@ class H3Connection:
 
         buf = Buffer(data=stream.buffer)
         consumed = 0
-        unblocked_streams: set[int] = set()
 
         while (
             stream.stream_type in (StreamType.CONTROL, StreamType.WEBTRANSPORT)
@@ -1441,7 +1417,7 @@ class H3Connection:
                 data = buf.pull_bytes(buf.capacity - buf.tell())
                 consumed = buf.tell()
                 try:
-                    unblocked_streams.update(self._decoder.feed_encoder(data))
+                    self._decoder.feed_encoder(data)
                 except pylsqpack.EncoderStreamError as exc:
                     raise QpackEncoderStreamError() from exc
                 self._encoder_bytes_received += len(data)
@@ -1452,32 +1428,6 @@ class H3Connection:
 
         # remove processed data from buffer
         stream.buffer = stream.buffer[consumed:]
-
-        # process unblocked streams
-        for stream_id in unblocked_streams:
-            stream = self._stream[stream_id]
-
-            # Resume the blocked HEADERS frame.
-            http_events.extend(
-                self._handle_request_frame(
-                    frame_type=FrameType.HEADERS,
-                    frame_data=None,
-                    stream=stream,
-                    stream_ended=stream.receiving_ended and not stream.buffer,
-                )
-            )
-            stream.blocked = False
-            stream.blocked_frame_size = None
-
-            # resume processing
-            if stream.buffer:
-                http_events.extend(
-                    self._receive_request_data(stream, b"", stream.receiving_ended)
-                )
-
-            # The stream may have ended while it was blocked.
-            if stream.is_ended():
-                self._stream.pop(stream_id)
 
         return http_events
 
@@ -1502,8 +1452,6 @@ class H3Connection:
             self._quic.send_stream_data(self._local_decoder_stream_id, decoder)
 
         if stream is not None:
-            stream.blocked = False
-            stream.blocked_frame_size = None
             stream.buffer = b""
             stream.receiving_ended = True
 
