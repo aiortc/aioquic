@@ -5,6 +5,7 @@ from typing import Any
 from aioquic.buffer import Buffer, encode_uint_var
 from aioquic.h3.connection import (
     H3_ALPN,
+    MAX_FIELD_SECTION_SIZE,
     MAX_SETTINGS_SIZE,
     ErrorCode,
     FrameType,
@@ -22,7 +23,13 @@ from aioquic.h3.connection import (
     validate_response_headers,
     validate_trailers,
 )
-from aioquic.h3.events import DataReceived, GoAwayReceived, H3Event, HeadersReceived
+from aioquic.h3.events import (
+    DataReceived,
+    GoAwayReceived,
+    H3Event,
+    Headers,
+    HeadersReceived,
+)
 from aioquic.h3.exceptions import InvalidStreamStateError, InvalidStreamTypeError
 from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import (
@@ -1217,6 +1224,38 @@ class H3ConnectionTest(TestCase):
                 ),
             )
 
+    def test_handle_request_frame_headers_too_large(self) -> None:
+        """
+        A HEADERS frame larger than the maximum field section size plus a margin
+        is rejected from its header alone, by a client as by a server, see
+        RFC 9114 section 10.5.1.
+        """
+        for is_client in (False, True):
+            for frame_size, expected_closed in [
+                (MAX_FIELD_SECTION_SIZE * 3 // 2, None),
+                (
+                    MAX_FIELD_SECTION_SIZE * 3 // 2 + 1,
+                    (ErrorCode.H3_EXCESSIVE_LOAD, "HEADERS frame is too large"),
+                ),
+            ]:
+                with (
+                    self.subTest(is_client=is_client, frame_size=frame_size),
+                    h3_client_and_server() as (quic_client, quic_server),
+                ):
+                    quic = quic_client if is_client else quic_server
+                    h3 = H3Connection(quic)
+
+                    events = h3.handle_event(
+                        StreamDataReceived(
+                            stream_id=0,
+                            data=encode_uint_var(FrameType.HEADERS)
+                            + encode_uint_var(frame_size),
+                            end_stream=False,
+                        )
+                    )
+                    self.assertEqual(events, [])
+                    self.assertEqual(closed(quic), expected_closed)
+
     def test_handle_request_frame_interim_response_at_end(self) -> None:
         """
         A response stream cannot end after an interim response, whether or not
@@ -1778,6 +1817,88 @@ class H3ConnectionTest(TestCase):
                     )
                 ],
             )
+
+    def test_request_field_section_too_large(self) -> None:
+        """
+        A field section is limited to the maximum field section size once
+        decoded, which is advertised in SETTINGS_MAX_FIELD_SECTION_SIZE, see
+        RFC 9114 section 4.2.2. A larger one closes the connection.
+        """
+        request = [
+            (b":method", b"GET"),
+            (b":scheme", b"https"),
+            (b":authority", b"localhost"),
+            (b":path", b"/"),
+        ]
+        response = [(b":status", b"200")]
+
+        def field_section(headers: Headers, size: int) -> Headers:
+            # Pad the headers with a field to reach `size` bytes once decoded.
+            used = sum(len(name) + len(value) + 32 for name, value in headers)
+            return headers + [(b"x-big", b"a" * (size - used - len(b"x-big") - 32))]
+
+        for is_client, size, expected_closed in [
+            (False, MAX_FIELD_SECTION_SIZE, None),
+            (
+                False,
+                MAX_FIELD_SECTION_SIZE + 1,
+                (ErrorCode.H3_EXCESSIVE_LOAD, "Field section is too large"),
+            ),
+            (True, MAX_FIELD_SECTION_SIZE, None),
+            (
+                True,
+                MAX_FIELD_SECTION_SIZE + 1,
+                (ErrorCode.H3_EXCESSIVE_LOAD, "Field section is too large"),
+            ),
+        ]:
+            with (
+                self.subTest(is_client=is_client, size=size),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                h3_receiver, h3_sender = (
+                    (h3_client, h3_server) if is_client else (h3_server, h3_client)
+                )
+
+                # The peer advertises its limit.
+                h3_transfer(quic_client, h3_server)
+                h3_transfer(quic_server, h3_client)
+                assert h3_receiver.received_settings is not None
+                self.assertEqual(
+                    h3_receiver.received_settings[Setting.MAX_FIELD_SECTION_SIZE],
+                    MAX_FIELD_SECTION_SIZE,
+                )
+
+                stream_id = quic_client.get_next_available_stream_id()
+                if is_client:
+                    h3_client.send_headers(stream_id, request)
+                    h3_transfer(quic_client, h3_server)
+                    headers = field_section(response, size)
+                else:
+                    headers = field_section(request, size)
+                h3_sender.send_headers(stream_id, headers, end_stream=True)
+
+                # The field section takes several round trips.
+                for _ in range(20):
+                    events = h3_transfer(h3_sender._quic, h3_receiver)
+                    if events or closed(h3_receiver._quic) is not None:
+                        break
+                    transfer(h3_receiver._quic, h3_sender._quic)
+
+                # A refused field section never reaches the application.
+                if expected_closed is None:
+                    self.assertEqual(
+                        events,
+                        [
+                            HeadersReceived(
+                                headers=headers, stream_id=stream_id, stream_ended=True
+                            )
+                        ],
+                    )
+                else:
+                    self.assertEqual(events, [])
+                self.assertEqual(closed(h3_receiver._quic), expected_closed)
 
     def test_request_fragmented_frame(self) -> None:
         """
