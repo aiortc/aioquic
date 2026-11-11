@@ -312,6 +312,10 @@ def verify_certificate(
 
 
 class CipherSuite(IntEnum):
+    """
+    A TLS cipher suite.
+    """
+
     TLS_AES_128_GCM_SHA256 = 0x1301
     TLS_AES_256_GCM_SHA384 = 0x1302
     TLS_CHACHA20_POLY1305_SHA256 = 0x1303
@@ -1427,6 +1431,15 @@ class Context:
             self.client_random = None
             self.legacy_session_id = None
             self.state = State.SERVER_EXPECT_CLIENT_HELLO
+
+    @property
+    def peer_certificates(self) -> list[x509.Certificate]:
+        """
+        Returns the certificates presented by the peer, leaf first.
+        """
+        if self._peer_certificate is None:
+            return []
+        return [self._peer_certificate] + self._peer_certificate_chain
 
     @property
     def session_resumed(self) -> bool:

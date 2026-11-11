@@ -1,5 +1,9 @@
 from dataclasses import dataclass
 
+from cryptography import x509
+
+from ..tls import CipherSuite
+
 
 class QuicEvent:
     """
@@ -54,8 +58,17 @@ class HandshakeCompleted(QuicEvent):
     alpn_protocol: str | None
     "The protocol which was negotiated using ALPN, or `None`."
 
+    cipher_suite: CipherSuite
+    "The TLS cipher suite which was negotiated."
+
     early_data_accepted: bool
     "Whether early (0-RTT) data was accepted by the remote peer."
+
+    peer_certificates: list[x509.Certificate]
+    """
+    The certificates presented by the remote peer, leaf first. This is empty
+    if the peer did not present any, as when a TLS session is resumed.
+    """
 
     session_resumed: bool
     "Whether a TLS session was resumed."

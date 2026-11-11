@@ -2278,7 +2278,9 @@ class QuicConnection:
                 self._events.append(
                     events.HandshakeCompleted(
                         alpn_protocol=self.tls.alpn_negotiated,
+                        cipher_suite=self.tls.key_schedule.cipher_suite,
                         early_data_accepted=self.tls.early_data_accepted,
+                        peer_certificates=self.tls.peer_certificates,
                         session_resumed=self.tls.session_resumed,
                     )
                 )

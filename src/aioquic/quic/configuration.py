@@ -15,7 +15,7 @@ from .packet import QuicProtocolVersion
 SMALLEST_MAX_DATAGRAM_SIZE = 1200
 
 
-@dataclass
+@dataclass(kw_only=True)
 class QuicConfiguration:
     """
     A QUIC configuration.
@@ -24,6 +24,13 @@ class QuicConfiguration:
     alpn_protocols: list[str] | None = None
     """
     A list of supported ALPN protocols.
+    """
+
+    cipher_suites: list[CipherSuite] | None = None
+    """
+    The TLS cipher suites to use, in order of preference, or `None` for the
+    defaults. The server picks the first of its cipher suites which the client
+    offers.
     """
 
     congestion_control_algorithm: str = "reno"
@@ -133,7 +140,6 @@ class QuicConfiguration:
     capath: str | None = None
     certificate: Any = None
     certificate_chain: list[Any] = field(default_factory=list)
-    cipher_suites: list[CipherSuite] | None = None
     initial_rtt: float = 0.1
     max_datagram_frame_size: int | None = None
     original_version: int | None = None
