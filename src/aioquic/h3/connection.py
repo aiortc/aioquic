@@ -5,6 +5,7 @@ from collections.abc import Generator
 from enum import Enum, IntEnum
 
 import pylsqpack
+from aioquic._deprecations import deprecate_positional_argument
 from aioquic.buffer import UINT_VAR_MAX_SIZE, Buffer, BufferReadError, encode_uint_var
 from aioquic.h3.events import (
     DatagramReceived,
@@ -440,10 +441,16 @@ class H3Connection:
         HTTP/3 is still an Internet-Draft (draft-ietf-webtrans-http3). It could
         change or be removed in a future release.
 
+    .. deprecated:: 1.8.0
+
+        Passing ``enable_webtransport`` as a positional argument is deprecated,
+        pass it as a keyword argument instead.
+
     :param quic: A :class:`~aioquic.quic.connection.QuicConnection` instance.
     :param enable_webtransport: Whether to enable WebTransport.
     """
 
+    @deprecate_positional_argument("enable_webtransport")
     def __init__(
         self, quic: QuicConnection, *, enable_webtransport: bool = False
     ) -> None:
