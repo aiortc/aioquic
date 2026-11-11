@@ -64,6 +64,13 @@ class QuicConfiguration:
     The window grows as received data is delivered, up to 16 times this value.
     """
 
+    max_datagram_frame_size: int | None = None
+    """
+    The maximum size in bytes of DATAGRAM frames this endpoint accepts. Set it
+    to accept DATAGRAM frames (:rfc:`9221` recommends 65535), or leave it as
+    `None` to not accept them.
+    """
+
     max_datagram_size: int = SMALLEST_MAX_DATAGRAM_SIZE
     """
     The maximum QUIC payload size in bytes to send, excluding UDP or IP overhead.
@@ -141,7 +148,6 @@ class QuicConfiguration:
     certificate: Any = None
     certificate_chain: list[Any] = field(default_factory=list)
     initial_rtt: float = 0.1
-    max_datagram_frame_size: int | None = None
     original_version: int | None = None
     private_key: Any = None
     quantum_readiness_test: bool = False
