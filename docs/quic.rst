@@ -38,6 +38,9 @@ Events
     .. autoclass:: ConnectionTerminated
         :members:
 
+    .. autoclass:: DatagramFrameReceived
+        :members:
+
     .. autoclass:: HandshakeCompleted
         :members:
 

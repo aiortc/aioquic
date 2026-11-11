@@ -556,7 +556,7 @@ if __name__ == "__main__":
         alpn_protocols=H3_ALPN + H0_ALPN,
         congestion_control_algorithm=args.congestion_control_algorithm,
         is_client=False,
-        max_datagram_frame_size=65536,
+        max_datagram_frame_size=65535,
         max_datagram_size=args.max_datagram_size,
         quic_logger=quic_logger,
         secrets_log_file=secrets_log_file,
