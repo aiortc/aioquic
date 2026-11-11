@@ -1174,6 +1174,32 @@ class H3ConnectionTest(TestCase):
                 ),
             )
 
+    def test_handle_qpack_encoder_stream_table_capacity(self) -> None:
+        """
+        We advertise no dynamic table, so the peer's encoder cannot set its
+        capacity above zero, see RFC 9204 section 4.3.1.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+
+            # Set Dynamic Table Capacity to 0.
+            h3_client.handle_event(
+                StreamDataReceived(
+                    stream_id=7,
+                    data=encode_uint_var(StreamType.QPACK_ENCODER) + b"\x20",
+                    end_stream=False,
+                )
+            )
+            self.assertIsNone(closed(quic_client))
+
+            # Set Dynamic Table Capacity to 32.
+            h3_client.handle_event(
+                StreamDataReceived(stream_id=7, data=b"\x3f\x01", end_stream=False)
+            )
+            self.assertEqual(
+                closed(quic_client), (ErrorCode.QPACK_ENCODER_STREAM_ERROR, "")
+            )
+
     def test_handle_request_frame_bad_headers(self) -> None:
         """
         We should not receive HEADERS which cannot be decoded.
@@ -1779,7 +1805,7 @@ class H3ConnectionTest(TestCase):
             # make second request
             self._make_request(h3_client, h3_server)
 
-            # make third request -> dynamic table
+            # make third request
             self._make_request(h3_client, h3_server)
 
     def test_request_headers_only(self) -> None:
@@ -2260,271 +2286,36 @@ class H3ConnectionTest(TestCase):
             )
             self.assertEqual(cm.filename, __file__)
 
-    def test_blocked_stream(self) -> None:
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-
-            # Send request.
-            h3_client.send_headers(
-                stream_id=0,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/"),
-                ],
-                end_stream=True,
-            )
-
-            h3_client.handle_event(
-                StreamDataReceived(
-                    stream_id=3,
-                    data=bytes.fromhex(
-                        "0004170150000680020000074064091040bcc0000000faceb00c"
-                    ),
-                    end_stream=False,
-                )
-            )
-            h3_client.handle_event(
-                StreamDataReceived(stream_id=7, data=b"\x02", end_stream=False)
-            )
-            h3_client.handle_event(
-                StreamDataReceived(stream_id=11, data=b"\x03", end_stream=False)
-            )
-            h3_client.handle_event(
-                StreamDataReceived(
-                    stream_id=0, data=bytes.fromhex("01040280d910"), end_stream=False
-                )
-            )
-            h3_client.handle_event(
-                StreamDataReceived(
-                    stream_id=0,
-                    data=bytes.fromhex(
-                        "00408d796f752072656163686564206d766673742e6e65742c20726561636820"
-                        "746865202f6563686f20656e64706f696e7420666f7220616e206563686f2072"
-                        "6573706f6e7365207175657279202f3c6e756d6265723e20656e64706f696e74"
-                        "7320666f722061207661726961626c652073697a6520726573706f6e73652077"
-                        "6974682072616e646f6d206279746573"
-                    ),
-                    end_stream=True,
-                )
-            )
-            self.assertEqual(
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=7,
-                        data=bytes.fromhex(
-                            "3fe101c696d07abe941094cb6d0a08017d403971966e32ca98b46f"
-                        ),
-                        end_stream=False,
-                    )
-                ),
-                [
-                    HeadersReceived(
-                        headers=[
-                            (b":status", b"200"),
-                            (b"date", b"Mon, 22 Jul 2019 06:33:33 GMT"),
-                        ],
-                        stream_id=0,
-                        stream_ended=False,
-                    ),
-                    DataReceived(
-                        data=(
-                            b"you reached mvfst.net, reach the /echo endpoint for an "
-                            b"echo response query /<number> endpoints for a variable "
-                            b"size response with random bytes"
-                        ),
-                        stream_id=0,
-                        stream_ended=True,
-                    ),
-                ],
-            )
-
-            # The stream is no longer tracked.
-            self.assertNotIn(0, h3_client._stream)
-
-    def test_blocked_stream_reset(self) -> None:
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-
-            # Send request.
-            h3_client.send_headers(
-                stream_id=0,
-                headers=[
-                    (b":method", b"GET"),
-                    (b":scheme", b"https"),
-                    (b":authority", b"localhost"),
-                    (b":path", b"/"),
-                ],
-                end_stream=True,
-            )
-            transfer(quic_client, quic_server)
-
-            # Receive response headers, which are blocked.
-            quic_server.send_stream_data(
-                3, bytes.fromhex("0004170150000680020000074064091040bcc0000000faceb00c")
-            )
-            quic_server.send_stream_data(7, b"\x02")
-            quic_server.send_stream_data(11, b"\x03")
-            quic_server.send_stream_data(0, bytes.fromhex("01040280d910"))
-            self.assertEqual(h3_transfer(quic_server, h3_client), [])
-            self.assertTrue(h3_client._stream[0].blocked)
-            transfer(quic_client, quic_server)
-            drain_events(quic_server)
-
-            # The server resets the stream.
-            quic_server.reset_stream(0, 0)
-            self.assertEqual(h3_transfer(quic_server, h3_client), [])
-            self.assertNotIn(0, h3_client._stream)
-
-            # A Stream Cancellation is sent on the QPACK decoder stream.
-            transfer(quic_client, quic_server)
-            self.assertEqual(
-                b"".join(
-                    event.data
-                    for event in drain_events(quic_server)
-                    if isinstance(event, StreamDataReceived)
-                    and event.stream_id == h3_client._local_decoder_stream_id
-                ),
-                b"\x40",
-            )
-
-            # The encoder stream data no longer unblocks the stream.
-            quic_server.send_stream_data(
-                7,
-                bytes.fromhex("3fe101c696d07abe941094cb6d0a08017d403971966e32ca98b46f"),
-            )
-            self.assertEqual(h3_transfer(quic_server, h3_client), [])
-            self.assertNotIn(0, h3_client._stream)
-
-    def test_blocked_stream_reset_by_client(self) -> None:
+    def test_dynamic_table_reference_refused(self) -> None:
         """
-        A request whose HEADERS frame is still blocked when the client resets
-        the stream was never processed, so the server aborts its response with
-        H3_REQUEST_INCOMPLETE, see RFC 9114 section 4.1.
+        We advertise no dynamic table and that no stream may be blocked, so a
+        header block which references dynamic table entries is a connection
+        error, see RFC 9204 sections 2.1.2 and 4.5.1.1.
         """
         with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
 
-            # Receive request headers, which are blocked.
-            quic_client.send_stream_data(6, b"\x02")
-            quic_client.send_stream_data(10, b"\x03")
-            quic_client.send_stream_data(0, bytes.fromhex("01040280d910"))
-            self.assertEqual(h3_transfer(quic_client, h3_server), [])
-            self.assertTrue(h3_server._stream[0].blocked)
-
-            # The client resets the request, the server aborts its response.
-            quic_client.reset_stream(0, ErrorCode.H3_REQUEST_CANCELLED)
-            self.assertEqual(h3_transfer(quic_client, h3_server), [])
-            self.assertNotIn(0, h3_server._stream)
-            transfer(quic_server, quic_client)
-            self.assertIn(
-                StreamReset(error_code=ErrorCode.H3_REQUEST_INCOMPLETE, stream_id=0),
-                drain_events(quic_client),
+            h3_transfer(quic_client, h3_server)
+            assert h3_server.received_settings is not None
+            self.assertEqual(
+                h3_server.received_settings[Setting.QPACK_MAX_TABLE_CAPACITY], 0
+            )
+            self.assertEqual(
+                h3_server.received_settings[Setting.QPACK_BLOCKED_STREAMS], 0
             )
 
-            # The encoder stream data no longer unblocks the stream.
+            # A Required Insert Count which is not zero, then a reference to a
+            # dynamic table entry.
+            stream_id = quic_client.get_next_available_stream_id()
             quic_client.send_stream_data(
-                6,
-                bytes.fromhex("3fe101c696d07abe941094cb6d0a08017d403971966e32ca98b46f"),
+                stream_id,
+                encode_frame(FrameType.HEADERS, b"\x02\x00\x80"),
+                end_stream=True,
             )
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
-            self.assertIsNone(closed(quic_server))
-            self.assertNotIn(0, h3_server._stream)
-
-    def test_blocked_stream_trailer(self) -> None:
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-
-            h3_client.handle_event(
-                StreamDataReceived(
-                    stream_id=3,
-                    data=bytes.fromhex(
-                        "0004170150000680020000074064091040bcc0000000faceb00c"
-                    ),
-                    end_stream=False,
-                )
-            )
-            h3_client.handle_event(
-                StreamDataReceived(stream_id=7, data=b"\x02", end_stream=False)
-            )
-            h3_client.handle_event(
-                StreamDataReceived(stream_id=11, data=b"\x03", end_stream=False)
-            )
-
             self.assertEqual(
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=0,
-                        data=bytes.fromhex(
-                            "011b0000d95696d07abe941094cb6d0a08017d403971966e32ca98b46f"
-                        ),
-                        end_stream=False,
-                    )
-                ),
-                [
-                    HeadersReceived(
-                        headers=[
-                            (b":status", b"200"),
-                            (b"date", b"Mon, 22 Jul 2019 06:33:33 GMT"),
-                        ],
-                        stream_id=0,
-                        stream_ended=False,
-                    )
-                ],
-            )
-
-            self.assertEqual(
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=0,
-                        data=bytes.fromhex(
-                            "00408d796f752072656163686564206d766673742e6e65742c20726561636820"
-                            "746865202f6563686f20656e64706f696e7420666f7220616e206563686f2072"
-                            "6573706f6e7365207175657279202f3c6e756d6265723e20656e64706f696e74"
-                            "7320666f722061207661726961626c652073697a6520726573706f6e73652077"
-                            "6974682072616e646f6d206279746573"
-                        ),
-                        end_stream=False,
-                    )
-                ),
-                [
-                    DataReceived(
-                        data=(
-                            b"you reached mvfst.net, reach the /echo endpoint for an "
-                            b"echo response query /<number> endpoints for a variable "
-                            b"size response with random bytes"
-                        ),
-                        stream_id=0,
-                        stream_ended=False,
-                    )
-                ],
-            )
-
-            self.assertEqual(
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=0, data=bytes.fromhex("0103028010"), end_stream=True
-                    )
-                ),
-                [],
-            )
-
-            self.assertEqual(
-                h3_client.handle_event(
-                    StreamDataReceived(
-                        stream_id=7,
-                        data=bytes.fromhex("6af2b20f49564d833505b38294e7"),
-                        end_stream=False,
-                    )
-                ),
-                [
-                    HeadersReceived(
-                        headers=[(b"x-some-trailer", b"foo")],
-                        stream_id=0,
-                        stream_ended=True,
-                    )
-                ],
+                closed(quic_server), (ErrorCode.QPACK_DECOMPRESSION_FAILED, "")
             )
 
     def test_uni_stream_grease(self) -> None:
@@ -3068,8 +2859,9 @@ class H3ConnectionTest(TestCase):
             quic_client.reset_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
 
-            # A Stream Cancellation is sent on the QPACK decoder stream.
-            self.assertEqual(h3_server._decoder_bytes_sent, decoder_bytes_sent + 1)
+            # No Stream Cancellation is sent, as there is no dynamic table (RFC
+            # 9204 section 4.4.2).
+            self.assertEqual(h3_server._decoder_bytes_sent, decoder_bytes_sent)
 
             # The stream is kept until the server finishes sending.
             self.assertIn(stream_id, h3_server._stream)
@@ -3102,6 +2894,38 @@ class H3ConnectionTest(TestCase):
             # The client opens a request stream, then resets it.
             stream_id = quic_client.get_next_available_stream_id()
             quic_client.send_stream_data(stream_id, b"")
+            quic_client.reset_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertNotIn(stream_id, h3_server._stream)
+
+            # The server aborts its response, which closes the QUIC stream.
+            transfer(quic_server, quic_client)
+            self.assertIn(
+                StreamReset(
+                    error_code=ErrorCode.H3_REQUEST_INCOMPLETE, stream_id=stream_id
+                ),
+                drain_events(quic_client),
+            )
+            transfer(quic_client, quic_server)
+            self.assertEqual(transfer(quic_server, quic_client), 0)
+            self.assertNotIn(stream_id, quic_server._streams)
+
+    def test_streams_are_closed_after_reset_during_headers(self) -> None:
+        """
+        A request stream which is reset while its HEADERS frame is only partly
+        received is aborted with H3_REQUEST_INCOMPLETE, see RFC 9114 section 4.1.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # The client sends the start of a HEADERS frame, then resets the stream.
+            stream_id = quic_client.get_next_available_stream_id()
+            quic_client.send_stream_data(
+                stream_id, encode_uint_var(FrameType.HEADERS) + encode_uint_var(10)
+            )
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertIn(stream_id, h3_server._stream)
             quic_client.reset_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
             self.assertNotIn(stream_id, h3_server._stream)
