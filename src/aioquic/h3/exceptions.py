@@ -4,6 +4,13 @@ class H3Error(Exception):
     """
 
 
+class InvalidStreamIdError(H3Error):
+    """
+    A stream ID was passed which is outside the range QUIC allows, from 0 to
+    2^62 - 1.
+    """
+
+
 class InvalidStreamStateError(H3Error):
     """
     An action was attempted on a stream in an invalid state, such as sending
