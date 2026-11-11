@@ -15,3 +15,9 @@ class InvalidStreamTypeError(H3Error):
     """
     An action was attempted on an invalid stream type.
     """
+
+
+class NoAvailablePushIDError(H3Error):
+    """
+    Kept for compatibility, as server push is no longer supported.
+    """

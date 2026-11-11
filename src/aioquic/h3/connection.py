@@ -1,6 +1,7 @@
 import contextlib
 import logging
 import re
+import warnings
 from collections.abc import Generator
 from enum import Enum, IntEnum
 
@@ -16,7 +17,11 @@ from aioquic.h3.events import (
     HeadersReceived,
     WebTransportStreamDataReceived,
 )
-from aioquic.h3.exceptions import InvalidStreamStateError, InvalidStreamTypeError
+from aioquic.h3.exceptions import (
+    InvalidStreamStateError,
+    InvalidStreamTypeError,
+    NoAvailablePushIDError,
+)
 from aioquic.quic.connection import (
     QuicConnection,
     stream_is_client_initiated,
@@ -674,6 +679,17 @@ class H3Connection:
             self._quic.send_stream_data(
                 stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
             )
+
+    # Server push is no longer supported: this stub is kept for servers which
+    # still call it, without a docstring so that it stays out of the docs.
+    def send_push_promise(self, stream_id: int, headers: Headers) -> int:
+        warnings.warn(
+            "send_push_promise() is deprecated and will be removed, as server push "
+            "is no longer supported",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        raise NoAvailablePushIDError
 
     @property
     def received_settings(self) -> dict[int, int] | None:

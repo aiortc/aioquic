@@ -30,7 +30,11 @@ from aioquic.h3.events import (
     Headers,
     HeadersReceived,
 )
-from aioquic.h3.exceptions import InvalidStreamStateError, InvalidStreamTypeError
+from aioquic.h3.exceptions import (
+    InvalidStreamStateError,
+    InvalidStreamTypeError,
+    NoAvailablePushIDError,
+)
 from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import (
     QuicEvent,
@@ -2240,6 +2244,21 @@ class H3ConnectionTest(TestCase):
                             stream_id=stream_id, data=b"hello", end_stream=True
                         )
             self.assertNotIn(unknown_stream_id, h3_server._stream)
+
+    def test_send_push_promise(self) -> None:
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_server = H3Connection(quic_server)
+            with (
+                self.assertWarns(DeprecationWarning) as cm,
+                self.assertRaises(NoAvailablePushIDError),
+            ):
+                h3_server.send_push_promise(stream_id=0, headers=[])
+            self.assertEqual(
+                str(cm.warning),
+                "send_push_promise() is deprecated and will be removed, as server "
+                "push is no longer supported",
+            )
+            self.assertEqual(cm.filename, __file__)
 
     def test_blocked_stream(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):

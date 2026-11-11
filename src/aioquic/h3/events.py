@@ -73,6 +73,17 @@ class HeadersReceived(H3Event):
 
 
 @dataclass
+class PushPromiseReceived(H3Event):
+    """
+    Kept for compatibility, as server push is no longer supported.
+    """
+
+    headers: Headers
+    push_id: int
+    stream_id: int
+
+
+@dataclass
 class WebTransportStreamDataReceived(H3Event):
     """
     The WebTransportStreamDataReceived is fired whenever data is received
