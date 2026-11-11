@@ -317,6 +317,13 @@ class CipherSuite(IntEnum):
     TLS_CHACHA20_POLY1305_SHA256 = 0x1303
     TLS_EMPTY_RENEGOTIATION_INFO_SCSV = 0x00FF
 
+    # Names used before the TLS_ prefix was added, kept for compatibility.
+    # Defined after the new names, they are aliases and never a member's name.
+    AES_128_GCM_SHA256 = TLS_AES_128_GCM_SHA256
+    AES_256_GCM_SHA384 = TLS_AES_256_GCM_SHA384
+    CHACHA20_POLY1305_SHA256 = TLS_CHACHA20_POLY1305_SHA256
+    EMPTY_RENEGOTIATION_INFO_SCSV = TLS_EMPTY_RENEGOTIATION_INFO_SCSV
+
 
 class CompressionMethod(IntEnum):
     NULL = 0
