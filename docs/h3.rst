@@ -46,6 +46,9 @@ Exceptions
     .. autoclass:: H3Error
         :members:
 
+    .. autoclass:: DatagramCapacityError
+        :members:
+
     .. autoclass:: InvalidConnectionStateError
         :members:
 

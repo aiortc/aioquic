@@ -16,6 +16,7 @@ from aioquic.h3.events import (
 from aioquic.h3.exceptions import (
     InvalidConnectionStateError,
     InvalidStreamIdError,
+    InvalidStreamStateError,
     InvalidStreamTypeError,
 )
 from aioquic.quic.events import DatagramFrameReceived
@@ -785,12 +786,13 @@ class WebTransportTest(TestCase):
                         h3_client.send_datagram(data=b"foo", stream_id=stream_id)
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
 
-            # The largest client-initiated bidirectional stream ID is sent.
-            h3_client.send_datagram(data=b"foo", stream_id=UINT_VAR_MAX - 3)
-            self.assertEqual(
-                h3_transfer(quic_client, h3_server),
-                [DatagramReceived(data=b"foo", stream_id=UINT_VAR_MAX - 3)],
-            )
+            # The largest client-initiated bidirectional stream ID is in range,
+            # but the stream is not open.
+            with self.assertRaisesMessage(
+                InvalidStreamStateError,
+                "Cannot send a datagram for a stream which is not open",
+            ):
+                h3_client.send_datagram(data=b"foo", stream_id=UINT_VAR_MAX - 3)
 
     def test_handle_datagram_truncated(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
