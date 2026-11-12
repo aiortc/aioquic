@@ -491,6 +491,11 @@ if __name__ == "__main__":
         help="listen on the specified address (defaults to ::)",
     )
     parser.add_argument(
+        "--legacy-http",
+        action="store_true",
+        help="use HTTP/0.9",
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=4433,
@@ -553,7 +558,7 @@ if __name__ == "__main__":
         secrets_log_file = None
 
     configuration = QuicConfiguration(
-        alpn_protocols=H3_ALPN + H0_ALPN,
+        alpn_protocols=H0_ALPN if args.legacy_http else H3_ALPN,
         congestion_control_algorithm=args.congestion_control_algorithm,
         is_client=False,
         max_datagram_frame_size=65535,

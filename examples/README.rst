@@ -27,11 +27,18 @@ HTTP/3
 HTTP/3 server
 .............
 
-You can run the example server, which handles both HTTP/0.9 and HTTP/3:
+You can run the example server:
 
 .. code-block:: console
 
    python examples/http3_server.py --certificate cert.pem --private-key key.pem
+
+To serve HTTP/0.9 instead of HTTP/3, as the QUIC interop runner expects, add
+``--legacy-http``:
+
+.. code-block:: console
+
+   python examples/http3_server.py --certificate cert.pem --private-key key.pem --legacy-http
 
 HTTP/3 client
 .............
@@ -42,7 +49,8 @@ You can run the example client to perform an HTTP/3 request:
 
   python examples/http3_client.py --ca-certs cert.pem https://localhost:4433/
 
-Alternatively you can perform an HTTP/0.9 request:
+If the server was started with ``--legacy-http``, perform an HTTP/0.9 request
+instead:
 
 .. code-block:: console
 
