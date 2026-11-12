@@ -1,5 +1,12 @@
 from aioquic.buffer import UINT_VAR_MAX, encode_uint_var
-from aioquic.h3.connection import H3_ALPN, ErrorCode, FrameType, H3Connection
+from aioquic.h3.connection import (
+    H3_ALPN,
+    ErrorCode,
+    FrameType,
+    H3Connection,
+    StreamType,
+    encode_frame,
+)
 from aioquic.h3.events import (
     DatagramReceived,
     HeadersReceived,
@@ -130,8 +137,8 @@ class WebTransportTest(TestCase):
 
     def test_bidirectional_stream(self) -> None:
         """
-        Both halves of a bidirectional WebTransport stream carry payload, not
-        HTTP/3 frames (draft-ietf-webtrans-http3 section 4.3).
+        A bidirectional WebTransport stream belongs to WebTransport in both
+        directions (draft-ietf-webtrans-http3-02 section 2).
         """
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
@@ -267,10 +274,43 @@ class WebTransportTest(TestCase):
             # Server opens the stream, client replies.
             self._check_bidirectional_stream(h3_server, h3_client, session_id)
 
+    def test_bidirectional_stream_signal_after_unknown_frame(self) -> None:
+        """
+        A WEBTRANSPORT_STREAM signal must be the very first bytes of a stream
+        (draft-ietf-webtrans-http3-15 section 4.3).
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # Create session.
+            session_id = self._make_session(h3_client, h3_server)
+
+            # Client sends an unknown frame, then a WEBTRANSPORT_STREAM signal.
+            stream_id = quic_client.get_next_available_stream_id()
+            quic_client.send_stream_data(
+                stream_id,
+                encode_frame(0x21, b"")
+                + encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
+                + encode_uint_var(session_id),
+            )
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertEqual(
+                closed(quic_server),
+                (
+                    ErrorCode.H3_FRAME_ERROR,
+                    "WEBTRANSPORT_STREAM must open a request stream",
+                ),
+            )
+
     def test_bidirectional_stream_signal_on_connect_stream(self) -> None:
         """
-        A WEBTRANSPORT_STREAM signal on the CONNECT stream does not end the
-        sending half of the session's stream, even before the server responds.
+        A WEBTRANSPORT_STREAM signal on the CONNECT stream is a connection
+        error (draft-ietf-webtrans-http3-15 section 4.3). It is sent before the
+        response, so only the request's HEADERS make it invalid.
         """
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
@@ -296,19 +336,19 @@ class WebTransportTest(TestCase):
                 encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
                 + encode_uint_var(session_id),
             )
-            h3_transfer(quic_client, h3_server)
-
-            # The session's stream is still tracked.
-            self.assertIn(session_id, h3_server._stream)
-
-            # The server can still respond on the session's stream.
-            h3_server.send_headers(stream_id=session_id, headers=[(b":status", b"200")])
-            h3_server.send_data(session_id, b"", end_stream=True)
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertEqual(
+                closed(quic_server),
+                (
+                    ErrorCode.H3_FRAME_ERROR,
+                    "WEBTRANSPORT_STREAM must open a request stream",
+                ),
+            )
 
     def test_bidirectional_stream_signal_on_request_stream(self) -> None:
         """
-        A WEBTRANSPORT_STREAM signal on a request stream we opened does not end
-        the sending half of the request stream.
+        A WEBTRANSPORT_STREAM signal in reply to a request we sent is a
+        connection error (draft-ietf-webtrans-http3-15 section 4.3).
         """
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
@@ -333,24 +373,119 @@ class WebTransportTest(TestCase):
             )
             h3_transfer(quic_client, h3_server)
 
-            # Server sends a WEBTRANSPORT_STREAM signal on the request stream.
+            # Server replies with a WEBTRANSPORT_STREAM signal.
             quic_server.send_stream_data(
                 stream_id,
                 encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
                 + encode_uint_var(session_id),
             )
-            h3_transfer(quic_server, h3_client)
+            self.assertEqual(h3_transfer(quic_server, h3_client), [])
+            self.assertEqual(
+                closed(quic_client),
+                (
+                    ErrorCode.H3_FRAME_ERROR,
+                    "WEBTRANSPORT_STREAM must open a request stream",
+                ),
+            )
 
-            # The request stream is still tracked.
-            self.assertIn(stream_id, h3_client._stream)
+    def test_bidirectional_stream_signal_without_webtransport(self) -> None:
+        """
+        Without WebTransport, a WEBTRANSPORT_STREAM frame on a request stream is
+        an unknown frame and is ignored, wherever it appears (RFC 9114 section 9).
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
 
-            # The client can still end the request stream.
-            h3_client.send_data(stream_id, b"", end_stream=True)
+            # Client sends WEBTRANSPORT_STREAM frames before and after a request.
+            stream_id = quic_client.get_next_available_stream_id()
+            quic_client.send_stream_data(
+                stream_id, encode_frame(FrameType.WEBTRANSPORT_STREAM, b"foo")
+            )
+            h3_client.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+            )
+            quic_client.send_stream_data(
+                stream_id, encode_frame(FrameType.WEBTRANSPORT_STREAM, b"bar")
+            )
+
+            # Server only sees the request.
+            self.assertEqual(
+                h3_transfer(quic_client, h3_server),
+                [
+                    HeadersReceived(
+                        headers=[
+                            (b":method", b"GET"),
+                            (b":scheme", b"https"),
+                            (b":authority", b"localhost"),
+                            (b":path", b"/"),
+                        ],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    )
+                ],
+            )
+            self.assertIsNone(closed(quic_server))
+
+    def test_control_stream_signal(self) -> None:
+        """
+        A WEBTRANSPORT_STREAM signal on the control stream is a connection
+        error (draft-ietf-webtrans-http3-15 section 4.3).
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # Create session.
+            session_id = self._make_session(h3_client, h3_server)
+
+            # Client sends a WEBTRANSPORT_STREAM signal on its control stream.
+            assert h3_client._local_control_stream_id is not None
+            quic_client.send_stream_data(
+                h3_client._local_control_stream_id,
+                encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
+                + encode_uint_var(session_id),
+            )
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertEqual(
+                closed(quic_server),
+                (
+                    ErrorCode.H3_FRAME_ERROR,
+                    "WEBTRANSPORT_STREAM must open a request stream",
+                ),
+            )
+
+    def test_control_stream_signal_without_webtransport(self) -> None:
+        """
+        Without WebTransport, a WEBTRANSPORT_STREAM frame on the control stream
+        is an unknown frame and is ignored (RFC 9114 section 9).
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # Client sends a WEBTRANSPORT_STREAM frame on its control stream.
+            assert h3_client._local_control_stream_id is not None
+            quic_client.send_stream_data(
+                h3_client._local_control_stream_id,
+                encode_frame(FrameType.WEBTRANSPORT_STREAM, b"foo"),
+            )
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertIsNone(closed(quic_server))
 
     def test_create_webtransport_stream_invalid_session(self) -> None:
         """
         A session ID must be the ID of a client-initiated bidirectional stream,
-        which carries the CONNECT request (draft-ietf-webtrans-http3).
+        which carries the CONNECT request (draft-ietf-webtrans-http3-02 section 2).
         """
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
@@ -397,6 +532,27 @@ class WebTransportTest(TestCase):
                                 h3_client.create_webtransport_stream(
                                     session_id, is_unidirectional=is_unidirectional
                                 )
+                    self.assertNotIn(stream_id, quic_client._streams)
+                    self.assertNotIn(stream_id, h3_client._stream)
+
+    def test_create_webtransport_stream_without_webtransport(self) -> None:
+        """
+        Without WebTransport, no WebTransport stream can be created.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+
+            for is_unidirectional in (False, True):
+                with self.subTest(is_unidirectional=is_unidirectional):
+                    stream_id = quic_client.get_next_available_stream_id(
+                        is_unidirectional=is_unidirectional
+                    )
+                    with self.assertRaisesMessage(
+                        InvalidStreamTypeError, "WebTransport is not enabled"
+                    ):
+                        h3_client.create_webtransport_stream(
+                            0, is_unidirectional=is_unidirectional
+                        )
                     self.assertNotIn(stream_id, quic_client._streams)
                     self.assertNotIn(stream_id, h3_client._stream)
 
@@ -532,6 +688,28 @@ class WebTransportTest(TestCase):
             # Client resets the stream.
             quic_client.reset_stream(stream_id, error_code=0)
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
+
+            # The stream is no longer tracked.
+            self.assertNotIn(stream_id, h3_server._stream)
+
+    def test_unidirectional_stream_without_webtransport(self) -> None:
+        """
+        Without WebTransport, a WebTransport unidirectional stream has an
+        unknown stream type and its data is discarded (RFC 9114 section 6.2).
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # Client opens a WebTransport unidirectional stream and ends it.
+            stream_id = quic_client.get_next_available_stream_id(is_unidirectional=True)
+            quic_client.send_stream_data(
+                stream_id,
+                encode_uint_var(StreamType.WEBTRANSPORT) + encode_uint_var(0) + b"foo",
+                end_stream=True,
+            )
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertIsNone(closed(quic_server))
 
             # The stream is no longer tracked.
             self.assertNotIn(stream_id, h3_server._stream)

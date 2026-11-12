@@ -426,6 +426,7 @@ class H3Stream:
         self.buffer = b""
         self.receiving_ended = False
         self.sending_ended = False
+        self.frame_received = False
         self.frame_size: int | None = None
         self.frame_type: int | None = None
         self.headers_recv_state: HeadersState = HeadersState.INITIAL
@@ -520,12 +521,16 @@ class H3Connection:
         :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
             If the session ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
-            If the session ID is not a client-initiated bidirectional stream.
+            If WebTransport is not enabled, or the session ID is not a
+            client-initiated bidirectional stream.
         """
+        if not self._enable_webtransport:
+            raise InvalidStreamTypeError("WebTransport is not enabled")
+
         self._check_stream_id(session_id)
 
         # The session ID is the ID of the CONNECT stream which established the
-        # session (draft-ietf-webtrans-http3).
+        # session (draft-ietf-webtrans-http3-02 section 2).
         if not stream_is_request_response(session_id):
             raise InvalidStreamTypeError(
                 "WebTransport sessions can only be client-initiated bidirectional "
@@ -546,9 +551,10 @@ class H3Connection:
                 + encode_uint_var(session_id),
             )
 
-            # The peer's reply has no 0x41 prefix, so record the stream now. HTTP/3
-            # sends nothing after the prefix, so only the peer's half keeps the state
-            # alive (draft-ietf-webtrans-http3 section 4.3).
+            # The stream belongs to WebTransport in both directions
+            # (draft-ietf-webtrans-http3-02 section 2), so the peer's reply has no
+            # 0x41 prefix: record the stream now. HTTP/3 sends nothing after the
+            # prefix, so only the peer's half keeps the state alive.
             stream = H3Stream(stream_id)
             stream.frame_type = FrameType.WEBTRANSPORT_STREAM
             stream.session_id = session_id
@@ -777,6 +783,11 @@ class H3Connection:
             # We never push and clients never allow a push ID, so no push ID can
             # be cancelled (RFC 9114 section 7.2.3).
             raise IdError("Server push is not supported")
+        elif frame_type == FrameType.WEBTRANSPORT_STREAM and self._enable_webtransport:
+            # Only the very first bytes of a request stream can carry the signal
+            # value (draft-ietf-webtrans-http3-15 section 4.3, which is stricter
+            # than the draft-02 we signal).
+            raise FrameError("WEBTRANSPORT_STREAM must open a request stream")
         elif frame_type in (
             FrameType.DATA,
             FrameType.HEADERS,
@@ -786,7 +797,9 @@ class H3Connection:
             # RFC 9114 sections 7.2.1, 7.2.2, 7.2.5 and 7.2.8
             raise FrameUnexpected("Invalid frame type on control stream")
 
-    def _check_request_frame_header(self, frame_type: int, frame_size: int) -> None:
+    def _check_request_frame_header(
+        self, stream: H3Stream, frame_type: int, frame_size: int
+    ) -> None:
         """
         Check a frame header received on a request stream.
 
@@ -809,6 +822,19 @@ class H3Connection:
         ):
             # RFC 9114 sections 4.1 and 7.2.3 to 7.2.8
             raise FrameUnexpected("Invalid frame type on request stream")
+        elif (
+            frame_type == FrameType.WEBTRANSPORT_STREAM
+            and self._enable_webtransport
+            and (
+                stream.frame_received
+                or stream.headers_send_state != HeadersState.INITIAL
+            )
+        ):
+            # Only the very first bytes of a stream can carry the signal value, and a
+            # request we sent already opened the stream. This follows
+            # draft-ietf-webtrans-http3-15 section 4.3, which is stricter than the
+            # draft-02 we signal.
+            raise FrameError("WEBTRANSPORT_STREAM must open a request stream")
         elif (
             frame_type == FrameType.HEADERS
             and frame_size > MAX_FIELD_SECTION_SIZE * 3 // 2
@@ -1228,21 +1254,25 @@ class H3Connection:
                     break
                 consumed = buf.tell()
 
-                self._check_request_frame_header(stream.frame_type, stream.frame_size)
+                self._check_request_frame_header(
+                    stream=stream,
+                    frame_type=stream.frame_type,
+                    frame_size=stream.frame_size,
+                )
+                stream.frame_received = True
 
-                # WEBTRANSPORT_STREAM frames last until the end of the stream
-                if stream.frame_type == FrameType.WEBTRANSPORT_STREAM:
+                # WEBTRANSPORT_STREAM frames last until the end of the stream.
+                # Without WebTransport, they are unknown frames (RFC 9114 section 9).
+                if (
+                    stream.frame_type == FrameType.WEBTRANSPORT_STREAM
+                    and self._enable_webtransport
+                ):
                     stream.session_id = stream.frame_size
                     stream.frame_size = None
 
                     # HTTP/3 sends nothing on a WebTransport stream it accepted, so
-                    # only the peer's half keeps the state alive. A stream which
-                    # already carried HEADERS is not one.
-                    if (
-                        stream.headers_recv_state == HeadersState.INITIAL
-                        and stream.headers_send_state == HeadersState.INITIAL
-                    ):
-                        stream.sending_ended = True
+                    # only the peer's half keeps the state alive.
+                    stream.sending_ended = True
 
                     frame_data = stream.buffer[consumed:]
                     stream.buffer = b""
@@ -1344,7 +1374,11 @@ class H3Connection:
         consumed = 0
 
         while (
-            stream.stream_type in (StreamType.CONTROL, StreamType.WEBTRANSPORT)
+            stream.stream_type == StreamType.CONTROL
+            or (
+                stream.stream_type == StreamType.WEBTRANSPORT
+                and self._enable_webtransport
+            )
             or not buf.eof()
         ):
             # fetch stream type for unidirectional streams
@@ -1434,7 +1468,10 @@ class H3Connection:
                     if not stream.frame_size:
                         stream.frame_size = None
                         stream.frame_type = None
-            elif stream.stream_type == StreamType.WEBTRANSPORT:
+            elif (
+                stream.stream_type == StreamType.WEBTRANSPORT
+                and self._enable_webtransport
+            ):
                 # fetch session id
                 if stream.session_id is None:
                     try:
