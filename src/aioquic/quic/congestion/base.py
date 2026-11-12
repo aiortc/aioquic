@@ -42,7 +42,10 @@ class QuicCongestionControl(abc.ABC):
     def on_rtt_measurement(self, *, now: float, rtt: float) -> None: ...
 
     def get_log_data(self) -> dict[str, Any]:
-        data = {"cwnd": self.congestion_window, "bytes_in_flight": self.bytes_in_flight}
+        data = {
+            "bytes_in_flight": self.bytes_in_flight,
+            "congestion_window": self.congestion_window,
+        }
         if self.ssthresh is not None:
             data["ssthresh"] = self.ssthresh
         return data

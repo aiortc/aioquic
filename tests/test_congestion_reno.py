@@ -24,13 +24,17 @@ class RenoCongestionControlTest(TestCase):
     def test_log_data(self) -> None:
         self.assertEqual(
             self.reno.get_log_data(),
-            {"cwnd": K_INITIAL_WINDOW * 1280, "bytes_in_flight": 0},
+            {"congestion_window": K_INITIAL_WINDOW * 1280, "bytes_in_flight": 0},
         )
 
         self.reno.ssthresh = 5000
         self.assertEqual(
             self.reno.get_log_data(),
-            {"cwnd": K_INITIAL_WINDOW * 1280, "bytes_in_flight": 0, "ssthresh": 5000},
+            {
+                "congestion_window": K_INITIAL_WINDOW * 1280,
+                "bytes_in_flight": 0,
+                "ssthresh": 5000,
+            },
         )
 
     def test_packet_acked_during_recovery(self) -> None:

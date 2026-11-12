@@ -4,6 +4,7 @@ import re
 import warnings
 from collections.abc import Generator
 from enum import Enum, IntEnum
+from typing import Any
 
 import pylsqpack
 from aioquic._deprecations import deprecate_positional_argument
@@ -480,11 +481,7 @@ class H3Connection:
             self._blocked_streams,
             max_field_section_size=MAX_FIELD_SECTION_SIZE,
         )
-        self._decoder_bytes_received = 0
-        self._decoder_bytes_sent = 0
         self._encoder = pylsqpack.Encoder()
-        self._encoder_bytes_received = 0
-        self._encoder_bytes_sent = 0
         self._settings_received = False
         self._stream: dict[int, H3Stream] = {}
 
@@ -631,8 +628,7 @@ class H3Connection:
         # log frame
         if self._quic_logger is not None:
             self._quic_logger.log_event(
-                category="http",
-                event="frame_created",
+                name="http3:frame_created",
                 data=self._quic_logger.encode_http3_data_frame(
                     length=len(data), stream_id=stream_id
                 ),
@@ -688,8 +684,7 @@ class H3Connection:
             # log frame
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="http",
-                    event="frame_created",
+                    name="http3:frame_created",
                     data=self._quic_logger.encode_http3_headers_frame(
                         length=len(frame_data), headers=headers, stream_id=stream_id
                     ),
@@ -854,7 +849,6 @@ class H3Connection:
         """
         try:
             decoder, headers = self._decoder.feed_header(stream_id, frame_data)
-            self._decoder_bytes_sent += len(decoder)
             self._quic.send_stream_data(self._local_decoder_stream_id, decoder)
         except pylsqpack.FieldSectionTooLarge as exc:
             raise ExcessiveLoad("Field section is too large") from exc
@@ -868,7 +862,6 @@ class H3Connection:
         Encode a HEADERS block and send encoder updates on the encoder stream.
         """
         encoder, frame_data = self._encoder.encode(stream_id, headers)
-        self._encoder_bytes_sent += len(encoder)
         self._quic.send_stream_data(self._local_encoder_stream_id, encoder)
         return frame_data
 
@@ -1026,8 +1019,7 @@ class H3Connection:
             # log frame
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="http",
-                    event="frame_parsed",
+                    name="http3:frame_parsed",
                     data=self._quic_logger.encode_http3_headers_frame(
                         length=len(frame_data),
                         headers=headers,
@@ -1097,18 +1089,25 @@ class H3Connection:
 
     def _log_stream_type(self, stream_id: int, stream_type: int) -> None:
         if self._quic_logger is not None:
+            data: dict[str, Any] = {
+                "initiator": "local"
+                if stream_is_client_initiated(stream_id) == self._is_client
+                else "remote",
+                "stream_id": stream_id,
+            }
             type_name = {
                 0: "control",
-                2: "qpack_encoder",
-                3: "qpack_decoder",
-                0x54: "webtransport",  # NOTE: not standardized yet
-            }.get(stream_type, "unknown")
+                2: "qpack_encode",
+                3: "qpack_decode",
+            }.get(stream_type)
+            if type_name is not None:
+                data["stream_type"] = type_name
+            else:
+                # Other types, including WebTransport's, have no qlog name.
+                data["stream_type"] = "unknown"
+                data["stream_type_bytes"] = stream_type
 
-            self._quic_logger.log_event(
-                category="http",
-                event="stream_type_set",
-                data={"new": type_name, "stream_id": stream_id},
-            )
+            self._quic_logger.log_event(name="http3:stream_type_set", data=data)
 
     def _receive_datagram(self, data: bytes) -> list[H3Event]:
         """
@@ -1247,8 +1246,7 @@ class H3Connection:
                     and stream.frame_type == FrameType.DATA
                 ):
                     self._quic_logger.log_event(
-                        category="http",
-                        event="frame_parsed",
+                        name="http3:frame_parsed",
                         data=self._quic_logger.encode_http3_data_frame(
                             length=stream.frame_size, stream_id=stream.stream_id
                         ),
@@ -1444,7 +1442,6 @@ class H3Connection:
                     self._encoder.feed_decoder(data)
                 except pylsqpack.DecoderStreamError as exc:
                     raise QpackDecoderStreamError() from exc
-                self._decoder_bytes_received += len(data)
             elif stream.stream_type == StreamType.QPACK_ENCODER:
                 # feed unframed data to encoder
                 data = buf.pull_bytes(buf.capacity - buf.tell())
@@ -1453,7 +1450,6 @@ class H3Connection:
                     self._decoder.feed_encoder(data)
                 except pylsqpack.EncoderStreamError as exc:
                     raise QpackEncoderStreamError() from exc
-                self._encoder_bytes_received += len(data)
             else:
                 # unknown stream type, discard data
                 buf.seek(buf.capacity)
@@ -1481,7 +1477,6 @@ class H3Connection:
         # encoder know (RFC 9204 section 4.4.2).
         if not stream_is_unidirectional(stream_id):
             decoder = self._decoder.cancel_stream(stream_id)
-            self._decoder_bytes_sent += len(decoder)
             self._quic.send_stream_data(self._local_decoder_stream_id, decoder)
 
         if stream is not None:

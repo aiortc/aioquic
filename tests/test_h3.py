@@ -118,6 +118,35 @@ def drain_events(quic: QuicConnection) -> list[QuicEvent]:
     return events
 
 
+def qpack_decoder_bytes_sent(quic: QuicConnection) -> int:
+    """
+    Return how many bytes of QPACK decoder instructions `quic` has sent,
+    according to its qlog.
+    """
+    logger = quic.configuration.quic_logger
+    assert logger is not None
+    events = logger.to_dict()["traces"][0]["events"]
+    [stream_id] = [
+        event["data"]["stream_id"]
+        for event in events
+        if event["name"] == "http3:stream_type_set"
+        and event["data"]["initiator"] == "local"
+        and event["data"]["stream_type"] == "qpack_decode"
+    ]
+    end = max(
+        (
+            frame["offset"] + frame["raw"]["length"]
+            for event in events
+            if event["name"] == "quic:packet_sent"
+            for frame in event["data"]["frames"]
+            if frame["frame_type"] == "stream" and frame["stream_id"] == stream_id
+        ),
+        default=0,
+    )
+    # The stream starts with its type, a single byte.
+    return max(end - 1, 0)
+
+
 def send_goaway(h3: H3Connection, frame_data: bytes) -> None:
     """
     Send a GOAWAY frame on the control stream of `h3`, which cannot send one.
@@ -2386,7 +2415,8 @@ class H3ConnectionTest(TestCase):
                 self.assertNotIn(stream_id, h3_server._stream)
 
             # No Stream Cancellation is sent for unidirectional streams.
-            self.assertEqual(h3_server._decoder_bytes_sent, 0)
+            transfer(quic_server, quic_client)
+            self.assertEqual(qpack_decoder_bytes_sent(quic_server), 0)
 
     def test_request_with_interim_responses(self) -> None:
         """
@@ -2575,6 +2605,42 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(h3_server._stream[2].stream_type, 9)
             self.assertEqual(h3_server._stream[6].buffer, b"")
             self.assertEqual(h3_server._stream[6].stream_type, 64)
+
+            # unknown stream types are logged by value
+            logger = quic_server.configuration.quic_logger
+            assert logger is not None
+            self.assertEqual(
+                [
+                    event["data"]
+                    for event in logger.to_dict()["traces"][0]["events"]
+                    if event["name"] == "http3:stream_type_set"
+                ],
+                [
+                    {"initiator": "local", "stream_id": 3, "stream_type": "control"},
+                    {
+                        "initiator": "local",
+                        "stream_id": 7,
+                        "stream_type": "qpack_encode",
+                    },
+                    {
+                        "initiator": "local",
+                        "stream_id": 11,
+                        "stream_type": "qpack_decode",
+                    },
+                    {
+                        "initiator": "remote",
+                        "stream_id": 2,
+                        "stream_type": "unknown",
+                        "stream_type_bytes": 9,
+                    },
+                    {
+                        "initiator": "remote",
+                        "stream_id": 6,
+                        "stream_type": "unknown",
+                        "stream_type_bytes": 64,
+                    },
+                ],
+            )
 
     def test_validate_settings_h3_datagram_invalid_value(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
@@ -2889,7 +2955,6 @@ class H3ConnectionTest(TestCase):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
             stream_id = self._send_request_headers(h3_client, h3_server)
-            decoder_bytes_sent = h3_server._decoder_bytes_sent
 
             # The client resets the request.
             quic_client.reset_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
@@ -2897,7 +2962,8 @@ class H3ConnectionTest(TestCase):
 
             # No Stream Cancellation is sent, as there is no dynamic table (RFC
             # 9204 section 4.4.2).
-            self.assertEqual(h3_server._decoder_bytes_sent, decoder_bytes_sent)
+            transfer(quic_server, quic_client)
+            self.assertEqual(qpack_decoder_bytes_sent(quic_server), 0)
 
             # The stream is kept until the server finishes sending.
             self.assertIn(stream_id, h3_server._stream)
