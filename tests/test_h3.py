@@ -560,6 +560,28 @@ class H3ConnectionTest(TestCase):
             self.assertIsNone(closed(quic_server))
             self.assertEqual(h3_server.received_settings, DUMMY_SETTINGS)
 
+    def test_handle_control_frame_settings_qpack_maximum(self) -> None:
+        """
+        The QPACK settings can take any value, and the encoder may use less
+        than the peer allows (RFC 9204 section 3.2.3).
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_server = H3Connection(quic_server)
+
+            settings = copy.copy(DUMMY_SETTINGS)
+            settings[Setting.QPACK_MAX_TABLE_CAPACITY] = UINT_VAR_MAX
+            settings[Setting.QPACK_BLOCKED_STREAMS] = UINT_VAR_MAX
+            h3_server.handle_event(
+                StreamDataReceived(
+                    stream_id=2,
+                    data=encode_uint_var(StreamType.CONTROL)
+                    + encode_frame(FrameType.SETTINGS, encode_settings(settings)),
+                    end_stream=False,
+                )
+            )
+            self.assertIsNone(closed(quic_server))
+            self.assertEqual(h3_server.received_settings, settings)
+
     def test_handle_control_frame_settings_too_large(self) -> None:
         """
         A SETTINGS frame of up to 4 KiB is accepted, a larger one is rejected
