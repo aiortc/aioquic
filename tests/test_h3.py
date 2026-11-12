@@ -2838,29 +2838,6 @@ class H3ConnectionTest(TestCase):
                 ),
             )
 
-    def test_validate_settings_h3_datagram_without_transport_parameter(self) -> None:
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_server = H3Connection(quic_server)
-
-            # receive SETTINGS with H3_DATAGRAM=1 but no max_datagram_frame_size TP
-            settings = copy.copy(DUMMY_SETTINGS)
-            settings[Setting.H3_DATAGRAM] = 1
-            h3_server.handle_event(
-                StreamDataReceived(
-                    stream_id=2,
-                    data=encode_uint_var(StreamType.CONTROL)
-                    + encode_frame(FrameType.SETTINGS, encode_settings(settings)),
-                    end_stream=False,
-                )
-            )
-            self.assertEqual(
-                closed(quic_server),
-                (
-                    ErrorCode.H3_SETTINGS_ERROR,
-                    "H3_DATAGRAM requires max_datagram_frame_size transport parameter",
-                ),
-            )
-
     def test_validate_settings_enable_connect_protocol_invalid_value(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_server = H3Connection(quic_server)
