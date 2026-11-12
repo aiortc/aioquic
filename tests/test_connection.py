@@ -30,6 +30,7 @@ from aioquic.quic.crypto import CryptoPair
 from aioquic.quic.exceptions import (
     ConnectionConfigurationError,
     ConnectionStateError,
+    DatagramFrameCapacityError,
     OutOfRangeError,
     StreamStateError,
     StreamTypeError,
@@ -3968,8 +3969,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(event.data, b"hello")
 
     def test_datagram_frame_2(self) -> None:
-        # payload which exactly fills an entire packet
-        payload = b"Z" * 1170
+        # payload which fills a packet with the longest connection ID
+        payload = b"Z" * 1158
 
         with client_and_server(
             client_options={"max_datagram_frame_size": 65536},
@@ -3998,6 +3999,192 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 event = server.next_event()
                 assert isinstance(event, events.DatagramFrameReceived)
                 self.assertEqual(event.data, payload)
+
+    def test_datagram_frame_capacity(self) -> None:
+        """
+        The capacity is the largest payload which fits both the peer's
+        max_datagram_frame_size and a single packet with the longest connection
+        ID (RFC 9221 sections 3 and 5). A payload of that size reaches the peer.
+        """
+        for server_options, capacity in [
+            ({}, None),
+            ({"max_datagram_frame_size": 0}, None),
+            ({"max_datagram_frame_size": 1}, None),
+            ({"max_datagram_frame_size": 2}, 0),
+            ({"max_datagram_frame_size": 65}, 63),
+            ({"max_datagram_frame_size": 66}, 63),
+            ({"max_datagram_frame_size": 65535}, 1158),
+            ({"connection_id_length": 4, "max_datagram_frame_size": 65535}, 1158),
+            ({"connection_id_length": 20, "max_datagram_frame_size": 65535}, 1158),
+        ]:
+            with (
+                self.subTest(**server_options),
+                client_and_server(
+                    client_options={"max_datagram_frame_size": 65535},
+                    server_options=server_options,
+                ) as (client, server),
+            ):
+                self.assertEqual(client.get_datagram_frame_capacity(), capacity)
+                if capacity is not None:
+                    consume_events(server)
+                    client.send_datagram_frame(bytes(capacity))
+                    self.assertEqual(transfer(client, server), 1)
+                    self.assertEventsEqual(
+                        server, [events.DatagramFrameReceived(data=bytes(capacity))]
+                    )
+
+    def test_datagram_frame_capacity_before_handshake(self) -> None:
+        """
+        Before the handshake, the capacity is only known from the peer's limit
+        stored in a session ticket (RFC 9221 section 3).
+        """
+        server_options = {"max_datagram_frame_size": 100}
+        client_ticket, ticket_store = self.create_session_ticket(
+            server_options=server_options
+        )
+
+        for client_options, capacity in [
+            ({}, None),
+            ({"session_ticket": client_ticket}, 97),
+        ]:
+            with (
+                self.subTest(session_ticket="session_ticket" in client_options),
+                client_and_server(
+                    client_options=client_options,
+                    server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+                    server_options=server_options,
+                    handshake=False,
+                ) as (client, server),
+            ):
+                self.assertIsNone(client.get_datagram_frame_capacity())
+                client.connect(SERVER_ADDR, now=time.time())
+                self.assertEqual(client.get_datagram_frame_capacity(), capacity)
+
+    def test_datagram_frame_not_supported(self) -> None:
+        """
+        A datagram cannot be sent unless the peer advertised a limit which fits
+        a DATAGRAM frame (RFC 9221 section 3).
+        """
+        # The server did not advertise support, or a limit too small for any frame.
+        for server_options in [
+            {},
+            {"max_datagram_frame_size": 0},
+            {"max_datagram_frame_size": 1},
+        ]:
+            with (
+                self.subTest(**server_options),
+                client_and_server(server_options=server_options) as (client, server),
+            ):
+                with self.assertRaisesMessage(
+                    ConnectionStateError,
+                    "Cannot send a datagram unless the peer accepts datagrams",
+                ):
+                    client.send_datagram_frame(b"")
+                self.assertEqual(transfer(client, server), 0)
+
+        # The client does not know the server's limit yet, before or after it
+        # starts the handshake.
+        with client_and_server(
+            server_options={"max_datagram_frame_size": 65536}, handshake=False
+        ) as (client, server):
+            with self.assertRaisesMessage(
+                ConnectionStateError,
+                "Cannot send a datagram unless the peer accepts datagrams",
+            ):
+                client.send_datagram_frame(b"hello")
+            client.connect(SERVER_ADDR, now=time.time())
+            with self.assertRaisesMessage(
+                ConnectionStateError,
+                "Cannot send a datagram unless the peer accepts datagrams",
+            ):
+                client.send_datagram_frame(b"hello")
+
+    def test_datagram_frame_too_large(self) -> None:
+        """
+        A datagram must fit both the peer's max_datagram_frame_size (RFC 9221
+        section 3) and a single packet (RFC 9221 section 5).
+        """
+        for max_datagram_frame_size, capacity in [(100, 97), (65536, 1158)]:
+            with (
+                self.subTest(max_datagram_frame_size=max_datagram_frame_size),
+                client_and_server(
+                    server_options={"max_datagram_frame_size": max_datagram_frame_size}
+                ) as (client, server),
+            ):
+                with self.assertRaisesMessage(
+                    DatagramFrameCapacityError,
+                    f"Datagram of {capacity + 1} bytes exceeds the capacity of "
+                    f"{capacity} bytes",
+                ):
+                    client.send_datagram_frame(bytes(capacity + 1))
+                self.assertEqual(transfer(client, server), 0)
+
+    def test_datagram_frame_with_0rtt(self) -> None:
+        """
+        The client remembers the server's limit from the session ticket, so it
+        can send a datagram in 0-RTT (RFC 9221 section 3).
+        """
+        server_options = {"max_datagram_frame_size": 65536}
+        client_ticket, ticket_store = self.create_session_ticket(
+            server_options=server_options
+        )
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+            server_options=server_options,
+            handshake=False,
+        ) as (client, server):
+            client.connect(SERVER_ADDR, now=time.time())
+            client.send_datagram_frame(b"hello")
+
+            self.assertEqual(roundtrip(client, server), (1, 1))
+            self.assertEventsEqual(
+                server,
+                [
+                    events.ProtocolNegotiated(alpn_protocol=None),
+                    events.DatagramFrameReceived(data=b"hello"),
+                ],
+            )
+
+    def test_datagram_frame_with_0rtt_rejected(self) -> None:
+        """
+        A server which rejects 0-RTT data can lower the limit stored in the
+        session ticket (RFC 9221 section 3), so datagrams still queued when the
+        handshake completes are dropped if they no longer fit.
+        """
+        for max_datagram_frame_size, received in [
+            (100, [events.DatagramFrameReceived(data=bytes(50))]),
+            (None, []),
+        ]:
+            client_ticket, ticket_store = self.create_session_ticket(
+                server_options={"max_datagram_frame_size": 65536}
+            )
+            with (
+                self.subTest(max_datagram_frame_size=max_datagram_frame_size),
+                client_and_server(
+                    client_options={"session_ticket": client_ticket},
+                    server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+                    server_options={"max_datagram_frame_size": max_datagram_frame_size},
+                    handshake=False,
+                ) as (client, server),
+            ):
+                # A datagram filling a 1-RTT packet does not fit a 0-RTT packet,
+                # which has a longer header, so it and the next one stay queued.
+                client.connect(SERVER_ADDR, now=time.time())
+                client.send_datagram_frame(bytes(1158))
+                client.send_datagram_frame(bytes(50))
+
+                roundtrip_until_done(client, server)
+                self.assertEqual(client._state, QuicConnectionState.CONNECTED)
+                self.assertEqual(
+                    [
+                        event
+                        for event in iter(server.next_event, None)
+                        if isinstance(event, events.DatagramFrameReceived)
+                    ],
+                    received,
+                )
 
     def test_decryption_error(self) -> None:
         with client_and_server() as (client, server):

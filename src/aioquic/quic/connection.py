@@ -23,6 +23,7 @@ from .crypto import CryptoError, CryptoPair, KeyUnavailableError, NoCallback
 from .exceptions import (
     ConnectionConfigurationError,
     ConnectionStateError,
+    DatagramFrameCapacityError,
     OutOfRangeError,
     StreamStateError,
     StreamTypeError,
@@ -746,6 +747,35 @@ class QuicConnection:
 
         return ret
 
+    def get_datagram_frame_capacity(self) -> int | None:
+        """
+        Return the largest payload which fits in a DATAGRAM frame, or `None` if
+        no DATAGRAM frame can be sent.
+
+        The value can change during the connection.
+        """
+        if self._remote_max_datagram_frame_size is None:
+            return None
+
+        # DATAGRAM frames cannot be fragmented (RFC 9221 section 5). Assume the
+        # longest connection ID, as the peer can switch to a longer one.
+        max_frame_size = min(
+            self._remote_max_datagram_frame_size,
+            self._max_datagram_size
+            - 1
+            - CONNECTION_ID_MAX_SIZE
+            - PACKET_NUMBER_SEND_SIZE
+            - self._cryptos[tls.Epoch.ONE_RTT].aead_tag_size,
+        )
+
+        # Even an empty payload needs the frame type and length.
+        if max_frame_size < 2:
+            return None
+        size = max_frame_size - 2
+        while 1 + size_uint_var(size) + size > max_frame_size:
+            size -= 1
+        return size
+
     def get_next_available_stream_id(self, is_unidirectional: bool = False) -> int:
         """
         Return the stream ID for the next stream created by this endpoint.
@@ -1404,7 +1434,21 @@ class QuicConnection:
         .. aioquic_transmit::
 
         :param data: The data to be sent.
+        :raises ~aioquic.quic.exceptions.ConnectionStateError:
+            If the peer does not accept datagrams, or is not known to yet.
+        :raises ~aioquic.quic.exceptions.DatagramFrameCapacityError:
+            If the data exceeds the capacity of a DATAGRAM frame.
         """
+        capacity = self.get_datagram_frame_capacity()
+        if capacity is None:
+            raise ConnectionStateError(
+                "Cannot send a datagram unless the peer accepts datagrams"
+            )
+        if len(data) > capacity:
+            raise DatagramFrameCapacityError(
+                f"Datagram of {len(data)} bytes exceeds the capacity of "
+                f"{capacity} bytes"
+            )
         self._datagrams_pending.append(data)
 
     def send_stream_data(
@@ -3628,6 +3672,21 @@ class QuicConnection:
         self._remote_max_datagram_frame_size = (
             quic_transport_parameters.max_datagram_frame_size
         )
+        if not from_session_ticket:
+            # Only a server which accepts 0-RTT data must keep the limit stored in
+            # the session ticket (RFC 9221 section 3).
+            capacity = self.get_datagram_frame_capacity()
+            kept = deque(
+                data
+                for data in self._datagrams_pending
+                if capacity is not None and len(data) <= capacity
+            )
+            if len(kept) < len(self._datagrams_pending):
+                self._logger.info(
+                    "Dropping %d datagrams which the peer does not accept",
+                    len(self._datagrams_pending) - len(kept),
+                )
+            self._datagrams_pending = kept
         self._remote_reset_stream_at = bool(quic_transport_parameters.reset_stream_at)
         for param in [
             "max_data",

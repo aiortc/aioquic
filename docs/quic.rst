@@ -67,6 +67,9 @@ Exceptions
     .. autoclass:: ConnectionStateError
         :members:
 
+    .. autoclass:: DatagramFrameCapacityError
+        :members:
+
     .. autoclass:: OutOfRangeError
         :members:
 
