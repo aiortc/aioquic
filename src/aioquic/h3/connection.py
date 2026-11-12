@@ -545,6 +545,15 @@ class H3Connection:
                 encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
                 + encode_uint_var(session_id),
             )
+
+            # The peer's reply has no 0x41 prefix, so record the stream now. HTTP/3
+            # sends nothing after the prefix, so only the peer's half keeps the state
+            # alive (draft-ietf-webtrans-http3 section 4.3).
+            stream = H3Stream(stream_id)
+            stream.frame_type = FrameType.WEBTRANSPORT_STREAM
+            stream.session_id = session_id
+            stream.sending_ended = True
+            self._stream[stream_id] = stream
         return stream_id
 
     def handle_event(self, event: QuicEvent) -> list[H3Event]:
@@ -1225,6 +1234,15 @@ class H3Connection:
                 if stream.frame_type == FrameType.WEBTRANSPORT_STREAM:
                     stream.session_id = stream.frame_size
                     stream.frame_size = None
+
+                    # HTTP/3 sends nothing on a WebTransport stream it accepted, so
+                    # only the peer's half keeps the state alive. A stream which
+                    # already carried HEADERS is not one.
+                    if (
+                        stream.headers_recv_state == HeadersState.INITIAL
+                        and stream.headers_send_state == HeadersState.INITIAL
+                    ):
+                        stream.sending_ended = True
 
                     frame_data = stream.buffer[consumed:]
                     stream.buffer = b""
