@@ -97,7 +97,6 @@ SECRETS_LABELS = [
 ]
 STREAM_FLAGS = 0x07
 STREAM_COUNT_MAX = 0x1000000000000000
-UDP_HEADER_SIZE = 8
 MAX_PENDING_RETIRES = 100
 MAX_PENDING_CRYPTO = 524288  # in bytes
 
@@ -877,17 +876,8 @@ class QuicConnection:
         # log datagram
         if self._quic_logger is not None:
             self._quic_logger.log_event(
-                category="transport",
-                event="datagrams_received",
-                data={
-                    "count": 1,
-                    "raw": [
-                        {
-                            "length": UDP_HEADER_SIZE + payload_length,
-                            "payload_length": payload_length,
-                        }
-                    ],
-                },
+                name="quic:udp_datagrams_received",
+                data={"count": 1, "raw": [{"length": payload_length}]},
             )
 
         # RFC 9000 section 9 requires clients to discard packets from an unknown
@@ -895,10 +885,10 @@ class QuicConnection:
         if self._is_client and all(path.addr != addr for path in self._network_paths):
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="transport",
-                    event="packet_dropped",
+                    name="quic:packet_dropped",
                     data={
-                        "trigger": "unknown_server_address",
+                        "details": {"reason": "unknown_server_address"},
+                        "trigger": "rejected",
                         "raw": {"length": payload_length},
                     },
                 )
@@ -932,10 +922,10 @@ class QuicConnection:
             except ValueError:
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_dropped",
+                        name="quic:packet_dropped",
                         data={
-                            "trigger": "header_parse_error",
+                            "details": {"reason": "header_parse_error"},
+                            "trigger": "invalid",
                             "raw": {"length": buf.capacity - start_off},
                         },
                     )
@@ -950,10 +940,10 @@ class QuicConnection:
             ):
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_dropped",
+                        name="quic:packet_dropped",
                         data={
-                            "trigger": "initial_packet_datagram_too_small",
+                            "details": {"reason": "initial_packet_datagram_too_small"},
+                            "trigger": "invalid",
                             "raw": {"length": header.packet_length},
                         },
                     )
@@ -973,10 +963,9 @@ class QuicConnection:
             ):
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_dropped",
+                        name="quic:packet_dropped",
                         data={
-                            "trigger": "unknown_connection_id",
+                            "trigger": "connection_unknown",
                             "raw": {"length": header.packet_length},
                         },
                     )
@@ -994,10 +983,9 @@ class QuicConnection:
             ):
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_dropped",
+                        name="quic:packet_dropped",
                         data={
-                            "trigger": "unsupported_version",
+                            "trigger": "unsupported",
                             "raw": {"length": header.packet_length},
                         },
                     )
@@ -1024,10 +1012,10 @@ class QuicConnection:
             ):
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_dropped",
+                        name="quic:packet_dropped",
                         data={
-                            "trigger": "unexpected_source_connection_id",
+                            "details": {"reason": "unexpected_source_connection_id"},
+                            "trigger": "invalid",
                             "raw": {"length": header.packet_length},
                         },
                     )
@@ -1042,8 +1030,7 @@ class QuicConnection:
                 if header.packet_type != QuicPacketType.INITIAL:
                     if self._quic_logger is not None:
                         self._quic_logger.log_event(
-                            category="transport",
-                            event="packet_dropped",
+                            name="quic:packet_dropped",
                             data={
                                 "trigger": "key_unavailable",
                                 "raw": {"length": header.packet_length},
@@ -1080,8 +1067,7 @@ class QuicConnection:
                 self._logger.debug(exc)
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_dropped",
+                        name="quic:packet_dropped",
                         data={
                             "trigger": "key_unavailable",
                             "raw": {"length": header.packet_length},
@@ -1103,10 +1089,9 @@ class QuicConnection:
                 self._logger.debug(exc)
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_dropped",
+                        name="quic:packet_dropped",
                         data={
-                            "trigger": "payload_decrypt_error",
+                            "trigger": "decryption_failure",
                             "raw": {"length": header.packet_length},
                         },
                     )
@@ -1116,8 +1101,7 @@ class QuicConnection:
             if packet_number in space.received_packets:
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_dropped",
+                        name="quic:packet_dropped",
                         data={
                             "trigger": "duplicate",
                             "raw": {"length": header.packet_length},
@@ -1143,8 +1127,7 @@ class QuicConnection:
             if self._quic_logger is not None:
                 quic_logger_frames = []
                 self._quic_logger.log_event(
-                    category="transport",
-                    event="packet_received",
+                    name="quic:packet_received",
                     data={
                         "frames": quic_logger_frames,
                         "header": {
@@ -1199,8 +1182,7 @@ class QuicConnection:
 
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="connectivity",
-                        event="spin_bit_updated",
+                        name="quic:spin_bit_updated",
                         data={"state": self._spin_bit},
                     )
 
@@ -1691,17 +1673,20 @@ class QuicConnection:
 
         if self._quic_logger is not None:
             self._quic_logger.log_event(
-                category="transport",
-                event="version_information",
-                data={
-                    "client_versions": self._configuration.supported_versions,
-                    "chosen_version": self._version,
-                },
+                name="quic:version_information",
+                data=self._quic_logger.encode_version_information(
+                    chosen_version=self._version,
+                    client_versions=self._configuration.supported_versions,
+                ),
             )
             self._quic_logger.log_event(
-                category="transport",
-                event="alpn_information",
-                data={"client_alpns": self._configuration.alpn_protocols},
+                name="quic:alpn_information",
+                data={
+                    "client_alpns": [
+                        {"string_value": protocol}
+                        for protocol in self._configuration.alpn_protocols or []
+                    ]
+                },
             )
 
         self._close_at = now + self._idle_timeout()
@@ -1853,8 +1838,7 @@ class QuicConnection:
                 # log packet
                 if self._quic_logger is not None:
                     self._quic_logger.log_event(
-                        category="transport",
-                        event="packet_sent",
+                        name="quic:packet_sent",
                         data={
                             "frames": packet.quic_logger_frames,
                             "header": {
@@ -1886,17 +1870,8 @@ class QuicConnection:
 
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="transport",
-                    event="datagrams_sent",
-                    data={
-                        "count": 1,
-                        "raw": [
-                            {
-                                "length": UDP_HEADER_SIZE + payload_length,
-                                "payload_length": payload_length,
-                            }
-                        ],
-                    },
+                    name="quic:udp_datagrams_sent",
+                    data={"count": 1, "raw": [{"length": payload_length}]},
                 )
         return ret
 
@@ -2158,7 +2133,7 @@ class QuicConnection:
         # log frame
         if self._quic_logger is not None:
             context.quic_logger_frames.append(
-                self._quic_logger.encode_ack_frame(ack_rangeset, ack_delay)
+                self._quic_logger.encode_ack_frame(ranges=ack_rangeset, delay=ack_delay)
             )
 
         # check whether peer completed address validation
@@ -2638,16 +2613,19 @@ class QuicConnection:
         Handle a PADDING frame.
         """
         # consume padding
-        pos = buf.tell()
+        start = buf.tell()
+        pos = start
         for byte in buf.data_slice(pos, buf.capacity):
             if byte:
                 break
             pos += 1
         buf.seek(pos)
 
-        # log frame
+        # log frame, counting the frame type byte which was already consumed
         if self._quic_logger is not None:
-            context.quic_logger_frames.append(self._quic_logger.encode_padding_frame())
+            context.quic_logger_frames.append(
+                self._quic_logger.encode_padding_frame(length=pos - start + 1)
+            )
 
     def _handle_path_challenge_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
@@ -2901,7 +2879,7 @@ class QuicConnection:
         # log frame
         if self._quic_logger is not None:
             context.quic_logger_frames.append(
-                self._quic_logger.encode_stream_frame(frame, stream_id=stream_id)
+                self._quic_logger.encode_stream_frame(frame=frame, stream_id=stream_id)
             )
 
         # check stream direction
@@ -3012,8 +2990,7 @@ class QuicConnection:
         """
         if self._quic_logger is not None:
             self._quic_logger.log_event(
-                category="security",
-                event="key_retired",
+                name="quic:key_discarded",
                 data={"key_type": key_type, "trigger": trigger},
             )
 
@@ -3023,8 +3000,7 @@ class QuicConnection:
         """
         if self._quic_logger is not None:
             self._quic_logger.log_event(
-                category="security",
-                event="key_updated",
+                name="quic:key_updated",
                 data={"key_type": key_type, "trigger": trigger},
             )
 
@@ -3256,8 +3232,7 @@ class QuicConnection:
         ):
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="transport",
-                    event="packet_received",
+                    name="quic:packet_received",
                     data={
                         "frames": [],
                         "header": {
@@ -3279,10 +3254,10 @@ class QuicConnection:
             # Unexpected or invalid retry packet.
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="transport",
-                    event="packet_dropped",
+                    name="quic:packet_dropped",
                     data={
-                        "trigger": "unexpected_packet",
+                        "details": {"reason": "unexpected_packet"},
+                        "trigger": "rejected",
                         "raw": {"length": header.packet_length},
                     },
                 )
@@ -3308,8 +3283,7 @@ class QuicConnection:
         ):
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="transport",
-                    event="packet_received",
+                    name="quic:packet_received",
                     data={
                         "frames": [],
                         "header": {
@@ -3345,13 +3319,12 @@ class QuicConnection:
             chosen_version = common[0] if common else None
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="transport",
-                    event="version_information",
-                    data={
-                        "server_versions": header.supported_versions,
-                        "client_versions": self._configuration.supported_versions,
-                        "chosen_version": chosen_version,
-                    },
+                    name="quic:version_information",
+                    data=self._quic_logger.encode_version_information(
+                        chosen_version=chosen_version,
+                        client_versions=self._configuration.supported_versions,
+                        server_versions=header.supported_versions,
+                    ),
                 )
             if chosen_version is None:
                 self._logger.error("Could not find a common protocol version")
@@ -3374,10 +3347,10 @@ class QuicConnection:
             # Unexpected version negotiation packet.
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="transport",
-                    event="packet_dropped",
+                    name="quic:packet_dropped",
                     data={
-                        "trigger": "unexpected_packet",
+                        "details": {"reason": "unexpected_packet"},
+                        "trigger": "rejected",
                         "raw": {"length": header.packet_length},
                     },
                 )
@@ -3461,10 +3434,9 @@ class QuicConnection:
         # log event
         if self._quic_logger is not None and not from_session_ticket:
             self._quic_logger.log_event(
-                category="transport",
-                event="parameters_set",
+                name="quic:parameters_set",
                 data=self._quic_logger.encode_transport_parameters(
-                    owner="remote", parameters=quic_transport_parameters
+                    initiator="remote", parameters=quic_transport_parameters
                 ),
             )
 
@@ -3767,10 +3739,9 @@ class QuicConnection:
         # log event
         if self._quic_logger is not None:
             self._quic_logger.log_event(
-                category="transport",
-                event="parameters_set",
+                name="quic:parameters_set",
                 data=self._quic_logger.encode_transport_parameters(
-                    owner="local", parameters=quic_transport_parameters
+                    initiator="local", parameters=quic_transport_parameters
                 ),
             )
 
@@ -4552,7 +4523,7 @@ class QuicConnection:
             if self._quic_logger is not None:
                 builder.quic_logger_frames.append(
                     self._quic_logger.encode_stream_frame(
-                        frame, stream_id=stream.stream_id
+                        frame=frame, stream_id=stream.stream_id
                     )
                 )
 

@@ -521,9 +521,7 @@ class QuicPacketRecovery:
                 }
             )
 
-        self._quic_logger.log_event(
-            category="recovery", event="metrics_updated", data=data
-        )
+        self._quic_logger.log_event(name="quic:recovery_metrics_updated", data=data)
 
     def _on_packets_lost(
         self,
@@ -554,11 +552,14 @@ class QuicPacketRecovery:
 
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
-                    category="recovery",
-                    event="packet_lost",
+                    name="quic:packet_lost",
                     data={
-                        "type": self._quic_logger.packet_type(packet.packet_type),
-                        "packet_number": packet.packet_number,
+                        "header": {
+                            "packet_number": packet.packet_number,
+                            "packet_type": self._quic_logger.packet_type(
+                                packet.packet_type
+                            ),
+                        },
                     },
                 )
                 self._log_metrics_updated()

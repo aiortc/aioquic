@@ -38,7 +38,7 @@ class CubicCongestionControlTest(TestCase):
         self.assertEqual(
             cubic.get_log_data(),
             {
-                "cwnd": cubic.congestion_window,
+                "congestion_window": cubic.congestion_window,
                 "bytes_in_flight": cubic.bytes_in_flight,
                 "cubic-wmax": cubic._W_max,
             },
@@ -50,7 +50,7 @@ class CubicCongestionControlTest(TestCase):
         self.assertEqual(
             cubic.get_log_data(),
             {
-                "cwnd": cubic.congestion_window,
+                "congestion_window": cubic.congestion_window,
                 "ssthresh": cubic.ssthresh,
                 "bytes_in_flight": cubic.bytes_in_flight,
                 "cubic-wmax": cubic._W_max,

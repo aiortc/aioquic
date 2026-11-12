@@ -327,7 +327,7 @@ class QuicPacketBuilder:
                 # log frame
                 if self._quic_logger is not None:
                     self._packet.quic_logger_frames.append(
-                        self._quic_logger.encode_padding_frame()
+                        self._quic_logger.encode_padding_frame(length=padding_size)
                     )
 
             # write header

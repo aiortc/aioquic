@@ -366,7 +366,7 @@ class QuicConnectionTestCase(TestCase):
         """
         Check the packets `connection` drops while the block runs.
 
-        `triggers` lists the reason ("trigger") of every `transport:packet_dropped`
+        `triggers` lists the reason ("trigger") of every `quic:packet_dropped`
         event that `connection` logs inside the block, in order. Packets dropped
         before the block, for instance during the handshake, are ignored. An empty
         list checks that no packet is dropped.
@@ -377,7 +377,7 @@ class QuicConnectionTestCase(TestCase):
             return [
                 event["data"]["trigger"]
                 for event in log["traces"][0]["events"]
-                if event["name"] == "transport:packet_dropped"
+                if event["name"] == "quic:packet_dropped"
             ]
 
         before = len(dropped())
@@ -425,7 +425,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
         return [
             frame["acked_ranges"]
             for event in log["traces"][0]["events"]
-            if event["name"] == "transport:packet_sent"
+            if event["name"] == "quic:packet_sent"
             for frame in event["data"]["frames"]
             if frame["frame_type"] == "ack"
         ]
@@ -485,7 +485,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
         return [
             frame["data"]
             for event in log["traces"][0]["events"]
-            if event["name"] == "transport:packet_sent"
+            if event["name"] == "quic:packet_sent"
             for frame in event["data"]["frames"]
             if frame["frame_type"] == "path_challenge"
         ]
@@ -3506,7 +3506,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         buf = builder.start_frame(QuicFrameType.PADDING)
         buf.push_bytes(bytes(builder.remaining_flight_space))
 
-        with self.assertPacketsDropped(server, ["initial_packet_datagram_too_small"]):
+        with self.assertPacketsDropped(server, ["invalid"]):
             for datagram in builder.flush()[0]:
                 server.receive_datagram(datagram, SERVER_ADDR, now=time.time())
 
@@ -4066,7 +4066,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self.assertEqual(client._remote_initial_source_connection_id, bytes(8))
 
         # A packet with a different Source Connection ID is discarded.
-        with self.assertPacketsDropped(client, ["unexpected_source_connection_id"]):
+        with self.assertPacketsDropped(client, ["invalid"]):
             send_initial(source_cid=bytes([1] * 8), packet_number=1)
         self.assertFalse(1 in client._spaces[tls.Epoch.INITIAL].received_packets)
 
@@ -4188,7 +4188,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(transfer(server, client), 1)
 
             # The delayed PING arrives on the retired connection ID and is dropped.
-            with self.assertPacketsDropped(server, ["unknown_connection_id"]):
+            with self.assertPacketsDropped(server, ["connection_unknown"]):
                 server.receive_datagram(delayed[0], CLIENT_ADDR, now=time.time())
             self.assertEqual(server.host_cid, current_cid)
             self.assertEqual(drop(server), 0)
@@ -4205,9 +4205,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             ]
 
             # The datagrams are received from an unknown server address.
-            with self.assertPacketsDropped(
-                client, ["unknown_server_address"] * len(datagrams)
-            ):
+            with self.assertPacketsDropped(client, ["rejected"] * len(datagrams)):
                 for data in datagrams:
                     client.receive_datagram(data, ("6.7.8.9", 4433), now=time.time())
 
@@ -4240,7 +4238,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         buf = builder.start_frame(QuicFrameType.PADDING)
         buf.push_bytes(bytes(builder.remaining_flight_space))
 
-        with self.assertPacketsDropped(client, ["unsupported_version"]):
+        with self.assertPacketsDropped(client, ["unsupported"]):
             for datagram in builder.flush()[0]:
                 client.receive_datagram(datagram, SERVER_ADDR, now=time.time())
         self.assertEqual(drop(client), 0)
@@ -4278,7 +4276,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertFalse(client._handshake_confirmed)
             peer_cid = client._peer_cid.cid
 
-            with self.assertPacketsDropped(client, ["unexpected_packet"]):
+            with self.assertPacketsDropped(client, ["rejected"]):
                 client.receive_datagram(
                     encode_quic_retry(
                         version=client._version,
@@ -4304,7 +4302,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         """
         client = create_standalone_client(self)
 
-        with self.assertPacketsDropped(client, ["unexpected_packet"]):
+        with self.assertPacketsDropped(client, ["rejected"]):
             client.receive_datagram(
                 encode_quic_retry(
                     version=client._version,
@@ -4325,7 +4323,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         """
         client = create_standalone_client(self)
 
-        with self.assertPacketsDropped(client, ["unexpected_packet"]):
+        with self.assertPacketsDropped(client, ["rejected"]):
             client.receive_datagram(
                 encode_quic_retry(
                     version=client._version,
@@ -4346,7 +4344,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         """
         client = create_standalone_client(self)
 
-        with self.assertPacketsDropped(client, ["unknown_connection_id"]):
+        with self.assertPacketsDropped(client, ["connection_unknown"]):
             client.receive_datagram(
                 encode_quic_retry(
                     version=client._version,
@@ -4367,7 +4365,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         """
         client = create_standalone_client(self)
 
-        with self.assertPacketsDropped(client, ["unexpected_packet"]):
+        with self.assertPacketsDropped(client, ["rejected"]):
             client.receive_datagram(
                 encode_quic_retry(
                     version=client._version,
@@ -5385,10 +5383,15 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
         # padding then something else
         buf = Buffer(data=bytes(10) + b"\x01")
-        client._handle_padding_frame(
-            client_receive_context(client), QuicFrameType.PADDING, buf
-        )
+        context = client_receive_context(client)
+        client._handle_padding_frame(context, QuicFrameType.PADDING, buf)
         self.assertEqual(buf.tell(), 10)
+
+        # The frame type byte is part of the logged padding.
+        self.assertEqual(
+            context.quic_logger_frames,
+            [{"frame_type": "padding", "raw": {"payload_length": 11}}],
+        )
 
     def test_handle_reset_stream_frame(self) -> None:
         stream_id = 0
@@ -6583,7 +6586,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             packet_sent = [
                 event
                 for event in log["traces"][0]["events"]
-                if event["name"] == "transport:packet_sent"
+                if event["name"] == "quic:packet_sent"
             ][-1]
             self.assertEqual(
                 [frame["frame_type"] for frame in packet_sent["data"]["frames"]],
@@ -6622,7 +6625,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             packet_sent = [
                 event
                 for event in log["traces"][0]["events"]
-                if event["name"] == "transport:packet_sent"
+                if event["name"] == "quic:packet_sent"
             ][-1]
             self.assertEqual(
                 [frame["frame_type"] for frame in packet_sent["data"]["frames"]],
@@ -7496,6 +7499,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             roundtrip(client, server)
 
             expected_frame = {
+                "error": "unknown",
                 "error_code": 7,
                 "final_size": 8,
                 "frame_type": "reset_stream_at",
@@ -7503,8 +7507,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 "stream_id": stream_id,
             }
             for connection, event_name in (
-                (client, "transport:packet_sent"),
-                (server, "transport:packet_received"),
+                (client, "quic:packet_sent"),
+                (server, "quic:packet_received"),
             ):
                 with self.subTest(event_name=event_name):
                     logger = connection.configuration.quic_logger
@@ -8008,7 +8012,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         server = create_standalone_server(self)
 
         # Servers do not expect version negotiation packets.
-        with self.assertPacketsDropped(server, ["unexpected_packet"]):
+        with self.assertPacketsDropped(server, ["rejected"]):
             server.receive_datagram(
                 encode_quic_version_negotiation(
                     source_cid=server._peer_cid.cid,
@@ -8065,10 +8069,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
             builder.quic_logger_frames,
             [
                 {
-                    "error_code": QuicErrorCode.APPLICATION_ERROR,
+                    "error": "application_error",
                     "error_space": "transport",
                     "frame_type": "connection_close",
-                    "raw_error_code": QuicErrorCode.APPLICATION_ERROR,
                     "reason": "",
                     "trigger_frame_type": QuicFrameType.PADDING,
                 }
