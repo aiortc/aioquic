@@ -22,6 +22,14 @@ class ConnectionStateError(QuicError, RuntimeError):
     """
 
 
+class DatagramFrameCapacityError(QuicError, ValueError):
+    """
+    A payload was passed which exceeds the capacity of a DATAGRAM frame, as
+    returned by
+    :meth:`~aioquic.quic.connection.QuicConnection.get_datagram_frame_capacity`.
+    """
+
+
 class OutOfRangeError(QuicError, ValueError):
     """
     A value was passed which the protocol cannot represent, such as a negative
