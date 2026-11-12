@@ -4,6 +4,13 @@ class H3Error(Exception):
     """
 
 
+class DatagramCapacityError(H3Error, ValueError):
+    """
+    A payload was passed which exceeds the capacity of a datagram, as returned by
+    :meth:`~aioquic.h3.connection.H3Connection.get_datagram_capacity`.
+    """
+
+
 class InvalidConnectionStateError(H3Error):
     """
     An action was attempted which the connection does not allow in its current

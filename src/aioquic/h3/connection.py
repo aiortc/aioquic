@@ -12,6 +12,7 @@ from aioquic.buffer import (
     Buffer,
     BufferReadError,
     encode_uint_var,
+    size_uint_var,
 )
 from aioquic.h3.events import (
     DatagramReceived,
@@ -23,6 +24,7 @@ from aioquic.h3.events import (
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import (
+    DatagramCapacityError,
     InvalidConnectionStateError,
     InvalidStreamIdError,
     InvalidStreamStateError,
@@ -569,6 +571,24 @@ class H3Connection:
             self._stream[stream_id] = stream
         return stream_id
 
+    def get_datagram_capacity(self, stream_id: int) -> int | None:
+        """
+        Return the largest payload which fits in a datagram for the specified
+        stream, or `None` if no datagram can be sent for it.
+
+        The value can change during the connection.
+
+        :param stream_id: The stream ID.
+        :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
+            If the stream ID is out of range.
+        :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
+            If the stream is not a client-initiated bidirectional stream.
+        """
+        try:
+            return self._get_datagram_capacity(stream_id)
+        except (InvalidConnectionStateError, InvalidStreamStateError):
+            return None
+
     def handle_event(self, event: QuicEvent) -> list[H3Event]:
         """
         Handle a QUIC event and return a list of HTTP events.
@@ -606,13 +626,19 @@ class H3Connection:
             If the stream ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a client-initiated bidirectional stream.
+        :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
+            If the stream's send side is not open.
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
+            If both endpoints have not yet enabled HTTP/3 datagrams, or the peer
+            does not accept QUIC datagrams or its limit is too small.
+        :raises ~aioquic.h3.exceptions.DatagramCapacityError:
+            If the payload exceeds the capacity.
         """
-        self._check_stream_id(stream_id)
-
-        # check stream ID is valid
-        if not stream_is_request_response(stream_id):
-            raise InvalidStreamTypeError(
-                "Datagrams can only be sent for client-initiated bidirectional streams"
+        capacity = self._get_datagram_capacity(stream_id)
+        if len(data) > capacity:
+            raise DatagramCapacityError(
+                f"Datagram of {len(data)} bytes exceeds the capacity of "
+                f"{capacity} bytes"
             )
 
         self._quic.send_datagram_frame(encode_uint_var(stream_id // 4) + data)
@@ -981,6 +1007,52 @@ class H3Connection:
                 "Cannot send headers once the QPACK encoder stream was stopped"
             ) from exc
         return frame_data
+
+    def _get_datagram_capacity(self, stream_id: int) -> int:
+        """
+        Return the largest payload which fits in a datagram for the specified
+        stream, raising an H3 exception if no datagram can be sent for it.
+        """
+        self._check_stream_id(stream_id)
+        if not stream_is_request_response(stream_id):
+            raise InvalidStreamTypeError(
+                "Datagrams can only be sent for client-initiated bidirectional streams"
+            )
+
+        # The stream's send side must be open (RFC 9297 section 2.1). QUIC may
+        # know of a STOP_SENDING which H3 has not handled yet, and HTTP/3 never
+        # sends again on a stream it handed over to WebTransport.
+        stream = self._stream.get(stream_id)
+        if (
+            stream is None
+            or stream.sending_ended
+            or not self._quic.can_send_stream_data(stream_id)
+        ):
+            raise InvalidStreamStateError(
+                "Cannot send a datagram for a stream which is not open"
+            )
+
+        # Both endpoints must send SETTINGS_H3_DATAGRAM=1 (RFC 9297 section 2.1.1).
+        for settings in (self._sent_settings, self._received_settings):
+            if settings is None or settings.get(Setting.H3_DATAGRAM) != 1:
+                raise InvalidConnectionStateError(
+                    "Cannot send a datagram unless both endpoints enable HTTP/3 "
+                    "datagrams"
+                )
+
+        quic_capacity = self._quic.get_datagram_frame_capacity()
+        if quic_capacity is None:
+            raise InvalidConnectionStateError(
+                "Cannot send a datagram unless the peer accepts QUIC datagrams"
+            )
+
+        # The payload follows the quarter stream ID (RFC 9297 section 2.1).
+        quarter_stream_id_size = size_uint_var(stream_id // 4)
+        if quic_capacity < quarter_stream_id_size:
+            raise InvalidConnectionStateError(
+                "Cannot send a datagram, as the peer's QUIC datagram limit is too small"
+            )
+        return quic_capacity - quarter_stream_id_size
 
     def _get_local_settings(self) -> dict[int, int]:
         """
