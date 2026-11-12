@@ -1,6 +1,144 @@
 Changelog
 =========
 
+1.8.0
+-----
+
+* Remove HTTP/3 server push, which saw almost no deployment. Clients no
+  longer send MAX_PUSH_ID, so servers cannot push, and either endpoint now
+  closes the connection with ``H3_ID_ERROR`` on a CANCEL_PUSH frame, as
+  :rfc:`9114` requires when no push was allowed. The ``push_id`` field of
+  :class:`~aioquic.h3.events.HeadersReceived` and
+  :class:`~aioquic.h3.events.DataReceived` is gone. For compatibility,
+  ``H3Connection.send_push_promise()`` is kept as a deprecated stub which
+  always raises ``NoAvailablePushIDError``, and ``PushPromiseReceived`` is
+  never emitted. They will be removed in a future release.
+* Make :class:`~aioquic.quic.connection.QuicConnection` raise exceptions
+  derived from :class:`~aioquic.quic.exceptions.QuicError`, such as
+  :class:`~aioquic.quic.exceptions.OutOfRangeError` or
+  :class:`~aioquic.quic.exceptions.StreamStateError`. Code which catches
+  :class:`ValueError` or :class:`RuntimeError` around its methods should
+  catch :class:`~aioquic.quic.exceptions.QuicError` instead.
+* Make :class:`~aioquic.h3.connection.H3Connection` raise exceptions derived
+  from :class:`~aioquic.h3.exceptions.H3Error`, such as
+  :class:`~aioquic.h3.exceptions.InvalidStreamIdError`,
+  :class:`~aioquic.h3.exceptions.InvalidStreamStateError` or
+  :class:`~aioquic.h3.exceptions.InvalidStreamTypeError`, before any state
+  changes. Code which catches :class:`ValueError` or :class:`RuntimeError`
+  around its methods must catch :class:`~aioquic.h3.exceptions.H3Error`
+  instead.
+* Report the negotiated cipher suite and the peer's certificates in
+  :class:`~aioquic.quic.events.HandshakeCompleted`.
+* Only accept keyword arguments in
+  :class:`~aioquic.quic.configuration.QuicConfiguration`.
+* Document :class:`~aioquic.tls.CipherSuite` and
+  :attr:`~aioquic.quic.configuration.QuicConfiguration.cipher_suites`.
+  Cipher suites now have their IANA names, such as
+  ``TLS_AES_128_GCM_SHA256``. The old names remain as aliases, which will be
+  removed in a future release.
+* Mark WebTransport support as experimental, as its specification is still a
+  draft. Passing ``enable_webtransport`` to
+  :class:`~aioquic.h3.connection.H3Connection` positionally is deprecated.
+* Fix WebTransport stream handling:
+
+  * Release bidirectional WebTransport streams once the peer's half ends,
+    instead of keeping them until the connection closes.
+  * Read the reply on a bidirectional WebTransport stream we opened as
+    WebTransport data, instead of parsing it as HTTP/3 frames.
+  * Only accept the WebTransport signal value as the first bytes of a request
+    stream, as later drafts require, and close the connection with
+    ``H3_FRAME_ERROR`` otherwise.
+  * Treat WebTransport signals and streams as unknown when WebTransport is
+    not enabled, and raise
+    :class:`~aioquic.h3.exceptions.InvalidStreamTypeError` from
+    :meth:`~aioquic.h3.connection.H3Connection.create_webtransport_stream`.
+
+* Add :meth:`~aioquic.quic.connection.QuicConnection.get_datagram_frame_capacity`,
+  which returns the largest DATAGRAM frame payload which can be sent.
+  :meth:`~aioquic.quic.connection.QuicConnection.send_datagram_frame` now
+  raises :class:`~aioquic.quic.exceptions.ConnectionStateError` or
+  :class:`~aioquic.quic.exceptions.DatagramFrameCapacityError` for a payload
+  which cannot be sent, instead of queueing it. Document how to receive
+  DATAGRAM frames with
+  :attr:`~aioquic.quic.configuration.QuicConfiguration.max_datagram_frame_size`.
+* Add experimental support for reliable stream resets
+  (draft-ietf-quic-reliable-stream-reset), enabled with
+  :attr:`~aioquic.quic.configuration.QuicConfiguration.reliable_stream_reset`
+  and used with
+  :meth:`~aioquic.quic.connection.QuicConnection.reset_stream_at`.
+* Add the
+  :attr:`~aioquic.quic.configuration.QuicConfiguration.migrate_to_preferred_address`
+  option, which lets clients that send through a connected UDP socket or a
+  tunnel with a single destination stay on the server's original address.
+* Report GOAWAY frames to HTTP/3 clients with a
+  :class:`~aioquic.h3.events.GoAwayReceived` event, and validate their IDs as
+  :rfc:`9114` requires.
+* Disable the QPACK dynamic table for headers received over HTTP/3, so a
+  stream is never held waiting for dynamic table entries. Headers sent can
+  still use the peer's dynamic table.
+* Lower the memory cost of the peer's data:
+
+  * Raise flow control limits from the data delivered to the application,
+    with a window which doubles on each raise up to 16 times its configured
+    size, instead of doubling the limits whenever the peer sent past half of
+    them.
+  * Limit TLS handshake messages to 64 KiB.
+  * Limit HTTP/3 field sections to 64 KiB once decoded, as advertised in
+    ``SETTINGS_MAX_FIELD_SECTION_SIZE``, and refuse larger ones with
+    ``H3_EXCESSIVE_LOAD``.
+  * Refuse oversized HEADERS, SETTINGS and MAX_PUSH_ID frames from their
+    header instead of buffering their payload.
+
+* Lower the CPU cost of reassembling TLS messages received in many chunks,
+  and of adding to a range set with many ranges, which out-of-order STREAM
+  frames and partly acknowledged stream data produce.
+* Improve TLS compliance with :rfc:`9846`, which obsoletes :rfc:`8446`:
+
+  * Abort the handshake when the ServerHello does not echo the client's
+    ``legacy_session_id``, when either hello's ``legacy_session_id`` is
+    longer than 32 bytes, or when a ServerHello carries extensions the client
+    did not request.
+  * Reject EncryptedExtensions answering extensions the client did not
+    request, early data accepted on a full handshake, extensions with
+    leftover data, and repeated extensions.
+  * Reject a ClientHello with compression methods other than null, missing
+    mandatory extensions, or a PSK without key exchange modes.
+  * Send ``illegal_parameter`` for a ServerHello cipher suite the client did
+    not offer, ``protocol_version`` for a ``legacy_version`` other than
+    0x0303, and ``bad_certificate`` for a certificate which fails to parse,
+    instead of raising an exception which left the connection to time out.
+  * Accept resumption with any cipher suite which shares the hash of the
+    session ticket's cipher suite.
+  * Use session tickets for at most 7 days, whatever their lifetime.
+
+* Reject 0-RTT data on servers whose limits are lower than those stored in
+  the session ticket, as :rfc:`9000` requires, and resume without 0-RTT data
+  on clients whose session ticket has missing or invalid transport
+  parameters, instead of raising an exception from ``connect()``.
+* Stop sending MAX_STREAM_DATA once a stream's final size is known, as
+  :rfc:`9000` recommends.
+* Hold back RESET_STREAM and STOP_SENDING frames on streams above the peer's
+  stream limit, which made the peer close the connection with
+  ``STREAM_LIMIT_ERROR``.
+* Decode ACK delays with the peer's ``ack_delay_exponent`` instead of the
+  default one.
+* Make :meth:`~aioquic.quic.connection.QuicConnection.stop_stream` a no-op on
+  a stream which has been discarded, and
+  :meth:`~aioquic.quic.connection.QuicConnection.handle_timer` a no-op once
+  the connection has terminated, instead of raising an exception.
+* Fix ``datagrams_to_send()`` raising an :class:`IndexError` on a server
+  which dropped the first datagram it was given, when driving
+  :class:`~aioquic.quic.connection.QuicConnection` with your own I/O.
+* Accept ``SETTINGS_H3_DATAGRAM`` from peers which do not accept QUIC
+  DATAGRAM frames, as :rfc:`9297` allows.
+* Log qlog events in the format of draft-ietf-quic-qlog-main-schema-14,
+  quic-events-13 and h3-events-13, and log HTTP field names and values which
+  are not valid UTF-8 as hex instead of raising an exception.
+* Only serve HTTP/0.9 from the `http3_server` example when the new
+  ``--legacy-http`` option is passed.
+* Remove the interop example, superseded by the QUIC interop runner.
+* Require `pylsqpack`_ 1.1.1 or later.
+
 1.7.2
 -----
 
@@ -280,7 +418,7 @@ Changelog
 * Ensure no data is sent after a stream reset.
 * Make :class:`~aioquic.h3.connection.H3Connection`'s
   :meth:`~aioquic.h3.connection.H3Connection.send_datagram` and
-  :meth:`~aioquic.h3.connection.H3Connection.send_push_promise` methods raise an
+  ``send_push_promise`` methods raise an
   :class:`~aioquic.h3.exceptions.InvalidStreamTypeError` exception if an
   invalid stream ID is specified.
 * Improve the documentation for
