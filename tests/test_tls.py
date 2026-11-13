@@ -20,7 +20,6 @@ from aioquic.tls import (
     ServerHello,
     SessionTicket,
     State,
-    load_pem_x509_certificates,
     pull_block,
     pull_certificate_request,
     pull_certificate_verify,
@@ -1929,7 +1928,7 @@ class VerifyCertificateTest(TestCase):
 
     def test_verify_certificate_chain(self) -> None:
         with open(SERVER_CERTFILE, "rb") as fp:
-            certificate = load_pem_x509_certificates(fp.read())[0]
+            certificate = x509.load_pem_x509_certificate(fp.read())
 
         with patch("aioquic.tls.utcnow") as mock_utcnow:
             mock_utcnow.return_value = certificate.not_valid_before_utc

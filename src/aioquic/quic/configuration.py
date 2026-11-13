@@ -1,14 +1,8 @@
 from dataclasses import dataclass, field
 from os import PathLike
-from re import split
 from typing import Any, TextIO
 
-from ..tls import (
-    CipherSuite,
-    SessionTicket,
-    load_pem_private_key,
-    load_pem_x509_certificates,
-)
+from ..tls import CipherSuite, SessionTicket, _load_cert_chain
 from .logger import QuicLogger
 from .packet import QuicProtocolVersion
 
@@ -167,25 +161,15 @@ class QuicConfiguration:
     ) -> None:
         """
         Load a private key and the corresponding certificate.
-        """
-        with open(certfile, "rb") as fp:
-            boundary = b"-----BEGIN PRIVATE KEY-----\n"
-            chunks = split(b"\n" + boundary, fp.read())
-            certificates = load_pem_x509_certificates(chunks[0])
-            if len(chunks) == 2:
-                private_key = boundary + chunks[1]
-                self.private_key = load_pem_private_key(private_key)
-        self.certificate = certificates[0]
-        self.certificate_chain = certificates[1:]
 
-        if keyfile is not None:
-            with open(keyfile, "rb") as fp:
-                self.private_key = load_pem_private_key(
-                    fp.read(),
-                    password=password.encode("utf8")
-                    if isinstance(password, str)
-                    else password,
-                )
+        `certfile` contains the certificate, followed by any intermediate
+        certificates. It may also contain the private key, which is used if
+        `keyfile` is omitted. An encrypted private key is decrypted with
+        `password`.
+        """
+        self.certificate, self.certificate_chain, self.private_key = _load_cert_chain(
+            certfile, keyfile, password
+        )
 
     def load_verify_locations(
         self,

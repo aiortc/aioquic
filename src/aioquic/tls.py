@@ -2,6 +2,7 @@ import datetime
 import ipaddress
 import logging
 import os
+import re
 import ssl
 import struct
 from collections.abc import Callable, Generator, Sequence
@@ -202,23 +203,45 @@ def hkdf_extract(
     return h.finalize()
 
 
-def load_pem_private_key(data: bytes, password: bytes | None = None) -> PrivateKeyTypes:
+def _load_cert_chain(
+    certfile: str | os.PathLike,
+    keyfile: str | os.PathLike | None = None,
+    password: bytes | str | None = None,
+) -> tuple[x509.Certificate, list[x509.Certificate], PrivateKeyTypes]:
     """
-    Load a PEM-encoded private key.
+    Load a certificate, its intermediate certificates and its private key.
     """
-    return serialization.load_pem_private_key(data, password=password)
+    if isinstance(password, str):
+        password = password.encode("utf8")
 
+    with open(certfile, "rb") as fp:
+        data = fp.read()
+    certificates = x509.load_pem_x509_certificates(data)
 
-def load_pem_x509_certificates(data: bytes) -> list[x509.Certificate]:
-    """
-    Load a chain of PEM-encoded X509 certificates.
-    """
-    boundary = b"-----END CERTIFICATE-----\n"
-    certificates = []
-    for chunk in data.split(boundary):
-        if chunk:
-            certificates.append(x509.load_pem_x509_certificate(chunk + boundary))
-    return certificates
+    if keyfile is not None:
+        with open(keyfile, "rb") as fp:
+            private_key = serialization.load_pem_private_key(
+                fp.read(), password=password
+            )
+    else:
+        # Find a PEM-encoded private key, either in PKCS#8 format ("PRIVATE KEY"
+        # or "ENCRYPTED PRIVATE KEY") or in a traditional format such as
+        # "RSA PRIVATE KEY".
+        match = re.search(
+            rb"-----BEGIN ([A-Z ]*)PRIVATE KEY-----.*?-----END \1PRIVATE KEY-----",
+            data,
+            re.DOTALL,
+        )
+        if match is None:
+            raise ValueError("Certificate file does not contain a private key")
+        private_key = serialization.load_pem_private_key(
+            match.group(0), password=password
+        )
+
+    if private_key.public_key() != certificates[0].public_key():
+        raise ValueError("Private key does not match the certificate")
+
+    return certificates[0], certificates[1:], private_key
 
 
 def verify_certificate(
@@ -290,7 +313,7 @@ def verify_certificate(
         store.load_locations(certifi.where())
 
     if cadata is not None:
-        for cert in load_pem_x509_certificates(cadata):
+        for cert in x509.load_pem_x509_certificates(cadata):
             store.add_cert(crypto.X509.from_cryptography(cert))
 
     if cafile is not None or capath is not None:
