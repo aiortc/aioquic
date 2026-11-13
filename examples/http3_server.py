@@ -1,5 +1,8 @@
+import abc
 import argparse
 import asyncio
+import contextlib
+import functools
 import importlib
 import logging
 import time
@@ -19,10 +22,13 @@ from aioquic.h3.events import (
     DataReceived,
     H3Event,
     HeadersReceived,
+    ResetReceived,
+    StopReceived,
     WebTransportStreamDataReceived,
 )
+from aioquic.h3.exceptions import InvalidConnectionStateError, InvalidStreamStateError
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import ProtocolNegotiated, QuicEvent
+from aioquic.quic.events import ConnectionTerminated, ProtocolNegotiated, QuicEvent
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import SessionTicket
 
@@ -34,10 +40,69 @@ except ImportError:
 AsgiApplication = Callable
 HttpConnection = H0Connection | H3Connection
 
+# Since spec version 2.4, send() raises an OSError once the client has gone.
+ASGI_VERSION = {"spec_version": "2.4", "version": "3.0"}
 SERVER_NAME = "aioquic/" + aioquic.__version__
 
+logger = logging.getLogger("http3_server")
 
-class HttpRequestHandler:
+
+class AsgiHandler(abc.ABC):
+    """
+    Runs an ASGI application for one request stream.
+    """
+
+    # The message receive() gives once the client has gone.
+    disconnect_message: dict
+    disconnected: bool
+    queue: asyncio.Queue[dict]
+
+    def client_went_away(self) -> None:
+        # Tell the application once.
+        if not self.disconnected:
+            self.disconnected = True
+            self.queue.put_nowait(dict(self.disconnect_message))
+
+    @abc.abstractmethod
+    def http_event_received(self, event: H3Event) -> None: ...
+
+    @abc.abstractmethod
+    async def run_asgi(self, app: AsgiApplication) -> None: ...
+
+    async def receive(self) -> dict:
+        return await self.queue.get()
+
+    async def send(self, message: dict) -> None:
+        try:
+            await self._send(message)
+        except (InvalidConnectionStateError, InvalidStreamStateError) as exc:
+            # Usually because the client has gone away.
+            self.disconnected = True
+            raise ClientDisconnected from exc
+
+    def _log_application_error(self) -> None:
+        if self.disconnected:
+            # Once the client has gone, failing is expected, but the error is
+            # still useful when the application stops for another reason.
+            logger.debug(
+                "ASGI application stopped after the client went away", exc_info=True
+            )
+        else:
+            logger.exception("Error in ASGI application")
+
+    @abc.abstractmethod
+    async def _send(self, message: dict) -> None: ...
+
+
+class ClientDisconnected(OSError):
+    """
+    Raised by the ASGI ``send`` callable once the client has gone away.
+    """
+
+
+class HttpRequestHandler(AsgiHandler):
+    disconnect_message = {"type": "http.disconnect"}
+
     def __init__(
         self,
         *,
@@ -48,7 +113,9 @@ class HttpRequestHandler:
         transmit: Callable[[], None],
     ) -> None:
         self.connection = connection
+        self.disconnected = False
         self.queue: asyncio.Queue[dict] = asyncio.Queue()
+        self.response_started = False
         self.scope = scope
         self.stream_id = stream_id
         self.transmit = transmit
@@ -69,14 +136,23 @@ class HttpRequestHandler:
             self.queue.put_nowait(
                 {"type": "http.request", "body": b"", "more_body": False}
             )
+        elif isinstance(event, (ResetReceived, StopReceived)):
+            # The client cancelled the request.
+            self.client_went_away()
 
     async def run_asgi(self, app: AsgiApplication) -> None:
-        await app(self.scope, self.receive, self.send)
+        try:
+            await app(self.scope, self.receive, self.send)
+        except Exception:
+            self._log_application_error()
+            if not self.response_started:
+                with contextlib.suppress(ClientDisconnected):
+                    await self.send(
+                        {"type": "http.response.start", "status": 500, "headers": []}
+                    )
+                    await self.send({"type": "http.response.body"})
 
-    async def receive(self) -> dict:
-        return await self.queue.get()
-
-    async def send(self, message: dict) -> None:
+    async def _send(self, message: dict) -> None:
         if message["type"] == "http.response.start":
             self.connection.send_headers(
                 stream_id=self.stream_id,
@@ -87,16 +163,23 @@ class HttpRequestHandler:
                 ]
                 + [(k, v) for k, v in message["headers"]],
             )
+            self.response_started = True
         elif message["type"] == "http.response.body":
+            more_body = message.get("more_body", False)
             self.connection.send_data(
                 stream_id=self.stream_id,
                 data=message.get("body", b""),
-                end_stream=not message.get("more_body", False),
+                end_stream=not more_body,
             )
+            if not more_body:
+                self.queue.put_nowait({"type": "http.disconnect"})
         self.transmit()
 
 
-class WebSocketHandler:
+class WebSocketHandler(AsgiHandler):
+    # 1006: the connection was lost without a closing handshake.
+    disconnect_message = {"type": "websocket.disconnect", "code": 1006}
+
     def __init__(
         self,
         *,
@@ -107,6 +190,7 @@ class WebSocketHandler:
     ) -> None:
         self.closed = False
         self.connection = connection
+        self.disconnected = False
         self.http_event_queue: deque[DataReceived] = deque()
         self.queue: asyncio.Queue[dict] = asyncio.Queue()
         self.scope = scope
@@ -115,7 +199,10 @@ class WebSocketHandler:
         self.websocket: wsproto.Connection | None = None
 
     def http_event_received(self, event: H3Event) -> None:
-        if isinstance(event, DataReceived) and not self.closed:
+        if isinstance(event, (ResetReceived, StopReceived)):
+            # The client went away without a closing handshake.
+            self.client_went_away()
+        elif isinstance(event, DataReceived) and not self.closed:
             if self.websocket is not None:
                 self.websocket.receive_data(event.data)
 
@@ -137,16 +224,19 @@ class WebSocketHandler:
     async def run_asgi(self, app: AsgiApplication) -> None:
         self.queue.put_nowait({"type": "websocket.connect"})
 
+        code = 1000
         try:
             await app(self.scope, self.receive, self.send)
+        except Exception:
+            self._log_application_error()
+            # 1011: the server hit an unexpected condition (RFC 6455 section 7.4.1).
+            code = 1011
         finally:
             if not self.closed:
-                await self.send({"type": "websocket.close", "code": 1000})
+                with contextlib.suppress(ClientDisconnected):
+                    await self.send({"type": "websocket.close", "code": code})
 
-    async def receive(self) -> dict:
-        return await self.queue.get()
-
-    async def send(self, message: dict) -> None:
+    async def _send(self, message: dict) -> None:
         data = b""
         end_stream = False
         if message["type"] == "websocket.accept":
@@ -158,7 +248,7 @@ class WebSocketHandler:
                 (b":status", b"200"),
                 (b"server", SERVER_NAME.encode()),
                 (b"date", formatdate(time.time(), usegmt=True).encode()),
-            ]
+            ] + [(k, v) for k, v in message.get("headers", [])]
             if subprotocol is not None:
                 headers.append((b"sec-websocket-protocol", subprotocol.encode()))
             self.connection.send_headers(stream_id=self.stream_id, headers=headers)
@@ -170,7 +260,9 @@ class WebSocketHandler:
         elif message["type"] == "websocket.close":
             if self.websocket is not None:
                 data = self.websocket.send(
-                    wsproto.events.CloseConnection(code=message["code"])
+                    wsproto.events.CloseConnection(
+                        code=message["code"], reason=message.get("reason")
+                    )
                 )
             else:
                 self.connection.send_headers(
@@ -196,7 +288,9 @@ class WebSocketHandler:
         self.transmit()
 
 
-class WebTransportHandler:
+class WebTransportHandler(AsgiHandler):
+    disconnect_message = {"type": "webtransport.disconnect"}
+
     def __init__(
         self,
         *,
@@ -208,6 +302,7 @@ class WebTransportHandler:
         self.accepted = False
         self.closed = False
         self.connection = connection
+        self.disconnected = False
         self.http_event_queue: deque[H3Event] = deque()
         self.queue: asyncio.Queue[dict] = asyncio.Queue()
         self.scope = scope
@@ -215,9 +310,15 @@ class WebTransportHandler:
         self.transmit = transmit
 
     def http_event_received(self, event: H3Event) -> None:
-        if not self.closed:
+        if isinstance(event, (ResetReceived, StopReceived)):
+            # The client went away without closing the session.
+            self.client_went_away()
+        elif not self.closed:
             if self.accepted:
-                if isinstance(event, DatagramReceived):
+                if isinstance(event, DataReceived) and event.stream_ended:
+                    # The client closed the session.
+                    self.queue.put_nowait({"type": "webtransport.disconnect"})
+                elif isinstance(event, DatagramReceived):
                     self.queue.put_nowait(
                         {
                             "data": event.data,
@@ -242,14 +343,14 @@ class WebTransportHandler:
 
         try:
             await app(self.scope, self.receive, self.send)
+        except Exception:
+            self._log_application_error()
         finally:
             if not self.closed:
-                await self.send({"type": "webtransport.close"})
+                with contextlib.suppress(ClientDisconnected):
+                    await self.send({"type": "webtransport.close"})
 
-    async def receive(self) -> dict:
-        return await self.queue.get()
-
-    async def send(self, message: dict) -> None:
+    async def _send(self, message: dict) -> None:
         data = b""
         end_stream = False
 
@@ -291,17 +392,19 @@ class WebTransportHandler:
         self.transmit()
 
 
-Handler = HttpRequestHandler | WebSocketHandler | WebTransportHandler
-
-
 class HttpServerProtocol(QuicConnectionProtocol):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._handlers: dict[int, Handler] = {}
+        self._handlers: dict[int, AsgiHandler] = {}
         self._http: HttpConnection | None = None
+        self._tasks: set[asyncio.Task] = set()
 
     def http_event_received(self, event: H3Event) -> None:
-        if isinstance(event, HeadersReceived) and event.stream_id not in self._handlers:
+        # Only request headers carry a :method, unlike trailers, which can still
+        # arrive once the request's handler is gone.
+        if isinstance(event, HeadersReceived) and any(
+            name == b":method" for name, _ in event.headers
+        ):
             headers = []
             http_version = "0.9" if isinstance(self._http, H0Connection) else "3"
             raw_path = b""
@@ -330,7 +433,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
             assert client_addr is not None
             client = (client_addr[0], client_addr[1])
 
-            handler: Handler
+            handler: AsgiHandler
             scope: dict
             if method == "CONNECT" and protocol == "websocket":
                 subprotocols: list[str] = []
@@ -338,6 +441,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     if header == b"sec-websocket-protocol":
                         subprotocols = [x.strip() for x in value.decode().split(",")]
                 scope = {
+                    "asgi": dict(ASGI_VERSION),
                     "client": client,
                     "headers": headers,
                     "http_version": http_version,
@@ -361,6 +465,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     "WebTransport is only supported over HTTP/3"
                 )
                 scope = {
+                    "asgi": dict(ASGI_VERSION),
                     "client": client,
                     "headers": headers,
                     "http_version": http_version,
@@ -380,6 +485,7 @@ class HttpServerProtocol(QuicConnectionProtocol):
                 )
             else:
                 scope = {
+                    "asgi": dict(ASGI_VERSION),
                     "client": client,
                     "headers": headers,
                     "http_version": http_version,
@@ -399,19 +505,30 @@ class HttpServerProtocol(QuicConnectionProtocol):
                     transmit=self.transmit,
                 )
             self._handlers[event.stream_id] = handler
-            asyncio.create_task(handler.run_asgi(application))
+            # The event loop only keeps a weak reference to tasks. Once the task
+            # ends, the handler is no longer needed and later events are dropped.
+            task = asyncio.create_task(handler.run_asgi(application))
+            self._tasks.add(task)
+            task.add_done_callback(functools.partial(self._task_done, event.stream_id))
         elif (
-            isinstance(event, (DataReceived, HeadersReceived))
+            isinstance(
+                event,
+                (
+                    DataReceived,
+                    DatagramReceived,
+                    HeadersReceived,
+                    ResetReceived,
+                    StopReceived,
+                ),
+            )
             and event.stream_id in self._handlers
         ):
-            handler = self._handlers[event.stream_id]
-            handler.http_event_received(event)
-        elif isinstance(event, DatagramReceived):
-            handler = self._handlers[event.stream_id]
-            handler.http_event_received(event)
-        elif isinstance(event, WebTransportStreamDataReceived):
-            handler = self._handlers[event.session_id]
-            handler.http_event_received(event)
+            self._handlers[event.stream_id].http_event_received(event)
+        elif (
+            isinstance(event, WebTransportStreamDataReceived)
+            and event.session_id in self._handlers
+        ):
+            self._handlers[event.session_id].http_event_received(event)
 
     def quic_event_received(self, event: QuicEvent) -> None:
         if isinstance(event, ProtocolNegotiated):
@@ -422,10 +539,19 @@ class HttpServerProtocol(QuicConnectionProtocol):
             elif event.alpn_protocol in H0_ALPN:
                 self._http = H0Connection(self.quic_connection)
 
-        #  pass event to the HTTP layer
+        # Pass event to the HTTP layer.
         if self._http is not None:
             for http_event in self._http.handle_event(event):
                 self.http_event_received(http_event)
+
+        # The end of the connection ends every request on it.
+        if isinstance(event, ConnectionTerminated):
+            for handler in self._handlers.values():
+                handler.client_went_away()
+
+    def _task_done(self, stream_id: int, task: asyncio.Task) -> None:
+        self._handlers.pop(stream_id)
+        self._tasks.discard(task)
 
 
 class SessionTicketStore:
