@@ -108,7 +108,9 @@ async def wt(scope: Scope, receive: Receive, send: Send) -> None:
     # echo back received data
     while True:
         message = await receive()
-        if message["type"] == "webtransport.datagram.receive":
+        if message["type"] == "webtransport.disconnect":
+            break
+        elif message["type"] == "webtransport.datagram.receive":
             await send(
                 {
                     "data": message["data"],
