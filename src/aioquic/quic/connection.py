@@ -945,6 +945,17 @@ class QuicConnection:
         buf = Buffer(data=data)
         while not buf.eof():
             start_off = buf.tell()
+
+            # Zero bytes after a packet are padding, which RFC 9000 section 14.1
+            # allows for datagrams carrying INITIAL packets. They are not a
+            # packet, so stop without logging a drop.
+            if (
+                start_off
+                and data[start_off] == 0
+                and data.count(0, start_off) == payload_length - start_off
+            ):
+                return
+
             try:
                 header = pull_quic_header(
                     buf, host_cid_length=self._configuration.connection_id_length
