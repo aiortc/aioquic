@@ -4311,6 +4311,34 @@ class QuicConnectionTest(QuicConnectionTestCase):
         datagram = bytes.fromhex("c00000000080")
         client.receive_datagram(datagram, SERVER_ADDR, now=time.time())
 
+    def test_receive_datagram_padding(self) -> None:
+        with client_and_server(handshake=False) as (client, server):
+            client.connect(SERVER_ADDR, now=time.time())
+            [(datagram, _)] = client.datagrams_to_send(now=time.time())
+
+            # The client pads its INITIAL datagram with zeros after the packet.
+            header = pull_quic_header(Buffer(data=datagram))
+            padding = datagram[header.packet_length :]
+            self.assertGreater(len(padding), 0)
+            self.assertEqual(padding, bytes(len(padding)))
+
+            # The padding is not reported as a dropped packet.
+            with self.assertPacketsDropped(server, []):
+                server.receive_datagram(datagram, CLIENT_ADDR, now=time.time())
+            self.assertEqual(server._state, QuicConnectionState.CONNECTED)
+
+    def test_receive_datagram_padding_not_zero(self) -> None:
+        with client_and_server(handshake=False) as (client, server):
+            client.connect(SERVER_ADDR, now=time.time())
+            [(datagram, _)] = client.datagrams_to_send(now=time.time())
+
+            # Trailing bytes which are not all zeros are reported as dropped.
+            with self.assertPacketsDropped(server, ["invalid"]):
+                server.receive_datagram(
+                    datagram[:-1] + b"\x01", CLIENT_ADDR, now=time.time()
+                )
+            self.assertEqual(server._state, QuicConnectionState.CONNECTED)
+
     def test_receive_datagram_reserved_bits_non_zero(self) -> None:
         client = create_standalone_client(self)
 
