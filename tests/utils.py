@@ -356,17 +356,13 @@ def load_cert_chain(
     Each pair of files is only parsed once, as cryptography validates RSA keys
     when loading them, which is slow for the 3072-bit default server key.
     """
-    loaded = _parse_cert_chain(certfile, keyfile)
-    configuration.certificate = loaded.certificate
-    configuration.certificate_chain = list(loaded.certificate_chain)
-    configuration.private_key = loaded.private_key
+    certificate, certificate_chain, private_key = _parse_cert_chain(certfile, keyfile)
+    configuration.certificate = certificate
+    configuration.certificate_chain = list(certificate_chain)
+    configuration.private_key = private_key
 
 
-@functools.cache
-def _parse_cert_chain(certfile: str, keyfile: str) -> QuicConfiguration:
-    configuration = QuicConfiguration(is_client=False)
-    configuration.load_cert_chain(certfile, keyfile)
-    return configuration
+_parse_cert_chain = functools.cache(tls._load_cert_chain)
 
 
 # Generate the default certificates in a temporary directory, which is removed
