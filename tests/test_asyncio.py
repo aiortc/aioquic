@@ -14,7 +14,7 @@ from aioquic.asyncio.protocol import QuicConnectionProtocol, QuicStreamHandler
 from aioquic.asyncio.server import serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.connection import NetworkAddress, QuicConnection
-from aioquic.quic.events import ConnectionTerminated, QuicEvent
+from aioquic.quic.events import ConnectionTerminated, QuicEvent, StreamDataReceived
 from aioquic.quic.logger import QuicLogger
 from aioquic.quic.packet import QuicErrorCode, encode_quic_version_negotiation
 from aioquic.tls import SessionTicket
@@ -124,11 +124,37 @@ class HighLevelTest(TestCase):
         return response
 
     @contextlib.asynccontextmanager
+    async def run_client_and_server(
+        self, stream_handler: QuicStreamHandler | None = None
+    ) -> AsyncGenerator[tuple[QuicConnectionProtocol, QuicConnectionProtocol], None]:
+        """
+        Yield a connected client and the server's protocol for the connection.
+        """
+        server_protocols: list[QuicConnectionProtocol] = []
+
+        def create_protocol(
+            quic: QuicConnection, stream_handler: QuicStreamHandler | None = None
+        ) -> QuicConnectionProtocol:
+            protocol = QuicConnectionProtocol(quic, stream_handler=stream_handler)
+            server_protocols.append(protocol)
+            return protocol
+
+        async with self.run_server(
+            create_protocol=create_protocol, stream_handler=stream_handler
+        ) as server_port:
+            configuration = QuicConfiguration(is_client=True)
+            configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+            async with connect(
+                self.server_host, server_port, configuration=configuration
+            ) as client:
+                yield client, server_protocols[0]
+
+    @contextlib.asynccontextmanager
     async def run_server(
         self,
         configuration: QuicConfiguration | None = None,
         host: str = "::",
-        stream_handler: QuicStreamHandler = handle_stream,
+        stream_handler: QuicStreamHandler | None = handle_stream,
         **kwargs: Any,
     ) -> AsyncGenerator[int, None]:
         if configuration is None:
@@ -595,6 +621,630 @@ class HighLevelTest(TestCase):
             server.datagram_received(vn_packet, ("1.2.3.4", 1234))
         mock_sendto.assert_not_called()
         server.close()
+
+    @asynctest
+    async def test_stream_abort(self) -> None:
+        server_streams: asyncio.Queue[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        ] = asyncio.Queue()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.put_nowait((reader, writer))
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            server_reader, server_writer = await server_streams.get()
+
+            server_writer.transport.abort()
+            self.assertEqual(server_writer.is_closing(), True)
+            await asyncio.wait_for(server_writer.wait_closed(), 1)
+            self.assertEqual(await server_reader.read(), b"ping")
+
+            # Aborting again before the client answers sends nothing more.
+            server.transmit()
+            server_writer.transport.abort()
+            stream = server.quic_connection._streams[0]
+            self.assertEqual(stream.receiver.stop_pending, False)
+
+            # The server ignores data sent before the client learns of the abort.
+            client_writer.write(b"more")
+
+            with self.assertRaisesMessage(
+                ConnectionResetError, "Stream 0 reset by peer with error code 0"
+            ):
+                await asyncio.wait_for(client_reader.read(), 1)
+            message = "Stream 0 stopped by peer with error code 0"
+            with self.assertRaisesMessage(ConnectionResetError, message):
+                await asyncio.wait_for(client_writer.wait_closed(), 1)
+
+            # As on TCP, writes are discarded and drain() tells why.
+            client_writer.write(b"again")
+            with self.assertRaisesMessage(ConnectionResetError, message):
+                await client_writer.drain()
+
+            await client.ping()
+            self.assertEqual(server_streams.qsize(), 0)
+            self.assertEqual(client._adapters, {})
+            self.assertEqual(server._adapters, {})
+
+            # Aborting again or ending the stream has no effect.
+            server_writer.transport.abort()
+            server_writer.write_eof()
+
+    @asynctest
+    async def test_stream_abort_half_closed(self) -> None:
+        server_streams: asyncio.Queue[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        ] = asyncio.Queue()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.put_nowait((reader, writer))
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            # A stream the server can only read from is only stopped.
+            client_reader, client_writer = await client.create_stream(
+                is_unidirectional=True
+            )
+            client_writer.write(b"ping")
+            server_reader, server_writer = await server_streams.get()
+            server_writer.transport.abort()
+            with self.assertRaisesMessage(
+                ConnectionResetError, "Stream 2 stopped by peer with error code 0"
+            ):
+                await asyncio.wait_for(client_writer.wait_closed(), 1)
+
+            # A stream the client finished is only reset.
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            client_writer.write_eof()
+            server_reader, server_writer = await server_streams.get()
+            self.assertEqual(await server_reader.read(), b"ping")
+            server_writer.transport.abort()
+            self.assertNotIn(0, server._adapters)
+            with self.assertRaisesMessage(
+                ConnectionResetError, "Stream 0 reset by peer with error code 0"
+            ):
+                await asyncio.wait_for(client_reader.read(), 1)
+
+            # A stream the server finished is still stopped.
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            server_reader, server_writer = await server_streams.get()
+            server_writer.write_eof()
+            server_writer.transport.abort()
+            with self.assertRaisesMessage(
+                ConnectionResetError, "Stream 4 stopped by peer with error code 0"
+            ):
+                await asyncio.wait_for(client_writer.wait_closed(), 1)
+
+            await client.ping()
+            self.assertEqual(client._adapters, {})
+            self.assertEqual(server._adapters, {})
+
+    @asynctest
+    async def test_stream_connection_closed(self) -> None:
+        server_streams: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.append((reader, writer))
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            aborted_client_reader, aborted_client_writer = await client.create_stream()
+            aborted_client_writer.write(b"ping")
+            aborted_client_writer.transport.abort()
+            await client.ping()
+
+            client.close()
+            await client.wait_closed()
+
+            with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                await client_reader.read()
+            with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                await asyncio.wait_for(client_writer.wait_closed(), 1)
+
+            # As on TCP, writes are discarded and drain() tells why.
+            client_writer.write(b"more")
+            with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                await client_writer.drain()
+            client_writer.close()
+            client_writer.transport.abort()
+
+            # The stream aborted before the connection closed just ends.
+            self.assertEqual(await aborted_client_reader.read(), b"")
+
+    @asynctest
+    async def test_stream_connection_closing(self) -> None:
+        async with self.run_client_and_server() as (client, server):
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            client.close()
+
+            # Until the connection is closed, writes are discarded and drain()
+            # tells why, as on TCP.
+            self.assertEqual(client_writer.is_closing(), True)
+            client_writer.write(b"more")
+            with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                await client_writer.drain()
+
+            # Closing the stream cannot succeed either, and writing after
+            # closing it is still a mistake.
+            client_writer.close()
+            with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                await asyncio.wait_for(client_writer.wait_closed(), 1)
+            with self.assertRaisesMessage(
+                RuntimeError, "Cannot write to a closed stream"
+            ):
+                client_writer.write(b"again")
+
+            await client.wait_closed()
+            with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                await client_reader.read()
+
+    @asynctest
+    async def test_stream_create_after_close(self) -> None:
+        async with self.run_client_and_server() as (client, server):
+            client.close()
+            with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                await client.create_stream()
+
+            await client.wait_closed()
+            with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                await client.create_stream()
+            self.assertEqual(client._adapters, {})
+
+    @asynctest
+    async def test_stream_create_reserves_id(self) -> None:
+        async with self.run_client_and_server() as (client, server):
+            first_reader, first_writer = await client.create_stream()
+            second_reader, second_writer = await client.create_stream()
+            self.assertEqual(first_writer.get_extra_info("stream_id"), 0)
+            self.assertEqual(second_writer.get_extra_info("stream_id"), 4)
+            self.assertEqual(list(client._adapters), [0, 4])
+
+            # Aborting one stream leaves the other alone.
+            first_writer.transport.abort()
+            self.assertEqual(second_writer.is_closing(), False)
+            first_writer.close()
+            second_writer.close()
+
+    @asynctest
+    async def test_stream_extra_info(self) -> None:
+        async with self.run_client_and_server() as (client, server):
+            client_reader, client_writer = await client.create_stream()
+            self.assertEqual(client_writer.get_extra_info("stream_id"), 0)
+            self.assertEqual(client_writer.get_extra_info("peername", "none"), "none")
+            client_writer.close()
+
+    @asynctest
+    async def test_stream_handled_by_subclass(self) -> None:
+        server_protocols: list[QuicConnectionProtocol] = []
+
+        class EchoProtocol(QuicConnectionProtocol):
+            """
+            Reply to streams without a stream handler, passing events on to the
+            base class.
+            """
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self._received: dict[int, bytes] = {}
+                server_protocols.append(self)
+
+            def quic_event_received(self, event: QuicEvent) -> None:
+                super().quic_event_received(event)
+                if isinstance(event, StreamDataReceived):
+                    data = self._received.get(event.stream_id, b"") + event.data
+                    self._received[event.stream_id] = data
+                    if event.end_stream:
+                        self.quic_connection.send_stream_data(
+                            event.stream_id, bytes(reversed(data)), end_stream=True
+                        )
+
+        # The base class leaves the streams alone, so the subclass's reply is
+        # neither cut short nor refused.
+        request = bytes(range(256)) * 100
+        async with self.run_server(
+            create_protocol=EchoProtocol, stream_handler=None
+        ) as server_port:
+            configuration = QuicConfiguration(is_client=True)
+            configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+            async with connect(
+                self.server_host, server_port, configuration=configuration
+            ) as client:
+                client_reader, client_writer = await client.create_stream()
+                client_writer.write(request)
+                client_writer.write_eof()
+                self.assertEqual(await client_reader.read(), bytes(reversed(request)))
+                self.assertEqual(server_protocols[0]._adapters, {})
+
+    @asynctest
+    async def test_stream_handler_not_called_for_own_streams(self) -> None:
+        client_streams: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+
+        def handle_client_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            client_streams.append((reader, writer))
+
+        server_tasks: list[asyncio.Task[None]] = []
+
+        def handle_server_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            async def serve() -> None:
+                writer.write(await reader.read())
+                writer.close()
+
+            server_tasks.append(asyncio.create_task(serve()))
+
+        async with self.run_server(stream_handler=handle_server_stream) as server_port:
+            configuration = QuicConfiguration(is_client=True)
+            configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+            async with connect(
+                self.server_host,
+                server_port,
+                configuration=configuration,
+                stream_handler=handle_client_stream,
+            ) as client:
+                # The client opens a stream without the asyncio stream API, and
+                # the server's reply does not reach the client's handler.
+                quic = client.quic_connection
+                stream_id = quic.get_next_available_stream_id()
+                quic.send_stream_data(stream_id, b"ping", end_stream=True)
+                client.transmit()
+                await asyncio.gather(*server_tasks)
+                await client.ping()
+                self.assertEqual(len(server_tasks), 1)
+                self.assertEqual(client_streams, [])
+                self.assertEqual(client._adapters, {})
+
+    @asynctest
+    async def test_stream_receive_only_writer(self) -> None:
+        server_streams: asyncio.Queue[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter, bool]
+        ] = asyncio.Queue()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.put_nowait((reader, writer, writer.is_closing()))
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            client_reader, client_writer = await client.create_stream(
+                is_unidirectional=True
+            )
+            client_writer.write(b"ping")
+            client_writer.write_eof()
+            server_reader, server_writer, closing = await server_streams.get()
+
+            # Nothing can be sent on the stream, so the writer starts closed.
+            self.assertEqual(closing, True)
+            await asyncio.wait_for(server_writer.wait_closed(), 1)
+            server_writer.write_eof()
+            server_writer.close()
+            with self.assertRaisesMessage(
+                RuntimeError, "Cannot write to a closed stream"
+            ):
+                server_writer.write(b"pong")
+            self.assertEqual(await server_reader.read(), b"ping")
+            self.assertEqual(server._adapters, {})
+
+    @asynctest
+    async def test_stream_released_after_both_parts_end(self) -> None:
+        server_tasks: list[asyncio.Task[None]] = []
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            async def serve() -> None:
+                data = await reader.read()
+                if writer.can_write_eof():
+                    writer.write(bytes(reversed(data)))
+                writer.close()
+
+            server_tasks.append(asyncio.create_task(serve()))
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            client_writer.write_eof()
+            self.assertEqual(await client_reader.read(), b"gnip")
+
+            client_reader, client_writer = await client.create_stream(
+                is_unidirectional=True
+            )
+            client_writer.write(b"ping")
+            client_writer.write_eof()
+
+            await asyncio.gather(*server_tasks)
+            await client.ping()
+            self.assertEqual(len(server_tasks), 2)
+            self.assertEqual(client._adapters, {})
+            self.assertEqual(server._adapters, {})
+
+    @asynctest
+    async def test_stream_reset_before_data(self) -> None:
+        server_streams: asyncio.Queue[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        ] = asyncio.Queue()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.put_nowait((reader, writer))
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            # The client resets a stream without sending any data on it.
+            quic = client.quic_connection
+            stream_id = quic.get_next_available_stream_id()
+            quic.reset_stream(stream_id=stream_id, error_code=7)
+            client.transmit()
+
+            # The handler still gets the stream, so the server can end its part.
+            server_reader, server_writer = await asyncio.wait_for(
+                server_streams.get(), 1
+            )
+            with self.assertRaisesMessage(
+                ConnectionResetError, "Stream 0 reset by peer with error code 7"
+            ):
+                await server_reader.read()
+            server_writer.write(b"pong")
+            server_writer.write_eof()
+            await server.ping()
+            await client.ping()
+            self.assertEqual(server._adapters, {})
+            self.assertNotIn(stream_id, server.quic_connection._streams)
+
+    @asynctest
+    async def test_stream_reset_by_peer(self) -> None:
+        server_streams: asyncio.Queue[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        ] = asyncio.Queue()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.put_nowait((reader, writer))
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            server_reader, server_writer = await server_streams.get()
+
+            client._quic.reset_stream(stream_id=0, error_code=7)
+            client.transmit()
+            with self.assertRaisesMessage(
+                ConnectionResetError, "Stream 0 reset by peer with error code 7"
+            ):
+                await asyncio.wait_for(server_reader.read(), 1)
+
+            # The server can still reply.
+            server_writer.write(b"pong")
+            await server_writer.drain()
+            server_writer.write_eof()
+            self.assertEqual(await client_reader.read(), b"pong")
+            await server.ping()
+            self.assertEqual(server._adapters, {})
+
+    @asynctest
+    async def test_stream_stopped_before_data(self) -> None:
+        server_streams: asyncio.Queue[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        ] = asyncio.Queue()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.put_nowait((reader, writer))
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            # QUIC sends STOP_SENDING before the stream's first data, so the
+            # server learns of the stop before it learns of the stream.
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            client.quic_connection.stop_stream(stream_id=0, error_code=5)
+            client.transmit()
+            server_reader, server_writer = await server_streams.get()
+
+            message = "Stream 0 stopped by peer with error code 5"
+            server_writer.write(b"pong")
+            with self.assertRaisesMessage(ConnectionResetError, message):
+                await server_writer.drain()
+            with self.assertRaisesMessage(ConnectionResetError, message):
+                await asyncio.wait_for(server_writer.wait_closed(), 1)
+            self.assertEqual(server_writer.is_closing(), True)
+            server_writer.close()
+
+            # The server can still read the client's data.
+            client_writer.write_eof()
+            self.assertEqual(await server_reader.read(), b"ping")
+            await server.ping()
+            self.assertEqual(server._adapters, {})
+
+    @asynctest
+    async def test_stream_stopped_by_peer(self) -> None:
+        server_streams: asyncio.Queue[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        ] = asyncio.Queue()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.put_nowait((reader, writer))
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            server_reader, server_writer = await server_streams.get()
+
+            server._quic.stop_stream(stream_id=0, error_code=9)
+            server.transmit()
+            message = "Stream 0 stopped by peer with error code 9"
+            with self.assertRaisesMessage(ConnectionResetError, message):
+                await asyncio.wait_for(client_writer.wait_closed(), 1)
+            self.assertEqual(client_writer.is_closing(), True)
+
+            # As on TCP, writes are discarded and drain() tells why.
+            client_writer.write(b"more")
+            with self.assertRaisesMessage(ConnectionResetError, message):
+                await client_writer.drain()
+            client_writer.write_eof()
+            client_writer.close()
+
+            # The client can still read the server's reply.
+            server_writer.write(b"pong")
+            server_writer.write_eof()
+            self.assertEqual(await client_reader.read(), b"pong")
+
+            # Once the client has ended the stream, a stop changes nothing.
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            client_writer.write_eof()
+            server_reader, server_writer = await server_streams.get()
+            server._quic.stop_stream(stream_id=4, error_code=9)
+            server.transmit()
+            await server.ping()
+            client_writer.write_eof()
+
+            server_writer.write(b"pong")
+            server_writer.write_eof()
+            self.assertEqual(await client_reader.read(), b"pong")
+            await client.ping()
+            self.assertEqual(client._adapters, {})
+
+    @asynctest
+    async def test_stream_unidirectional_read(self) -> None:
+        async with self.run_client_and_server() as (client, server):
+            client_reader, client_writer = await client.create_stream(
+                is_unidirectional=True
+            )
+
+            # Nothing is ever received on a stream the client can only send on.
+            self.assertEqual(await asyncio.wait_for(client_reader.read(), 1), b"")
+            self.assertEqual(client_reader.at_eof(), True)
+            client_writer.close()
+
+    @asynctest
+    async def test_stream_wait_closed(self) -> None:
+        server_writers: asyncio.Queue[asyncio.StreamWriter] = asyncio.Queue()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_writers.put_nowait(writer)
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
+            # Closing a stream we can write to.
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            client_writer.close()
+            await asyncio.wait_for(client_writer.wait_closed(), 1)
+
+            # Closing a stream we can only read from.
+            client_reader, client_writer = await client.create_stream(
+                is_unidirectional=True
+            )
+            client_writer.write(b"ping")
+            client_writer.close()
+            (await server_writers.get()).close()  # The first stream.
+            server_writer = await server_writers.get()
+            self.assertEqual(server_writer.can_write_eof(), False)
+            server_writer.close()
+            await asyncio.wait_for(server_writer.wait_closed(), 1)
+
+            # Leaving a stream open until the connection ends.
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            server_writer = await server_writers.get()
+            client.close()
+            await client.wait_closed()
+            with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                await asyncio.wait_for(client_writer.wait_closed(), 1)
+            self.assertEqual(client_writer.is_closing(), True)
+            server_writer.close()
+
+    @asynctest
+    async def test_stream_without_stream_handler(self) -> None:
+        async with self.run_client_and_server() as (client, server):
+            for is_unidirectional in (False, True):
+                client_reader, client_writer = await client.create_stream(
+                    is_unidirectional=is_unidirectional
+                )
+                client_writer.write(b"ping")
+                client_writer.write_eof()
+
+            # Resetting or stopping a stream the server ignores.
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            await client.ping()
+            client._quic.stop_stream(stream_id=4, error_code=7)
+            client._quic.reset_stream(stream_id=4, error_code=7)
+            client.transmit()
+            await client.ping()
+
+            # The server ignores the streams, and does not keep their data.
+            self.assertEqual(server._adapters, {})
+
+    @asynctest
+    async def test_stream_write_after_close(self) -> None:
+        async with self.run_client_and_server() as (client, server):
+            closers: dict[str, Callable[[asyncio.StreamWriter], None]] = {
+                "abort": lambda writer: writer.transport.abort(),
+                "close": lambda writer: writer.close(),
+                "write_eof": lambda writer: writer.write_eof(),
+            }
+            for name, close in closers.items():
+                with self.subTest(name=name):
+                    client_reader, client_writer = await client.create_stream()
+                    client_writer.write(b"ping")
+                    close(client_writer)
+                    with self.assertRaisesMessage(
+                        RuntimeError, "Cannot write to a closed stream"
+                    ):
+                        client_writer.write(b"more")
+                    with self.assertRaisesMessage(
+                        RuntimeError, "Cannot write to a closed stream"
+                    ):
+                        client_writer.writelines([b"more"])
 
     @asynctest
     async def test_wait_connected_twice(self) -> None:
