@@ -3,7 +3,11 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from ..quic import events
-from ..quic.connection import NetworkAddress, QuicConnection
+from ..quic.connection import (
+    NetworkAddress,
+    QuicConnection,
+    stream_is_client_initiated,
+)
 from ..quic.packet import QuicErrorCode
 
 QuicConnectionIdHandler = Callable[[bytes], None]
@@ -16,13 +20,14 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
     ):
         loop = asyncio.get_running_loop()
 
+        self._adapters: dict[int, QuicStreamAdapter] = {}
         self._closed = asyncio.Event()
         self._connected = False
         self._connected_waiter: asyncio.Future[None] | None = None
         self._loop = loop
         self._ping_waiters: dict[int, asyncio.Future[None]] = {}
         self._quic = quic
-        self._stream_readers: dict[int, asyncio.StreamReader] = {}
+        self._stream_handler = stream_handler
         self._timer: asyncio.TimerHandle | None = None
         self._timer_at: float | None = None
         self._transmit_task: asyncio.Handle | None = None
@@ -32,10 +37,6 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         self._connection_id_issued_handler: QuicConnectionIdHandler = lambda c: None
         self._connection_id_retired_handler: QuicConnectionIdHandler = lambda c: None
         self._connection_terminated_handler: Callable[[], None] = lambda: None
-        if stream_handler is not None:
-            self._stream_handler = stream_handler
-        else:
-            self._stream_handler = lambda r, w: None
 
     @property
     def quic_connection(self) -> QuicConnection:
@@ -90,10 +91,16 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
 
         The returned reader and writer objects are instances of
         :class:`asyncio.StreamReader` and :class:`asyncio.StreamWriter` classes.
+
+        :raises ConnectionError: If the connection is closing or closed.
         """
+        if self._quic.is_closing():
+            raise ConnectionError("Connection closed")
         stream_id = self._quic.get_next_available_stream_id(
             is_unidirectional=is_unidirectional
         )
+        # Opening the stream reserves its ID, without sending anything.
+        self._quic.send_stream_data(stream_id, b"")
         return self._create_stream(stream_id)
 
     def request_key_update(self) -> None:
@@ -176,27 +183,53 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         """
         # FIXME: move this to a subclass
         if isinstance(event, events.ConnectionTerminated):
-            for reader in self._stream_readers.values():
-                reader.feed_eof()
+            for adapter in self._adapters.values():
+                adapter._connection_terminated()
+            self._adapters.clear()
+        elif isinstance(event, events.StopSendingReceived):
+            adapter = self._adapters.get(event.stream_id, None)
+            if adapter is not None:
+                adapter._stop_received(event.error_code)
         elif isinstance(event, events.StreamDataReceived):
-            reader = self._stream_readers.get(event.stream_id, None)
-            if reader is None:
-                reader, writer = self._create_stream(event.stream_id)
-                self._stream_handler(reader, writer)
-            reader.feed_data(event.data)
-            if event.end_stream:
-                reader.feed_eof()
+            adapter = self._adapter_for_event(event.stream_id)
+            if adapter is not None:
+                adapter._data_received(event.data, event.end_stream)
+        elif isinstance(event, events.StreamReset):
+            adapter = self._adapter_for_event(event.stream_id)
+            if adapter is not None:
+                adapter._reset_received(event.error_code)
 
     # private
+
+    def _adapter_for_event(self, stream_id: int) -> "QuicStreamAdapter | None":
+        """
+        Return the adapter of the stream an event concerns, passing a stream the
+        peer has just opened to the stream handler.
+
+        Without a stream handler, the streams the peer opens are ignored.
+        """
+        adapter = self._adapters.get(stream_id, None)
+        if (
+            adapter is None
+            and self._stream_handler is not None
+            and stream_is_client_initiated(stream_id)
+            != self._quic.configuration.is_client
+        ):
+            reader, writer = self._create_stream(stream_id)
+            self._stream_handler(reader, writer)
+            adapter = self._adapters[stream_id]
+        return adapter
 
     def _create_stream(
         self, stream_id: int
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-        adapter = QuicStreamAdapter(self, stream_id)
         reader = asyncio.StreamReader()
+        adapter = QuicStreamAdapter(self, stream_id, reader)
+        # The adapter feeds the reader, and QuicStreamWriter does not use the
+        # protocol, which only satisfies the StreamWriter constructor.
         protocol = asyncio.streams.StreamReaderProtocol(reader)
-        writer = asyncio.StreamWriter(adapter, protocol, reader, self._loop)
-        self._stream_readers[stream_id] = reader
+        writer = QuicStreamWriter(adapter, protocol, reader, self._loop)
+        self._adapters[stream_id] = adapter
         return reader, writer
 
     def _handle_timer(self) -> None:
@@ -248,13 +281,61 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
 
 
 class QuicStreamAdapter(asyncio.Transport):
-    def __init__(self, protocol: QuicConnectionProtocol, stream_id: int):
-        self.protocol = protocol
+    def __init__(
+        self,
+        protocol: QuicConnectionProtocol,
+        stream_id: int,
+        reader: asyncio.StreamReader,
+    ):
         self.stream_id = stream_id
-        self._closing = False
+        self._aborted = False
+        self._closed = protocol._loop.create_future()
+        # Whether we closed the sending part ourselves, as writing is then a
+        # mistake rather than a consequence of what the network did.
+        self._eof = False
+        self._exception: ConnectionError | None = None
+        self._protocol = protocol
+        self._reader = reader
+        self._receive_finished = not protocol._quic._stream_can_receive(stream_id)
+        if self._receive_finished:
+            # Nothing is ever received on our unidirectional streams.
+            reader.feed_eof()
+        if not self.can_write_eof():
+            # Nothing is ever sent on the peer's unidirectional streams.
+            self._closed.set_result(None)
+            self._eof = True
+        else:
+            # The peer may have stopped its stream before its first data arrived,
+            # and QUIC then already reset the sending part (RFC 9000 section 3.5).
+            stream = protocol._quic._streams.get(stream_id)
+            if stream is not None and stream.sender._reset_error_code is not None:
+                self._stop_received(stream.sender._reset_error_code)
+
+    def abort(self) -> None:
+        """
+        Reset the sending part of the stream and stop the receiving part, with
+        error code 0.
+        """
+        if self._aborted or self._protocol._adapters.get(self.stream_id) is not self:
+            # The stream was already aborted, or both its parts have ended.
+            return
+        self._aborted = True
+        self._eof = True
+        if self.can_write_eof():
+            self._protocol._quic.reset_stream(self.stream_id, error_code=0)
+        if not self._receive_finished:
+            self._protocol._quic.stop_stream(self.stream_id, error_code=0)
+            self._reader.feed_eof()
+        if not self._closed.done():
+            self._closed.set_result(None)
+        self._protocol._transmit_soon()
+        self._discard_if_finished()
 
     def can_write_eof(self) -> bool:
-        return self.protocol._quic._stream_can_send(self.stream_id)
+        return self._protocol._quic._stream_can_send(self.stream_id)
+
+    def close(self) -> None:
+        self.write_eof()
 
     def get_extra_info(self, name: str, default: Any = None) -> Any:
         """
@@ -262,23 +343,104 @@ class QuicStreamAdapter(asyncio.Transport):
         """
         if name == "stream_id":
             return self.stream_id
-
-    def write(self, data: bytes | bytearray | memoryview) -> None:
-        self.protocol._quic.send_stream_data(self.stream_id, bytes(data))
-        self.protocol._transmit_soon()
-
-    def write_eof(self) -> None:
-        if self._closing:
-            return
-        self._closing = True
-        self.protocol._quic.send_stream_data(self.stream_id, b"", end_stream=True)
-        self.protocol._transmit_soon()
-
-    def close(self) -> None:
-        if self.can_write_eof():
-            self.write_eof()
-        else:
-            self._closing = True
+        return default
 
     def is_closing(self) -> bool:
-        return self._closing
+        return self._closed.done() or self._protocol._quic.is_closing()
+
+    def write(self, data: bytes | bytearray | memoryview) -> None:
+        if self._eof:
+            raise RuntimeError("Cannot write to a closed stream")
+        if self.is_closing():
+            # As on TCP, the data is discarded and drain() tells why.
+            return
+        self._protocol._quic.send_stream_data(self.stream_id, bytes(data))
+        self._protocol._transmit_soon()
+
+    def write_eof(self) -> None:
+        if self._closed.done():
+            return
+        self._eof = True
+        if self._protocol._quic.is_closing():
+            # As on TCP, the end of the stream is never sent, and wait_closed()
+            # tells why.
+            self._exception = ConnectionError("Connection closed")
+        else:
+            self._protocol._quic.send_stream_data(self.stream_id, b"", end_stream=True)
+            self._protocol._transmit_soon()
+        self._closed.set_result(None)
+        self._discard_if_finished()
+
+    def _connection_terminated(self) -> None:
+        if not self._receive_finished and not self._aborted:
+            self._reader.set_exception(ConnectionError("Connection closed"))
+        if not self._closed.done():
+            self._exception = ConnectionError("Connection closed")
+            self._closed.set_result(None)
+
+    def _data_received(self, data: bytes, end_stream: bool) -> None:
+        # Data can still arrive after abort() (RFC 9000 section 3.5).
+        if not self._aborted:
+            self._reader.feed_data(data)
+            if end_stream:
+                self._reader.feed_eof()
+        if end_stream:
+            self._receive_finished = True
+            self._discard_if_finished()
+
+    def _discard_if_finished(self) -> None:
+        """
+        Stop tracking the stream once no further event can concern it.
+        """
+        if self._receive_finished and self._closed.done():
+            self._protocol._adapters.pop(self.stream_id, None)
+
+    def _reset_received(self, error_code: int) -> None:
+        if not self._aborted:
+            self._reader.set_exception(
+                ConnectionResetError(
+                    f"Stream {self.stream_id} reset by peer with error code "
+                    f"{error_code}"
+                )
+            )
+        self._receive_finished = True
+        self._discard_if_finished()
+
+    def _stop_received(self, error_code: int) -> None:
+        if self._closed.done():
+            # All the data was written, and QUIC handles the request.
+            return
+        self._exception = ConnectionResetError(
+            f"Stream {self.stream_id} stopped by peer with error code {error_code}"
+        )
+        self._closed.set_result(None)
+        self._discard_if_finished()
+
+
+class QuicStreamWriter(asyncio.StreamWriter):
+    async def drain(self) -> None:
+        """
+        Raise if the peer stopped the stream or the connection is closing,
+        otherwise return immediately, as writes are never paused.
+        """
+        # Unlike TCP, a reset by the peer only ends the receiving part of the
+        # stream, so the reader's exception must not be raised here.
+        adapter = cast(QuicStreamAdapter, self.transport)
+        if adapter._exception is not None:
+            raise adapter._exception
+        if adapter._protocol._quic.is_closing():
+            raise ConnectionError("Connection closed")
+
+    async def wait_closed(self) -> None:
+        """
+        Wait until the sending part of the stream is closed, and raise if the
+        peer stopped the stream or the connection closed first.
+
+        This does not wait for the peer to receive the data: closing the
+        connection straight afterwards can still discard data that has not
+        been sent yet.
+        """
+        adapter = cast(QuicStreamAdapter, self.transport)
+        await asyncio.shield(adapter._closed)
+        if adapter._exception is not None:
+            raise adapter._exception

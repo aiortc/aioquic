@@ -239,7 +239,7 @@ async def serve(
     session_ticket_fetcher: SessionTicketFetcher | None = None,
     session_ticket_handler: SessionTicketHandler | None = None,
     retry: bool = False,
-    stream_handler: QuicStreamHandler = None,
+    stream_handler: QuicStreamHandler | None = None,
 ) -> QuicServer:
     """
     Start a QUIC server at the given `host` and `port`.
@@ -261,9 +261,10 @@ async def serve(
       ticket for future lookup.
     * ``retry`` specifies whether client addresses should be validated prior to
       the cryptographic handshake using a retry packet.
-    * ``stream_handler`` is a callback which is invoked whenever a stream is
-      created. It must accept two arguments: a :class:`asyncio.StreamReader`
-      and a :class:`asyncio.StreamWriter`.
+    * ``stream_handler`` is a callback which is invoked whenever the peer opens a
+      stream. It must accept two arguments: a :class:`asyncio.StreamReader`
+      and a :class:`asyncio.StreamWriter`. Without it, such streams are
+      ignored.
     """
 
     loop = asyncio.get_running_loop()

@@ -42,9 +42,10 @@ async def connect(
       an instance of :class:`~aioquic.asyncio.QuicConnectionProtocol` or a subclass.
     * ``session_ticket_handler`` is a callback which is invoked by the TLS
       engine when a new session ticket is received.
-    * ``stream_handler`` is a callback which is invoked whenever a stream is
-      created. It must accept two arguments: a :class:`asyncio.StreamReader`
-      and a :class:`asyncio.StreamWriter`.
+    * ``stream_handler`` is a callback which is invoked whenever the peer opens a
+      stream. It must accept two arguments: a :class:`asyncio.StreamReader`
+      and a :class:`asyncio.StreamWriter`. Without it, such streams are
+      ignored.
     * ``wait_connected`` indicates whether the context manager should wait for the
       connection to be established before yielding the
       :class:`~aioquic.asyncio.QuicConnectionProtocol`. By default this is `True` but
