@@ -731,6 +731,13 @@ class H3Connection:
         raise NoAvailablePushIDError
 
     @property
+    def quic_connection(self) -> QuicConnection:
+        """
+        Return the QUIC connection this HTTP/3 connection runs on.
+        """
+        return self._quic
+
+    @property
     def received_settings(self) -> dict[int, int] | None:
         """
         Return the received SETTINGS frame, or None.

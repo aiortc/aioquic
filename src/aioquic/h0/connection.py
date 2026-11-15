@@ -52,6 +52,13 @@ class H0Connection:
 
         return http_events
 
+    @property
+    def quic_connection(self) -> QuicConnection:
+        """
+        Return the QUIC connection this HTTP/0.9 connection runs on.
+        """
+        return self._quic
+
     def send_data(self, stream_id: int, data: bytes, end_stream: bool) -> None:
         self._quic.send_stream_data(stream_id, data, end_stream)
 

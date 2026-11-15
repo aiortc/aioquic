@@ -194,3 +194,8 @@ class H0ConnectionTest(TestCase):
             self.assertEqual(events[1].data, b"")
             self.assertEqual(events[1].stream_id, stream_id)
             self.assertEqual(events[1].stream_ended, True)
+
+    def test_quic_connection(self) -> None:
+        with h0_client_and_server() as (quic_client, quic_server):
+            h0_client = H0Connection(quic_client)
+            self.assertIs(h0_client.quic_connection, quic_client)

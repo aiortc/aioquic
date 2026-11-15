@@ -32,8 +32,8 @@ class DnsClientProtocol(QuicConnectionProtocol):
         data = struct.pack("!H", len(data)) + data
 
         # send query and wait for answer
-        stream_id = self._quic.get_next_available_stream_id()
-        self._quic.send_stream_data(stream_id, data, end_stream=True)
+        stream_id = self.quic_connection.get_next_available_stream_id()
+        self.quic_connection.send_stream_data(stream_id, data, end_stream=True)
         waiter = self._loop.create_future()
         self._ack_waiter = waiter
         self.transmit()
