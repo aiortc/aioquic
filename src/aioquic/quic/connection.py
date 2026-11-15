@@ -865,6 +865,15 @@ class QuicConnection:
         if deadline is not None and now >= deadline:
             self._abandon_path_validation()
 
+    def is_closing(self) -> bool:
+        """
+        Return `True` if the connection is closing or closed.
+
+        This is the case as soon as :meth:`close` is called, or once the
+        connection is closed by the peer, an error or the idle timeout.
+        """
+        return self._close_pending or self._state in END_STATES
+
     def next_event(self) -> events.QuicEvent | None:
         """
         Retrieve the next event from the event buffer.
