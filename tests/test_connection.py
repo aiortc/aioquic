@@ -5296,6 +5296,36 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(server._network_paths[1].addr, ("1.2.3.4", 2345))
             self.assertTrue(server._network_paths[1].is_validated)
 
+    def test_is_closing(self) -> None:
+        with client_and_server() as (client, server):
+            consume_events(client)
+            consume_events(server)
+            self.assertFalse(client.is_closing())
+            self.assertFalse(server.is_closing())
+
+            # The connection is closing as soon as close() is called.
+            client.close()
+            self.assertTrue(client.is_closing())
+
+            # The peer is closing once it receives CONNECTION_CLOSE.
+            self.assertEqual(roundtrip(client, server), (1, 0))
+            self.assertTrue(server.is_closing())
+
+            # Both stay closing once the connection is closed.
+            for connection in (client, server):
+                connection.handle_timer(connection.get_timer())
+                self.assertEvents(connection, [events.ConnectionTerminated])
+                self.assertTrue(connection.is_closing())
+
+    def test_is_closing_after_idle_timeout(self) -> None:
+        with client_and_server() as (client, server):
+            consume_events(client)
+            self.assertFalse(client.is_closing())
+
+            client.handle_timer(client.get_timer())
+            self.assertEvents(client, [events.ConnectionTerminated])
+            self.assertTrue(client.is_closing())
+
     def test_local_path_challenges_are_bounded(self) -> None:
         network_path = QuicNetworkPath(("1.2.3.4", 2345))
         for i in range(MAX_LOCAL_CHALLENGES + 2):
