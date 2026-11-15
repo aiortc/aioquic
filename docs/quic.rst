@@ -13,6 +13,10 @@ Connection
     .. autoclass:: QuicConnection
         :members:
 
+    .. autofunction:: stream_is_client_initiated
+
+    .. autofunction:: stream_is_unidirectional
+
 
 Configuration
 -------------

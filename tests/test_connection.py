@@ -25,6 +25,8 @@ from aioquic.quic.connection import (
     QuicNetworkPath,
     QuicReceiveContext,
     dump_cid,
+    stream_is_client_initiated,
+    stream_is_unidirectional,
 )
 from aioquic.quic.crypto import CryptoPair
 from aioquic.quic.exceptions import (
@@ -8345,3 +8347,28 @@ class QuicNetworkPathTest(TestCase):
         path.bytes_sent += 3
         self.assertTrue(path.can_send(0))
         self.assertFalse(path.can_send(1))
+
+
+class StreamIdTest(TestCase):
+    # The four stream types (RFC 9000 section 2.1).
+    STREAM_TYPES = [
+        # stream_id, client_initiated, unidirectional
+        (0, True, False),
+        (1, False, False),
+        (2, True, True),
+        (3, False, True),
+        (4, True, False),
+        (UINT_VAR_MAX, False, True),
+    ]
+
+    def test_stream_is_client_initiated(self) -> None:
+        for stream_id, client_initiated, _ in self.STREAM_TYPES:
+            with self.subTest(stream_id=stream_id):
+                self.assertEqual(
+                    stream_is_client_initiated(stream_id), client_initiated
+                )
+
+    def test_stream_is_unidirectional(self) -> None:
+        for stream_id, _, unidirectional in self.STREAM_TYPES:
+            with self.subTest(stream_id=stream_id):
+                self.assertEqual(stream_is_unidirectional(stream_id), unidirectional)
