@@ -23,7 +23,9 @@ class DnsServerProtocol(QuicConnectionProtocol):
             data = struct.pack("!H", len(data)) + data
 
             # send answer
-            self._quic.send_stream_data(event.stream_id, data, end_stream=True)
+            self.quic_connection.send_stream_data(
+                event.stream_id, data, end_stream=True
+            )
 
 
 class SessionTicketStore:

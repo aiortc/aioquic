@@ -36,14 +36,14 @@ class H3Transport(QuicConnectionProtocol, httpx.AsyncBaseTransport):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
-        self._http = H3Connection(self._quic)
+        self._http = H3Connection(self.quic_connection)
         self._read_queue: dict[int, deque[H3Event]] = {}
         self._read_ready: dict[int, asyncio.Event] = {}
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         assert isinstance(request.stream, httpx.AsyncByteStream)
 
-        stream_id = self._quic.get_next_available_stream_id()
+        stream_id = self.quic_connection.get_next_available_stream_id()
         self._read_queue[stream_id] = deque()
         self._read_ready[stream_id] = asyncio.Event()
 

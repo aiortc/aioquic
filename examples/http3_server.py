@@ -278,7 +278,7 @@ class WebTransportHandler:
                 stream_id=self.stream_id, data=message["data"]
             )
         elif message["type"] == "webtransport.stream.send":
-            self.connection._quic.send_stream_data(
+            self.connection.quic_connection.send_stream_data(
                 stream_id=message["stream"], data=message["data"]
             )
 
@@ -324,9 +324,9 @@ class HttpServerProtocol(QuicConnectionProtocol):
             else:
                 path_bytes, query_string = raw_path, b""
             path = path_bytes.decode()
-            self._quic._logger.info("HTTP request %s %s", method, path)
+            self.quic_connection._logger.info("HTTP request %s %s", method, path)
 
-            client_addr = self._http._quic.get_peer_address()
+            client_addr = self._http.quic_connection.get_peer_address()
             assert client_addr is not None
             client = (client_addr[0], client_addr[1])
 
@@ -416,9 +416,11 @@ class HttpServerProtocol(QuicConnectionProtocol):
     def quic_event_received(self, event: QuicEvent) -> None:
         if isinstance(event, ProtocolNegotiated):
             if event.alpn_protocol in H3_ALPN:
-                self._http = H3Connection(self._quic, enable_webtransport=True)
+                self._http = H3Connection(
+                    self.quic_connection, enable_webtransport=True
+                )
             elif event.alpn_protocol in H0_ALPN:
-                self._http = H0Connection(self._quic)
+                self._http = H0Connection(self.quic_connection)
 
         #  pass event to the HTTP layer
         if self._http is not None:

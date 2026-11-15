@@ -548,6 +548,17 @@ class HighLevelTest(TestCase):
                 await asyncio.gather(*coros)
 
     @asynctest
+    async def test_quic_connection(self) -> None:
+        async with self.run_server() as server_port:
+            configuration = QuicConfiguration(is_client=True)
+            configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+            async with connect(
+                self.server_host, server_port, configuration=configuration
+            ) as client:
+                self.assertIsInstance(client.quic_connection, QuicConnection)
+                self.assertIs(client.quic_connection.configuration, configuration)
+
+    @asynctest
     async def test_server_receives_garbage(self) -> None:
         configuration = QuicConfiguration(is_client=False)
         load_cert_chain(configuration, SERVER_CERTFILE, SERVER_KEYFILE)

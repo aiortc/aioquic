@@ -1847,6 +1847,11 @@ class H3ConnectionTest(TestCase):
             self.assertTrue(h3_server._settings_received)
             self.assertIsNone(h3_server._max_push_id)
 
+    def test_quic_connection(self) -> None:
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            self.assertIs(h3_client.quic_connection, quic_client)
+
     def test_request(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)

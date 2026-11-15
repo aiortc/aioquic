@@ -37,6 +37,13 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
         else:
             self._stream_handler = lambda r, w: None
 
+    @property
+    def quic_connection(self) -> QuicConnection:
+        """
+        Return the QUIC connection driven by this protocol.
+        """
+        return self._quic
+
     def change_connection_id(self) -> None:
         """
         Change the connection ID used to communicate with the peer.
