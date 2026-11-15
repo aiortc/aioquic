@@ -168,14 +168,20 @@ def get_transport_parameters(
 
 def stream_is_client_initiated(stream_id: int) -> bool:
     """
-    Returns True if the stream is client initiated.
+    Return `True` if the stream ID designates a client-initiated stream,
+    `False` if it designates a server-initiated one.
+
+    :param stream_id: A stream ID.
     """
     return not (stream_id & 1)
 
 
 def stream_is_unidirectional(stream_id: int) -> bool:
     """
-    Returns True if the stream is unidirectional.
+    Return `True` if the stream ID designates a unidirectional stream, `False`
+    if it designates a bidirectional one.
+
+    :param stream_id: A stream ID.
     """
     return bool(stream_id & 2)
 
