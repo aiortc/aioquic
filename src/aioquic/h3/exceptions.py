@@ -21,7 +21,7 @@ class InvalidStreamIdError(H3Error):
 class InvalidStreamStateError(H3Error):
     """
     An action was attempted on a stream in an invalid state, such as sending
-    data before headers, or after the stream was ended.
+    data before headers, or on a stream which is not open.
     """
 
 

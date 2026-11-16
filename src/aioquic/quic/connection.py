@@ -558,6 +558,30 @@ class QuicConnection:
     def original_destination_connection_id(self) -> bytes:
         return self._original_destination_connection_id
 
+    def can_send_stream_data(self, stream_id: int) -> bool:
+        """
+        Return `True` if :meth:`send_stream_data` can send data on the given
+        stream.
+
+        This is not the case for the peer's unidirectional streams and for the
+        streams the peer has not opened, nor once a stream was ended by
+        :meth:`send_stream_data`, reset by :meth:`reset_stream` or
+        :meth:`reset_stream_at`, or stopped by the peer with a STOP_SENDING
+        frame.
+
+        :param stream_id: The stream's ID.
+        :raises ~aioquic.quic.exceptions.OutOfRangeError:
+            If the stream ID is out of range.
+        """
+        validate_stream_id(stream_id)
+
+        if not self._stream_can_send(stream_id) or self._stream_is_discarded(stream_id):
+            return False
+        stream = self._streams.get(stream_id)
+        if stream is None:
+            return stream_is_client_initiated(stream_id) == self._is_client
+        return not stream.sender.is_ended
+
     def change_connection_id(self) -> None:
         """
         Switch to the next available connection ID and retire

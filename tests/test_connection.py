@@ -3070,6 +3070,27 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
 
 
 class QuicConnectionTest(QuicConnectionTestCase):
+    def assertCanSendStreamData(
+        self, connection: QuicConnection, stream_id: int
+    ) -> None:
+        """
+        Check data can be sent on the stream, and that send_stream_data() agrees,
+        as H3 relies on it.
+        """
+        self.assertTrue(connection.can_send_stream_data(stream_id))
+        connection.send_stream_data(stream_id, b"")
+
+    def assertCannotSendStreamData(
+        self, connection: QuicConnection, stream_id: int
+    ) -> None:
+        """
+        Check data cannot be sent on the stream, and that send_stream_data()
+        agrees, as H3 relies on it.
+        """
+        self.assertFalse(connection.can_send_stream_data(stream_id))
+        with self.assertRaises((StreamStateError, StreamTypeError)):
+            connection.send_stream_data(stream_id, b"")
+
     def check_0rtt_rejected(
         self,
         server_options: dict[str, Any] = {},
@@ -3168,6 +3189,51 @@ class QuicConnectionTest(QuicConnectionTestCase):
         for i in range(7):
             self.assertEqual(type(server.next_event()), events.ConnectionIdIssued)
         self.assertIsNone(server.next_event())
+
+    def test_can_send_stream_data(self) -> None:
+        with client_and_server() as (client, server):
+            # Data can be sent on our streams not created yet, but not on the
+            # peer's unidirectional streams, nor on streams the peer has not opened.
+            self.assertCanSendStreamData(client, 0)
+            self.assertCanSendStreamData(client, 2)
+            self.assertCannotSendStreamData(client, 3)
+            self.assertCannotSendStreamData(client, 1)
+
+            # The client sends data, then ends the stream.
+            client.send_stream_data(0, b"hello")
+            self.assertCanSendStreamData(client, 0)
+            client.send_stream_data(0, b"", end_stream=True)
+            self.assertCannotSendStreamData(client, 0)
+
+            # The client resets a stream.
+            client.send_stream_data(4, b"hello")
+            client.reset_stream(4, QuicErrorCode.NO_ERROR)
+            self.assertCannotSendStreamData(client, 4)
+
+            # The client asks the server to stop sending.
+            client.send_stream_data(8, b"hello")
+            client.stop_stream(8, QuicErrorCode.NO_ERROR)
+            roundtrip(client, server)
+            self.assertCanSendStreamData(server, 0)
+            self.assertCannotSendStreamData(server, 8)
+
+            # The server ends stream 0, then both discard it.
+            server.send_stream_data(0, b"world", end_stream=True)
+            roundtrip(server, client)
+            roundtrip(client, server)
+            self.assertNotIn(0, client._streams)
+            self.assertNotIn(0, server._streams)
+            self.assertCannotSendStreamData(client, 0)
+            self.assertCannotSendStreamData(server, 0)
+
+    def test_can_send_stream_data_out_of_range(self) -> None:
+        with client_and_server() as (client, server):
+            for stream_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        OutOfRangeError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        client.can_send_stream_data(stream_id)
 
     def test_close_out_of_range(self) -> None:
         with client_and_server() as (client, server):
