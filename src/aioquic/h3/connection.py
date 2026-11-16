@@ -1244,6 +1244,14 @@ class H3Connection:
 
     def _receive_stream_data(self, event: StreamDataReceived) -> list[H3Event]:
         stream_id = event.stream_id
+        if (
+            not self._is_client
+            and self._sent_goaway_id is not None
+            and stream_is_request_response(stream_id)
+            and stream_id >= self._sent_goaway_id
+        ):
+            self._quic.reset_stream(stream_id, ErrorCode.H3_REQUEST_REJECTED)
+            return []
         stream = self._stream.get(stream_id)
         if stream is None:
             stream = H3Stream(stream_id)
