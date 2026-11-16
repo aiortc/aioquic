@@ -2250,8 +2250,8 @@ class H3ConnectionTest(TestCase):
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
-            h3_client.send_goaway(UINT_VAR_MAX)
-            h3_client.send_goaway(0)
+            h3_client.send_goaway(push_id=UINT_VAR_MAX)
+            h3_client.send_goaway(push_id=0)
             self.assertEqual(
                 h3_transfer(quic_client, h3_server),
                 [GoAwayReceived(push_id=UINT_VAR_MAX), GoAwayReceived(push_id=0)],
@@ -2307,6 +2307,33 @@ class H3ConnectionTest(TestCase):
                 quic_server._streams[0].sender._reset_error_code,
                 ErrorCode.H3_REQUEST_REJECTED,
             )
+
+    def test_send_headers_after_goaway(self) -> None:
+        """A client does not initiate requests after receiving server GOAWAY."""
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            h3_server.send_goaway(stream_id=UINT_VAR_MAX - 3)
+            self.assertEqual(
+                h3_transfer(quic_server, h3_client),
+                [GoAwayReceived(stream_id=UINT_VAR_MAX - 3)],
+            )
+
+            stream_id = quic_client.get_next_available_stream_id()
+            with self.assertRaisesMessage(
+                InvalidStreamStateError,
+                "Cannot initiate a new request after receiving GOAWAY",
+            ):
+                h3_client.send_headers(
+                    stream_id=stream_id,
+                    headers=[
+                        (b":method", b"GET"),
+                        (b":scheme", b"https"),
+                        (b":authority", b"localhost"),
+                        (b":path", b"/"),
+                    ],
+                )
+            self.assertNotIn(stream_id, h3_client._stream)
 
     def test_send_headers_after_trailers(self) -> None:
         """

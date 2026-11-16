@@ -677,8 +677,9 @@ class H3Connection:
             If the stream is not a request stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
             If headers are sent after the trailers, after the stream was ended or
-            reset, or on a stream the peer has not opened, or an interim response
-            would end the stream.
+            reset, or on a stream the peer has not opened, if a new request is
+            started after receiving GOAWAY, or if an interim response would end
+            the stream.
         :raises ~aioquic.h3.exceptions.H3Error:
             If the peer stopped the QPACK encoder stream.
         """
@@ -686,6 +687,10 @@ class H3Connection:
 
         # The stream's state is only stored once the headers are sent.
         stream = self._stream.get(stream_id)
+        if self._is_client and stream is None and self._received_goaway_id is not None:
+            raise InvalidStreamStateError(
+                "Cannot initiate a new request after receiving GOAWAY"
+            )
         if stream is None:
             stream = H3Stream(stream_id)
         if stream.sending_ended:
