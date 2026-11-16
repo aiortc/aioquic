@@ -31,7 +31,9 @@ from aioquic.h3.events import (
     HeadersReceived,
 )
 from aioquic.h3.exceptions import (
+    GoAwayIdError,
     H3Error,
+    InvalidGoAwayError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -312,9 +314,8 @@ class H3ConnectionTest(TestCase):
 
     def test_handle_control_frame_goaway(self) -> None:
         """
-        A client reports the stream ID of a GOAWAY frame, while a server only
-        checks the push ID, as it never pushes. Later GOAWAY frames may keep or
-        lower the ID, but not raise it, see RFC 9114 section 5.2.
+        Both endpoints report received GOAWAY IDs. Later GOAWAY frames may keep
+        or lower the ID, but not raise it, see RFC 9114 section 5.2.
         """
         for is_client, goaway_ids, expected_events in [
             (True, [8], [GoAwayReceived(stream_id=8)]),
@@ -327,8 +328,16 @@ class H3ConnectionTest(TestCase):
                     GoAwayReceived(stream_id=4),
                 ],
             ),
-            (False, [3], []),
-            (False, [3, 3, 1], []),
+            (False, [3], [GoAwayReceived(push_id=3)]),
+            (
+                False,
+                [3, 3, 1],
+                [
+                    GoAwayReceived(push_id=3),
+                    GoAwayReceived(push_id=3),
+                    GoAwayReceived(push_id=1),
+                ],
+            ),
         ]:
             with (
                 self.subTest(is_client=is_client, goaway_ids=goaway_ids),
@@ -2199,6 +2208,105 @@ class H3ConnectionTest(TestCase):
                     stream_id=stream_id, data=b"hello", end_stream=False
                 )
             self.assertNotIn(stream_id, h3_client._stream)
+
+    def test_send_goaway(self) -> None:
+        """GOAWAY sends direction-specific maximum IDs and supports reductions."""
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            max_stream_id = UINT_VAR_MAX - 3
+
+            h3_server.send_goaway(max_stream_id)
+            h3_server.send_goaway(max_stream_id)
+            h3_server.send_goaway(0)
+            self.assertEqual(
+                h3_transfer(quic_server, h3_client),
+                [
+                    GoAwayReceived(stream_id=max_stream_id),
+                    GoAwayReceived(stream_id=max_stream_id),
+                    GoAwayReceived(stream_id=0),
+                ],
+            )
+
+            logger = quic_server.configuration.quic_logger
+            assert logger is not None
+            goaway_frames = [
+                event["data"]
+                for event in logger.to_dict()["traces"][0]["events"]
+                if event["name"] == "http3:frame_created"
+                and event["data"]["frame"]["frame_type"] == "goaway"
+            ]
+            self.assertEqual(
+                goaway_frames,
+                [
+                    {
+                        "frame": {"frame_type": "goaway", "id": stream_id},
+                        "stream_id": h3_server._local_control_stream_id,
+                    }
+                    for stream_id in (max_stream_id, max_stream_id, 0)
+                ],
+            )
+
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            h3_client.send_goaway(UINT_VAR_MAX)
+            h3_client.send_goaway(0)
+            self.assertEqual(
+                h3_transfer(quic_client, h3_server),
+                [GoAwayReceived(push_id=UINT_VAR_MAX), GoAwayReceived(push_id=0)],
+            )
+
+    def test_send_goaway_invalid_arguments(self) -> None:
+        """GOAWAY validates its ID, endpoint direction, and monotonicity."""
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            for args in ({}, {"stream_id": 0, "push_id": 0}):
+                with self.assertRaises(InvalidGoAwayError):
+                    h3_server.send_goaway(**args)
+            for stream_id in (-4, 1, UINT_VAR_MAX):
+                with self.assertRaises(InvalidGoAwayError):
+                    h3_server.send_goaway(stream_id)
+            with self.assertRaises(InvalidGoAwayError):
+                h3_client.send_goaway(stream_id=0)
+            with self.assertRaises(InvalidGoAwayError):
+                h3_client.send_goaway(push_id=UINT_VAR_MAX + 1)
+            with self.assertRaises(InvalidGoAwayError):
+                h3_server.send_goaway(push_id=0)
+            h3_server.send_goaway(stream_id=8)
+            with self.assertRaises(GoAwayIdError):
+                h3_server.send_goaway(stream_id=12)
+
+            h3_server.send_goaway(stream_id=4)
+            self.assertEqual(
+                h3_transfer(quic_server, h3_client),
+                [GoAwayReceived(stream_id=8), GoAwayReceived(stream_id=4)],
+            )
+
+    def test_send_goaway_rejects_requests_at_cutoff(self) -> None:
+        """Requests at or above the server GOAWAY cutoff are rejected."""
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            h3_server.send_goaway(stream_id=0)
+
+            h3_client.send_headers(
+                0,
+                [
+                    (b":method", b"GET"),
+                    (b":scheme", b"https"),
+                    (b":authority", b"localhost"),
+                    (b":path", b"/"),
+                ],
+                end_stream=True,
+            )
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertEqual(
+                quic_server._streams[0].sender._reset_error_code,
+                ErrorCode.H3_REQUEST_REJECTED,
+            )
 
     def test_send_headers_after_trailers(self) -> None:
         """

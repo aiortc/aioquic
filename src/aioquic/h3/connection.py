@@ -23,13 +23,13 @@ from aioquic.h3.events import (
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import (
+    GoAwayIdError,
     H3Error,
+    InvalidGoAwayError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
     NoAvailablePushIDError,
-    InvalidGoAwayError,
-    GoAwayIdError,
 )
 from aioquic.quic.connection import (
     QuicConnection,
