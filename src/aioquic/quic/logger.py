@@ -271,6 +271,12 @@ class QuicLoggerTrace:
             "stream_id": stream_id,
         }
 
+    def encode_http3_goaway_frame(self, *, goaway_id: int, stream_id: int) -> dict:
+        return {
+            "frame": {"frame_type": "goaway", "stream_id": goaway_id},
+            "stream_id": stream_id,
+        }
+
     def encode_http3_headers_frame(
         self, *, length: int, headers: Headers, stream_id: int
     ) -> dict:

@@ -773,7 +773,13 @@ class H3Connection:
 
         frame_data = encode_uint_var(goaway_id)
         assert self._local_control_stream_id is not None
-        
+        if self._quic_logger is not None:
+            self._quic_logger.log_event(
+                name="http3:frame_created",
+                data=self._quic_logger.encode_http3_goaway_frame(
+                    goaway_id=goaway_id, stream_id=self._local_control_stream_id
+                ),
+            )
         self._quic.send_stream_data(
             stream_id=self._local_control_stream_id,
             data=encode_frame(FrameType.GOAWAY, frame_data),
@@ -1024,8 +1030,8 @@ class H3Connection:
         else:
             goaway_id = parse_id_frame(FrameType.GOAWAY, frame_data)
 
-            # A server's GOAWAY carries a client-initiated bidirectional stream ID
-            # (RFC 9114 section 7.2.6).
+            # A server GOAWAY carries a client-initiated bidirectional stream ID
+            # (RFC 9114 section 7.2.6). A client GOAWAY carries a push ID.
             if self._is_client and not stream_is_request_response(goaway_id):
                 raise IdError(
                     "GOAWAY does not carry a client-initiated bidirectional stream ID"
@@ -1039,10 +1045,10 @@ class H3Connection:
                 raise IdError("GOAWAY increased the ID of a previous GOAWAY")
             self._received_goaway_id = goaway_id
 
-            # A client's GOAWAY carries a push ID, which is of no use as we never
-            # push.
+            # Report the direction-specific ID
             if self._is_client:
                 return GoAwayReceived(stream_id=goaway_id)
+            return GoAwayReceived(push_id=goaway_id)
         return None
 
     def _check_content_length(self, stream: H3Stream) -> None:
