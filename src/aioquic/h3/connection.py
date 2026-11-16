@@ -625,14 +625,12 @@ class H3Connection:
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a request stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
-            If data is sent before the headers, after the trailers, or after the
-            stream was ended or reset.
+            If data is sent before the headers, after the trailers, or on a stream
+            which is not open.
         """
-        self._check_stream_type_for_sending(stream_id)
+        self._check_sending_allowed(stream_id)
 
         stream = self._stream.get(stream_id)
-        if stream is not None and stream.sending_ended:
-            raise InvalidStreamStateError("Cannot send after the stream was ended")
         if stream is None or stream.headers_send_state == HeadersState.INITIAL:
             raise InvalidStreamStateError("Cannot send data before the headers")
         if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
@@ -647,7 +645,7 @@ class H3Connection:
                 ),
             )
 
-        self._send_request_stream_data(
+        self._quic.send_stream_data(
             stream_id, encode_frame(FrameType.DATA, data), end_stream
         )
         if end_stream:
@@ -670,14 +668,13 @@ class H3Connection:
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a request stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
-            If headers are sent after the trailers, after the stream was ended or
-            reset, or on a stream the peer has not opened, or an interim response
-            would end the stream.
+            If headers are sent after the trailers or on a stream which is not
+            open, or an interim response would end the stream.
         :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
             If a client starts a request after receiving GOAWAY, or the peer
             stopped the QPACK encoder stream.
         """
-        self._check_stream_type_for_sending(stream_id)
+        self._check_sending_allowed(stream_id)
 
         # A client must not start requests once it receives GOAWAY (RFC 9114
         # section 5.2).
@@ -694,8 +691,6 @@ class H3Connection:
         stream = self._stream.get(stream_id)
         if stream is None:
             stream = H3Stream(stream_id)
-        if stream.sending_ended:
-            raise InvalidStreamStateError("Cannot send after the stream was ended")
         if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
             raise InvalidStreamStateError("Cannot send headers after the trailers")
 
@@ -721,7 +716,7 @@ class H3Connection:
                 ),
             )
 
-        self._send_request_stream_data(
+        self._quic.send_stream_data(
             stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
         )
         if stream.headers_send_state != HeadersState.INITIAL:
@@ -870,15 +865,12 @@ class H3Connection:
         if not 0 <= stream_id <= UINT_VAR_MAX:
             raise InvalidStreamIdError("Stream ID must be between 0 and 2^62 - 1")
 
-    def _check_stream_type_for_sending(self, stream_id: int) -> None:
+    def _check_sending_allowed(self, stream_id: int) -> None:
         """
-        Check the stream ID is in range and a request stream, before any state is
-        created for it.
+        Check headers and data can be sent on the stream, before any state is
+        created for it or anything is encoded.
         """
         self._check_stream_id(stream_id)
-        if stream_is_request_response(stream_id):
-            return
-
         if stream_is_unidirectional(stream_id) and (
             stream_is_client_initiated(stream_id) != self._is_client
         ):
@@ -889,9 +881,19 @@ class H3Connection:
         # HTTP messages are only sent on request streams, not on server-initiated
         # bidirectional streams (RFC 9114 section 6.1) nor on our unidirectional
         # streams (RFC 9114 section 6.2), such as the control and QPACK streams.
-        raise InvalidStreamTypeError(
-            "Headers and data can only be sent on request streams"
-        )
+        if not stream_is_request_response(stream_id):
+            raise InvalidStreamTypeError(
+                "Headers and data can only be sent on request streams"
+            )
+
+        # Only QUIC knows whether a stream without state, or one whose STOP_SENDING
+        # it has not reported yet, can still be sent on. HTTP/3 itself never sends
+        # again on a stream it handed over to WebTransport.
+        stream = self._stream.get(stream_id)
+        if not self._quic.can_send_stream_data(stream_id) or (
+            stream is not None and stream.sending_ended
+        ):
+            raise InvalidStreamStateError("Cannot send on a stream which is not open")
 
     def _create_uni_stream(self, stream_type: int) -> int:
         """
@@ -1182,7 +1184,8 @@ class H3Connection:
         ):
             raise ClosedCriticalStream("Stopping a critical stream is not allowed")
 
-        # The QUIC layer has already reset the sending part of the stream.
+        # The QUIC layer has already reset the sending part of the stream. If
+        # the stream has no state yet, it picks this up when it is created.
         stream = self._stream.get(stream_id)
         if stream is not None:
             stream.sending_ended = True
@@ -1193,10 +1196,12 @@ class H3Connection:
         stream = self._stream.get(stream_id)
         if stream is None:
             stream = H3Stream(stream_id)
-            if stream_is_unidirectional(stream_id):
-                # Only the peer's unidirectional streams have state, and we
-                # never send on them.
-                stream.sending_ended = True
+            # We never send on the peer's unidirectional streams, the only
+            # unidirectional streams with state, and sending on a request stream
+            # may already have ended, after a STOP_SENDING which came first.
+            stream.sending_ended = stream_is_unidirectional(stream_id) or (
+                not self._quic.can_send_stream_data(stream_id)
+            )
             self._stream[stream_id] = stream
         if stream_is_unidirectional(stream_id):
             http_events = self._receive_stream_data_uni(
@@ -1580,29 +1585,6 @@ class H3Connection:
 
         if stream is not None:
             self._store_or_discard_stream(stream)
-
-    def _send_request_stream_data(
-        self, stream_id: int, data: bytes, end_stream: bool
-    ) -> None:
-        """
-        Send data on a request stream, raising an H3 exception if QUIC refuses it.
-        """
-        try:
-            self._quic.send_stream_data(stream_id, data, end_stream)
-        except StreamStateError as exc:
-            message = {
-                "Cannot send data after FIN": "Cannot send after the stream was ended",
-                "Cannot send data after the stream was reset": (
-                    "Cannot send after the stream was reset"
-                ),
-                "Cannot send data on a finished stream": (
-                    "Cannot send after the stream was ended"
-                ),
-                "Cannot send data on unknown peer-initiated stream": (
-                    "Cannot send on a stream the peer has not opened"
-                ),
-            }.get(str(exc), str(exc))
-            raise InvalidStreamStateError(message) from exc
 
     def _store_or_discard_stream(self, stream: H3Stream) -> None:
         """
