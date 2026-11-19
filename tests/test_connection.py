@@ -4781,6 +4781,30 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 cm.exception.reason_phrase, "offset + length cannot exceed 2^62 - 1"
             )
 
+    def test_handle_crypto_frame_too_many_ranges(self) -> None:
+        with client_and_server() as (client, server):
+            stream = client._crypto_streams[tls.Epoch.ONE_RTT]
+            start = stream.receiver.starting_offset()
+
+            # Client receives 1-byte CRYPTO frames with 1-byte gaps.
+            with self.assertRaises(QuicConnectionError) as cm:
+                for offset in range(start + 1, start + 1001, 2):
+                    client._handle_crypto_frame(
+                        client_receive_context(client),
+                        QuicFrameType.CRYPTO,
+                        Buffer(
+                            data=encode_uint_var(offset) + encode_uint_var(1) + b"\x00"
+                        ),
+                    )
+            self.assertEqual(
+                cm.exception.error_code, QuicErrorCode.CRYPTO_BUFFER_EXCEEDED
+            )
+            self.assertEqual(cm.exception.frame_type, QuicFrameType.CRYPTO)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Too many gaps in received data"
+            )
+            self.assertEqual(len(stream.receiver._ranges), 65)
+
     def test_excessive_crypto_buffering(self) -> None:
         with client_and_server() as (client, server):
             # Client receives data that causes more than 512K of buffering; note that
@@ -6276,6 +6300,31 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(cm.exception.error_code, QuicErrorCode.STREAM_STATE_ERROR)
             self.assertEqual(cm.exception.frame_type, QuicFrameType.STREAM_BASE)
             self.assertEqual(cm.exception.reason_phrase, "Stream is send-only")
+
+    def test_handle_stream_frame_too_many_ranges(self) -> None:
+        with client_and_server() as (client, server):
+            frame_type = QuicFrameType.STREAM_BASE | 6
+            stream_id = 1
+
+            # Client receives 1-byte STREAM frames with 1-byte gaps.
+            with self.assertRaises(QuicConnectionError) as cm:
+                for offset in range(1, 1001, 2):
+                    client._handle_stream_frame(
+                        client_receive_context(client),
+                        frame_type,
+                        Buffer(
+                            data=encode_uint_var(stream_id)
+                            + encode_uint_var(offset)
+                            + encode_uint_var(1)
+                            + b"x"
+                        ),
+                    )
+            self.assertEqual(cm.exception.error_code, QuicErrorCode.INTERNAL_ERROR)
+            self.assertEqual(cm.exception.frame_type, frame_type)
+            self.assertEqual(
+                cm.exception.reason_phrase, "Too many gaps in received data"
+            )
+            self.assertEqual(len(client._streams[stream_id].receiver._ranges), 65)
 
     def test_handle_stream_frame_wrong_initiator(self) -> None:
         with client_and_server() as (client, server):
