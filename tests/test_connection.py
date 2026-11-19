@@ -520,6 +520,8 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
         buf.push_bytes(data)
         datagrams, packets = builder.flush()
         client._packet_number = builder.packet_number
+        space = client._spaces[tls.Epoch.ONE_RTT]
+        space.largest_sent_packet = packets[-1].packet_number
         return datagrams[0]
 
     def test_ack_delay_exponent(self) -> None:
@@ -4658,7 +4660,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client = create_standalone_client(self)
 
         client._handle_ack_frame(
-            client_receive_context(client),
+            client_receive_context(client, epoch=tls.Epoch.INITIAL),
             QuicFrameType.ACK_ECN,
             Buffer(data=b"\x00\x02\x00\x00\x00\x00\x00"),
         )
@@ -4678,6 +4680,27 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self.assertEqual(
             cm.exception.reason_phrase, "ACK range contains a negative packet number"
         )
+
+    def test_handle_ack_frame_unsent_packet(self) -> None:
+        client = create_standalone_client(self)
+        space = client._spaces[tls.Epoch.INITIAL]
+        self.assertEqual(space.largest_sent_packet, 0)
+
+        # Client receives an ACK frame for packet 1, which it has not sent.
+        with self.assertRaises(QuicConnectionError) as cm:
+            client._handle_ack_frame(
+                client_receive_context(client, epoch=tls.Epoch.INITIAL),
+                QuicFrameType.ACK,
+                Buffer(data=b"\x01\x00\x00\x01"),
+            )
+        self.assertEqual(cm.exception.error_code, QuicErrorCode.PROTOCOL_VIOLATION)
+        self.assertEqual(cm.exception.frame_type, QuicFrameType.ACK)
+        self.assertEqual(
+            cm.exception.reason_phrase,
+            "ACK frame acknowledges a packet which was not sent",
+        )
+        self.assertEqual(space.largest_acked_packet, 0)
+        self.assertEqual(list(space.sent_packets), [0])
 
     def test_handle_connection_close_frame(self) -> None:
         with client_and_server() as (client, server):
