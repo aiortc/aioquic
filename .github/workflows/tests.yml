@@ -96,7 +96,9 @@ jobs:
             arch: x86_64
           - os: ubuntu-24.04-arm
             arch: aarch64
-          - os: ubuntu-latest
+          # Docker on the Ubuntu 26.04 image denies 32-bit containers network
+          # access: https://github.com/actions/runner-images/issues/14790
+          - os: ubuntu-24.04
             arch: i686
           - os: ubuntu-latest
             arch: x86_64
