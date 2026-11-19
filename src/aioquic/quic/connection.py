@@ -2209,7 +2209,7 @@ class QuicConnection:
         # Reject acknowledgments for packets which were not sent (RFC 9000
         # section 13.1).
         space = self._spaces[context.epoch]
-        if ack_rangeset.bounds().stop - 1 > space.largest_sent_packet:
+        if ack_rangeset.stop - 1 > space.largest_sent_packet:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.PROTOCOL_VIOLATION,
                 frame_type=frame_type,

@@ -263,7 +263,7 @@ class QuicPacketRecovery:
         Update metrics as the result of an ACK being received.
         """
         is_ack_eliciting = False
-        largest_acked = ack_rangeset.bounds().stop - 1
+        largest_acked = ack_rangeset.stop - 1
         largest_newly_acked = None
         largest_sent_time = None
 

@@ -41,11 +41,26 @@ class RangeSet(Sequence):
         j = bisect_right(self.__ranges, stop, lo=j + 1, key=_start)
         self.__ranges[i:j] = [range(start, max(stop, self.__ranges[j - 1].stop))]
 
-    def bounds(self) -> range:
-        return range(self.__ranges[0].start, self.__ranges[-1].stop)
-
     def shift(self) -> range:
         return self.__ranges.pop(0)
+
+    @property
+    def start(self) -> int:
+        """
+        The start of the first range.
+
+        :raises IndexError: If the set is empty.
+        """
+        return self.__ranges[0].start
+
+    @property
+    def stop(self) -> int:
+        """
+        The stop of the last range.
+
+        :raises IndexError: If the set is empty.
+        """
+        return self.__ranges[-1].stop
 
     def subtract(self, start: int, stop: int) -> None:
         assert stop > start
