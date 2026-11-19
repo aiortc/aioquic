@@ -279,3 +279,19 @@ class RangeSetTest(TestCase):
     def test_repr(self) -> None:
         rangeset = RangeSet([range(1, 2), range(3, 4)])
         self.assertEqual(repr(rangeset), "RangeSet([range(1, 2), range(3, 4)])")
+
+    def test_start(self) -> None:
+        rangeset = RangeSet()
+        with self.assertRaises(IndexError):
+            rangeset.start
+
+        rangeset = RangeSet([range(1, 2), range(3, 4)])
+        self.assertEqual(rangeset.start, 1)
+
+    def test_stop(self) -> None:
+        rangeset = RangeSet()
+        with self.assertRaises(IndexError):
+            rangeset.stop
+
+        rangeset = RangeSet([range(1, 2), range(3, 4)])
+        self.assertEqual(rangeset.stop, 4)

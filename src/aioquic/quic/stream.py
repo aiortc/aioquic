@@ -221,7 +221,7 @@ class QuicStreamReceiver:
         Remove data from the front of the buffer.
         """
         try:
-            has_data_to_read = self._ranges[0].start == self._buffer_start
+            has_data_to_read = self._ranges.start == self._buffer_start
         except IndexError:
             has_data_to_read = False
         if not has_data_to_read:
@@ -275,7 +275,7 @@ class QuicStreamSender:
         This is used to determine the space needed for the frame's `offset` field.
         """
         try:
-            return self._pending[0].start
+            return self._pending.start
         except IndexError:
             return self._buffer_stop
 
