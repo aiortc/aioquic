@@ -25,7 +25,6 @@ from aioquic.h3.events import (
 from aioquic.h3.exceptions import (
     GoAwayIdError,
     H3Error,
-    InvalidGoAwayError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -35,6 +34,7 @@ from aioquic.quic.connection import (
     QuicConnection,
     stream_is_client_initiated,
     stream_is_unidirectional,
+    validate_stream_id,
 )
 from aioquic.quic.events import (
     DatagramFrameReceived,
@@ -494,8 +494,8 @@ class H3Connection:
         # The maximum stream ID or push ID by peer for goaway frame
         self._received_goaway_id: int | None = None
 
-        # The stream ID or push ID sent in the last GOAWAY frame.
-        self._sent_goaway_id: int | None = None
+        # The request stream cutoff in the last GOAWAY frame sent by a server.
+        self._sent_goaway_stream_id: int | None = None
 
         self._local_control_stream_id: int | None = None
         self._local_decoder_stream_id: int | None = None
@@ -731,65 +731,54 @@ class H3Connection:
             stream.sending_ended = True
         self._store_or_discard_stream(stream)
 
-    def send_goaway(
-        self, stream_id: int | None = None, push_id: int | None = None
-    ) -> None:
+    def send_goaway(self, stream_id: int) -> None:
         """
-        Send a GOAWAY frame on the control stream.
+        Send a server GOAWAY frame on the control stream.
 
         .. aioquic_transmit::
 
-        Exactly one of ``stream_id`` or ``push_id`` must be provided. Servers
-        send a client-initiated bidirectional stream ID; clients send a push ID.
-        Repeated GOAWAY frames may use the same or a lower ID. This method does
-        not close the connection.
+        The ID is the first client-initiated bidirectional request stream the
+        server will not process. Repeated GOAWAY frames may use the same or a
+        lower ID. This method does not close the connection.
 
         :param stream_id: The first request stream ID the server will not process.
-        :param push_id: The first push ID the client will not accept.
-        :raises ~aioquic.h3.exceptions.InvalidGoAwayError: If the ID is missing,
-            invalid, or does not match the endpoint's role.
+        :raises ~aioquic.quic.exceptions.OutOfRangeError: If the stream ID is
+            outside the QUIC stream ID range.
+        :raises ~aioquic.h3.exceptions.InvalidStreamTypeError: If called on a
+            client connection or if the ID is not a client-initiated bidirectional
+            stream ID.
         :raises ~aioquic.h3.exceptions.GoAwayIdError: If the ID increases from
             the previous GOAWAY frame.
         """
-        if (stream_id is None) == (push_id is None):
-            raise InvalidGoAwayError(
-                "Exactly one of stream_id or push_id must be provided"
-            )
+        validate_stream_id(stream_id)
         if self._is_client:
-            if stream_id is not None:
-                raise InvalidGoAwayError("Clients must send push_id in GOAWAY")
-            goaway_id = push_id
-        else:
-            if push_id is not None:
-                raise InvalidGoAwayError("Servers must send stream_id in GOAWAY")
-            goaway_id = stream_id
-
-        assert goaway_id is not None
-        if not 0 <= goaway_id <= UINT_VAR_MAX:
-            raise InvalidGoAwayError(
-                "GOAWAY ID is outside the QUIC variable integer range"
+            raise InvalidStreamTypeError(
+                "Clients cannot send GOAWAY without push support"
             )
-        if stream_id is not None and not stream_is_request_response(stream_id):
-            raise InvalidGoAwayError(
-                "GOAWAY stream_id must be a client-initiated bidirectional stream ID"
+        if not stream_is_request_response(stream_id):
+            raise InvalidStreamTypeError(
+                "GOAWAY must carry a client-initiated bidirectional stream ID"
             )
-        if self._sent_goaway_id is not None and goaway_id > self._sent_goaway_id:
+        if (
+            self._sent_goaway_stream_id is not None
+            and stream_id > self._sent_goaway_stream_id
+        ):
             raise GoAwayIdError("GOAWAY increased the ID of a previous GOAWAY")
 
-        frame_data = encode_uint_var(goaway_id)
+        frame_data = encode_uint_var(stream_id)
         assert self._local_control_stream_id is not None
         if self._quic_logger is not None:
             self._quic_logger.log_event(
                 name="http3:frame_created",
                 data=self._quic_logger.encode_http3_goaway_frame(
-                    goaway_id=goaway_id, stream_id=self._local_control_stream_id
+                    goaway_id=stream_id, stream_id=self._local_control_stream_id
                 ),
             )
         self._quic.send_stream_data(
             stream_id=self._local_control_stream_id,
             data=encode_frame(FrameType.GOAWAY, frame_data),
         )
-        self._sent_goaway_id = goaway_id
+        self._sent_goaway_stream_id = stream_id
 
     # Server push is no longer supported: this stub is kept for servers which
     # still call it, without a docstring so that it stays out of the docs.
@@ -1251,9 +1240,9 @@ class H3Connection:
         stream_id = event.stream_id
         if (
             not self._is_client
-            and self._sent_goaway_id is not None
+            and self._sent_goaway_stream_id is not None
             and stream_is_request_response(stream_id)
-            and stream_id >= self._sent_goaway_id
+            and stream_id >= self._sent_goaway_stream_id
         ):
             self._quic.reset_stream(stream_id, ErrorCode.H3_REQUEST_REJECTED)
             return []

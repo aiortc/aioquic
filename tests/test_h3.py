@@ -33,7 +33,6 @@ from aioquic.h3.events import (
 from aioquic.h3.exceptions import (
     GoAwayIdError,
     H3Error,
-    InvalidGoAwayError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -46,6 +45,7 @@ from aioquic.quic.events import (
     StreamDataReceived,
     StreamReset,
 )
+from aioquic.quic.exceptions import OutOfRangeError
 
 from .test_connection import client_and_server, transfer
 from .utils import TestCase
@@ -2210,7 +2210,7 @@ class H3ConnectionTest(TestCase):
             self.assertNotIn(stream_id, h3_client._stream)
 
     def test_send_goaway(self) -> None:
-        """GOAWAY sends direction-specific maximum IDs and supports reductions."""
+        """Server GOAWAY supports the maximum stream ID and reductions."""
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
@@ -2247,34 +2247,21 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-            h3_server = H3Connection(quic_server)
-            h3_client.send_goaway(push_id=UINT_VAR_MAX)
-            h3_client.send_goaway(push_id=0)
-            self.assertEqual(
-                h3_transfer(quic_client, h3_server),
-                [GoAwayReceived(push_id=UINT_VAR_MAX), GoAwayReceived(push_id=0)],
-            )
-
     def test_send_goaway_invalid_arguments(self) -> None:
-        """GOAWAY validates its ID, endpoint direction, and monotonicity."""
+        """GOAWAY validates its stream ID and monotonicity."""
         with h3_client_and_server() as (quic_client, quic_server):
             h3_client = H3Connection(quic_client)
             h3_server = H3Connection(quic_server)
 
-            for args in ({}, {"stream_id": 0, "push_id": 0}):
-                with self.assertRaises(InvalidGoAwayError):
-                    h3_server.send_goaway(**args)
-            for stream_id in (-4, 1, UINT_VAR_MAX):
-                with self.assertRaises(InvalidGoAwayError):
+            for stream_id in (-4, UINT_VAR_MAX + 1):
+                with self.assertRaises(OutOfRangeError):
                     h3_server.send_goaway(stream_id)
-            with self.assertRaises(InvalidGoAwayError):
-                h3_client.send_goaway(stream_id=0)
-            with self.assertRaises(InvalidGoAwayError):
-                h3_client.send_goaway(push_id=UINT_VAR_MAX + 1)
-            with self.assertRaises(InvalidGoAwayError):
-                h3_server.send_goaway(push_id=0)
+            for stream_id in (1, UINT_VAR_MAX):
+                with self.assertRaises(InvalidStreamTypeError):
+                    h3_server.send_goaway(stream_id)
+            with self.assertRaises(InvalidStreamTypeError):
+                h3_client.send_goaway(0)
+
             h3_server.send_goaway(stream_id=8)
             with self.assertRaises(GoAwayIdError):
                 h3_server.send_goaway(stream_id=12)

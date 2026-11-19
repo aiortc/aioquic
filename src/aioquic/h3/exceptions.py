@@ -30,12 +30,6 @@ class NoAvailablePushIDError(H3Error):
     """
 
 
-class InvalidGoAwayError(H3Error):
-    """
-    The GOAWAY ID is invalid for this endpoint or missing.
-    """
-
-
 class GoAwayIdError(H3Error):
     """
     The GOAWAY ID is greater than the ID in a previous GOAWAY frame.
