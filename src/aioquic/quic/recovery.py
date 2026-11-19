@@ -71,6 +71,7 @@ class QuicPacketSpace:
         # sent packets and loss
         self.ack_eliciting_in_flight = 0
         self.largest_acked_packet = 0
+        self.largest_sent_packet = -1
         self.loss_time: float | None = None
         self.sent_packets: dict[int, QuicSentPacket] = {}
 
@@ -352,6 +353,7 @@ class QuicPacketRecovery:
 
     def on_packet_sent(self, *, packet: QuicSentPacket, space: QuicPacketSpace) -> None:
         space.sent_packets[packet.packet_number] = packet
+        space.largest_sent_packet = packet.packet_number
 
         if packet.is_ack_eliciting:
             space.ack_eliciting_in_flight += 1

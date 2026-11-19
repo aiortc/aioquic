@@ -2206,6 +2206,16 @@ class QuicConnection:
                 self._quic_logger.encode_ack_frame(ranges=ack_rangeset, delay=ack_delay)
             )
 
+        # Reject acknowledgments for packets which were not sent (RFC 9000
+        # section 13.1).
+        space = self._spaces[context.epoch]
+        if ack_rangeset.bounds().stop - 1 > space.largest_sent_packet:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                frame_type=frame_type,
+                reason_phrase="ACK frame acknowledges a packet which was not sent",
+            )
+
         # check whether peer completed address validation
         if not self._loss.peer_completed_address_validation and context.epoch in (
             tls.Epoch.HANDSHAKE,
@@ -2217,7 +2227,7 @@ class QuicConnection:
             ack_rangeset=ack_rangeset,
             ack_delay=ack_delay,
             now=context.time,
-            space=self._spaces[context.epoch],
+            space=space,
         )
 
     def _handle_connection_close_frame(
