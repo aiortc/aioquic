@@ -22,6 +22,10 @@ class StreamFinishedError(Exception):
     pass
 
 
+class TooManyRangesError(Exception):
+    pass
+
+
 class QuicStreamReceiver:
     """
     The receive part of a QUIC stream.
@@ -146,6 +150,12 @@ class QuicStreamReceiver:
 
         # return data from the front of the buffer
         data = self._pull_data()
+
+        # Limit the out-of-order ranges a peer can make us track (RFC 9000
+        # section 21.7): at most 1024, and 64 plus one per KiB of buffered span.
+        if len(self._ranges) > min(1024, 64 + len(self._buffer) // 1024):
+            raise TooManyRangesError("Too many gaps in received data")
+
         end_stream = (
             self._buffer_start == self._final_size and self._reliable_size is None
         )

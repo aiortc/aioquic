@@ -2,7 +2,12 @@ from aioquic.quic.events import StreamDataReceived, StreamReset
 from aioquic.quic.exceptions import StreamStateError
 from aioquic.quic.packet import QuicErrorCode, QuicStreamFrame
 from aioquic.quic.packet_builder import QuicDeliveryState
-from aioquic.quic.stream import ErrorCodeChangedError, FinalSizeError, QuicStream
+from aioquic.quic.stream import (
+    ErrorCodeChangedError,
+    FinalSizeError,
+    QuicStream,
+    TooManyRangesError,
+)
 
 from .utils import TestCase
 
@@ -489,6 +494,18 @@ class QuicStreamTest(TestCase):
         with self.assertRaisesMessage(FinalSizeError, "Cannot change final size"):
             stream.receiver.handle_reset(final_size=5)
 
+    def test_receiver_ranges_every_other_packet_lost(self) -> None:
+        stream = QuicStream(stream_id=0)
+
+        # Every other 1200-byte frame of a 1 MiB window is lost.
+        for offset in range(1200, 1048576, 2400):
+            self.assertIsNone(
+                stream.receiver.handle_frame(
+                    QuicStreamFrame(offset=offset, data=bytes(1200))
+                )
+            )
+        self.assertEqual(len(stream.receiver._ranges), 437)
+
     def test_receiver_stop(self) -> None:
         stream = QuicStream()
 
@@ -529,6 +546,46 @@ class QuicStreamTest(TestCase):
         # stop is acklowledged
         stream.receiver.on_stop_sending_delivery(QuicDeliveryState.ACKED)
         self.assertFalse(stream.receiver.stop_pending)
+
+    def test_receiver_too_many_ranges(self) -> None:
+        stream = QuicStream(stream_id=0)
+
+        # 1-byte frames with 1-byte gaps span less than 1 KiB: 64 ranges.
+        for offset in range(1, 129, 2):
+            stream.receiver.handle_frame(QuicStreamFrame(offset=offset, data=b"x"))
+        self.assertEqual(len(stream.receiver._ranges), 64)
+
+        with self.assertRaisesMessage(
+            TooManyRangesError, "Too many gaps in received data"
+        ):
+            stream.receiver.handle_frame(QuicStreamFrame(offset=129, data=b"x"))
+
+    def test_receiver_too_many_ranges_ceiling(self) -> None:
+        stream = QuicStream(stream_id=0)
+
+        # 1-byte frames 1 KiB apart allow at most 1024 ranges.
+        for offset in range(1024, 1025 * 1024, 1024):
+            stream.receiver.handle_frame(QuicStreamFrame(offset=offset, data=b"x"))
+        self.assertEqual(len(stream.receiver._ranges), 1024)
+
+        with self.assertRaisesMessage(
+            TooManyRangesError, "Too many gaps in received data"
+        ):
+            stream.receiver.handle_frame(QuicStreamFrame(offset=1025 * 1024, data=b"x"))
+
+    def test_receiver_too_many_ranges_span(self) -> None:
+        stream = QuicStream(stream_id=0)
+
+        # A frame at 64 KiB makes the span allow 64 more ranges.
+        stream.receiver.handle_frame(QuicStreamFrame(offset=65536, data=b"x"))
+        for offset in range(1, 255, 2):
+            stream.receiver.handle_frame(QuicStreamFrame(offset=offset, data=b"x"))
+        self.assertEqual(len(stream.receiver._ranges), 128)
+
+        with self.assertRaisesMessage(
+            TooManyRangesError, "Too many gaps in received data"
+        ):
+            stream.receiver.handle_frame(QuicStreamFrame(offset=255, data=b"x"))
 
     def test_sender_data(self) -> None:
         stream = QuicStream()

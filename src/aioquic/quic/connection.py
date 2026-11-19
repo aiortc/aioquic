@@ -65,6 +65,7 @@ from .stream import (
     FinalSizeError,
     QuicStream,
     StreamFinishedError,
+    TooManyRangesError,
 )
 
 logger = logging.getLogger("quic")
@@ -2300,7 +2301,14 @@ class QuicConnection:
                 frame_type=frame_type,
                 reason_phrase="too much crypto buffering",
             )
-        event = stream.receiver.handle_frame(frame)
+        try:
+            event = stream.receiver.handle_frame(frame)
+        except TooManyRangesError as exc:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.CRYPTO_BUFFER_EXCEEDED,
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
         if event is not None:
             # Pass data to TLS layer, which may cause calls to:
             # - _alpn_handler
@@ -2987,6 +2995,12 @@ class QuicConnection:
         except FinalSizeError as exc:
             raise QuicConnectionError(
                 error_code=QuicErrorCode.FINAL_SIZE_ERROR,
+                frame_type=frame_type,
+                reason_phrase=str(exc),
+            )
+        except TooManyRangesError as exc:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.INTERNAL_ERROR,
                 frame_type=frame_type,
                 reason_phrase=str(exc),
             )
