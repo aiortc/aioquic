@@ -643,14 +643,18 @@ class HighLevelTest(TestCase):
 
             server_writer.transport.abort()
             self.assertEqual(server_writer.is_closing(), True)
-            await asyncio.wait_for(server_writer.wait_closed(), 1)
-            self.assertEqual(await server_reader.read(), b"ping")
 
             # Aborting again before the client answers sends nothing more.
-            server.transmit()
-            server_writer.transport.abort()
-            stream = server.quic_connection._streams[0]
-            self.assertEqual(stream.receiver.stop_pending, False)
+            with (
+                patch.object(server._quic, "reset_stream") as mock_reset_stream,
+                patch.object(server._quic, "stop_stream") as mock_stop_stream,
+            ):
+                server_writer.transport.abort()
+            mock_reset_stream.assert_not_called()
+            mock_stop_stream.assert_not_called()
+
+            await asyncio.wait_for(server_writer.wait_closed(), 1)
+            self.assertEqual(await server_reader.read(), b"ping")
 
             # The server ignores data sent before the client learns of the abort.
             client_writer.write(b"more")
