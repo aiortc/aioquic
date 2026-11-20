@@ -1,5 +1,6 @@
 import contextlib
 import copy
+import time
 from typing import Any
 from unittest.mock import patch
 
@@ -49,7 +50,7 @@ from aioquic.quic.events import (
     StreamReset,
 )
 
-from .test_connection import client_and_server, transfer
+from .test_connection import SERVER_ADDR, client_and_server, transfer
 from .utils import TestCase
 
 DUMMY_SETTINGS: dict[int, int] = {
@@ -406,6 +407,43 @@ class H3ConnectionTest(TestCase):
                         h3_transfer(quic_server, h3_client),
                         [DatagramReceived(data=b"foo", stream_id=stream_id)],
                     )
+
+    def test_datagram_capacity_connection_closed(self) -> None:
+        """
+        Once the connection is closing, no datagram can be sent. A stream ID which
+        can never carry a datagram still raises.
+        """
+        with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client, enable_datagrams=True)
+            h3_server = H3Connection(quic_server, enable_datagrams=True)
+            h3_transfer(quic_server, h3_client)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            self.assertEqual(h3_client.get_datagram_capacity(stream_id), 1157)
+
+            quic_client.close()
+            self.assertIsNone(h3_client.get_datagram_capacity(stream_id))
+            with self.assertRaisesMessage(
+                InvalidConnectionStateError,
+                "Cannot send once the connection is closing",
+            ):
+                h3_client.send_datagram(stream_id=stream_id, data=b"foo")
+
+            for invalid_stream_id, exc_class, message in [
+                (-4, InvalidStreamIdError, "Stream ID must be between 0 and 2^62 - 1"),
+                (
+                    1,
+                    InvalidStreamTypeError,
+                    "Datagrams can only be sent for client-initiated bidirectional "
+                    "streams",
+                ),
+            ]:
+                with self.subTest(stream_id=invalid_stream_id):
+                    with self.assertRaisesMessage(exc_class, message):
+                        h3_client.get_datagram_capacity(invalid_stream_id)
+                    with self.assertRaisesMessage(exc_class, message):
+                        h3_client.send_datagram(
+                            stream_id=invalid_stream_id, data=b"foo"
+                        )
 
     def test_datagram_capacity_not_negotiated(self) -> None:
         """
@@ -1693,6 +1731,44 @@ class H3ConnectionTest(TestCase):
                 (ErrorCode.H3_DATAGRAM_ERROR, "Could not parse quarter stream ID"),
             )
 
+    def test_handle_events_queued_before_close(self) -> None:
+        """
+        Events which QUIC queued before the peer closed the connection are still
+        handled, such as a final response which arrived with the close.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+
+            # The server sends the response, then closes the connection, and the
+            # client receives both before it handles any event.
+            h3_server.send_headers(stream_id=stream_id, headers=[(b":status", b"200")])
+            h3_server.send_data(stream_id=stream_id, data=b"bye", end_stream=True)
+            datagrams = [data for data, _ in quic_server.datagrams_to_send(time.time())]
+            quic_server.close()
+            datagrams += [
+                data for data, _ in quic_server.datagrams_to_send(time.time())
+            ]
+            for data in datagrams:
+                quic_client.receive_datagram(data, SERVER_ADDR, now=time.time())
+            self.assertTrue(quic_client.is_closing())
+
+            events = []
+            for event in drain_events(quic_client):
+                events.extend(h3_client.handle_event(event))
+            self.assertEqual(
+                events,
+                [
+                    HeadersReceived(
+                        headers=[(b":status", b"200")],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    DataReceived(data=b"bye", stream_id=stream_id, stream_ended=True),
+                ],
+            )
+
     def test_handle_push_stream_from_client(self) -> None:
         """
         A server must reject a push stream, see RFC 9114 section 6.2.2.
@@ -2728,6 +2804,111 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
+    def test_send_after_connection_closed(self) -> None:
+        """
+        Once the connection is closing, whoever closed it, headers and data are
+        refused, and the failed attempts change no state. Invalid stream IDs are
+        still reported as such.
+        """
+        for closer in ("http3", "application", "peer", "idle_timeout"):
+            with (
+                self.subTest(closer=closer),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                stream_id = self._send_request_headers(h3_client, h3_server)
+
+                if closer == "http3":
+                    # HEADERS on the control stream is a connection error (RFC
+                    # 9114 section 7.2.2).
+                    assert h3_server._local_control_stream_id is not None
+                    quic_server.send_stream_data(
+                        h3_server._local_control_stream_id,
+                        encode_frame(FrameType.HEADERS, b""),
+                    )
+                    h3_transfer(quic_server, h3_client)
+                    self.assertEqual(
+                        closed(quic_client),
+                        (
+                            ErrorCode.H3_FRAME_UNEXPECTED,
+                            "Invalid frame type on control stream",
+                        ),
+                    )
+                elif closer == "application":
+                    quic_client.close()
+                elif closer == "peer":
+                    quic_server.close()
+                    transfer(quic_server, quic_client)
+                else:
+                    while not quic_client.is_closing():
+                        timer = quic_client.get_timer()
+                        assert timer is not None
+                        quic_client.handle_timer(now=timer)
+                self.assertTrue(quic_client.is_closing())
+
+                # Neither a new request, nor the trailers or data of a started one.
+                new_stream_id = quic_client.get_next_available_stream_id()
+                with self.assertRaisesMessage(
+                    InvalidConnectionStateError,
+                    "Cannot send once the connection is closing",
+                ):
+                    h3_client.send_headers(
+                        stream_id=new_stream_id,
+                        headers=[
+                            (b":method", b"GET"),
+                            (b":scheme", b"https"),
+                            (b":authority", b"localhost"),
+                            (b":path", b"/"),
+                        ],
+                    )
+                self.assertNotIn(new_stream_id, quic_client._streams)
+                self.assertNotIn(new_stream_id, h3_client._stream)
+                with self.assertRaisesMessage(
+                    InvalidConnectionStateError,
+                    "Cannot send once the connection is closing",
+                ):
+                    h3_client.send_headers(
+                        stream_id=stream_id,
+                        headers=[(b"x-foo", b"bar")],
+                        end_stream=True,
+                    )
+                with self.assertRaisesMessage(
+                    InvalidConnectionStateError,
+                    "Cannot send once the connection is closing",
+                ):
+                    h3_client.send_data(
+                        stream_id=stream_id, data=b"hello", end_stream=True
+                    )
+                stream = h3_client._stream[stream_id]
+                self.assertEqual(stream.headers_send_state, HeadersState.AFTER_HEADERS)
+                self.assertFalse(stream.sending_ended)
+
+                for invalid_stream_id, exc_class, message in [
+                    (
+                        -4,
+                        InvalidStreamIdError,
+                        "Stream ID must be between 0 and 2^62 - 1",
+                    ),
+                    (
+                        2,
+                        InvalidStreamTypeError,
+                        "Headers and data can only be sent on request streams",
+                    ),
+                ]:
+                    with self.subTest(stream_id=invalid_stream_id):
+                        with self.assertRaisesMessage(exc_class, message):
+                            h3_client.send_headers(
+                                stream_id=invalid_stream_id,
+                                headers=[(b"x-foo", b"bar")],
+                            )
+                        with self.assertRaisesMessage(exc_class, message):
+                            h3_client.send_data(
+                                stream_id=invalid_stream_id,
+                                data=b"hello",
+                                end_stream=True,
+                            )
+
     def test_send_after_quic_reset(self) -> None:
         """
         Once the application resets a stream through QUIC, H3 reports that it
@@ -2885,6 +3066,31 @@ class H3ConnectionTest(TestCase):
                     ],
                 )
                 self.assertIsNone(closed(quic_client))
+
+    def test_send_goaway_after_connection_closed(self) -> None:
+        """
+        Once the connection is closing, a server cannot send GOAWAY. A client is
+        still told it cannot send one at all.
+        """
+        for is_client, message in [
+            (
+                True,
+                "Cannot send GOAWAY from a client, as server push is not supported",
+            ),
+            (False, "Cannot send once the connection is closing"),
+        ]:
+            with (
+                self.subTest(is_client=is_client),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                h3 = h3_client if is_client else h3_server
+
+                h3._quic.close()
+                with self.assertRaisesMessage(InvalidConnectionStateError, message):
+                    h3.send_goaway()
+                self.assertIsNone(h3._sent_goaway_id)
 
     def test_send_goaway_from_client(self) -> None:
         """
@@ -3166,9 +3372,12 @@ class H3ConnectionTest(TestCase):
         """
         Once the peer stops our QPACK encoder stream, which it must not do (RFC
         9204 section 4.2), headers cannot be sent, whether or not the H3 layer
-        has handled the STOP_SENDING yet.
+        has handled the STOP_SENDING and closed the connection yet.
         """
-        for handled in (False, True):
+        for handled, message in [
+            (False, "Cannot send headers once the QPACK encoder stream was stopped"),
+            (True, "Cannot send once the connection is closing"),
+        ]:
             with (
                 self.subTest(handled=handled),
                 h3_client_and_server() as (quic_client, quic_server),
@@ -3193,10 +3402,7 @@ class H3ConnectionTest(TestCase):
                 else:
                     transfer(quic_client, quic_server)
 
-                with self.assertRaisesMessage(
-                    InvalidConnectionStateError,
-                    "Cannot send headers once the QPACK encoder stream was stopped",
-                ):
+                with self.assertRaisesMessage(InvalidConnectionStateError, message):
                     h3_server.send_headers(
                         stream_id=stream_id, headers=[(b":status", b"200")]
                     )

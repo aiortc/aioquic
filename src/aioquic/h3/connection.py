@@ -493,6 +493,9 @@ class H3Connection:
         self._enable_webtransport = enable_webtransport
 
         self._is_client = quic.configuration.is_client
+        # Once HTTP/3 closes the connection because of the peer's input, it stops
+        # parsing. This is not QuicConnection.is_closing(): events which QUIC
+        # queued before another close, such as a final response, are still valid.
         self._is_done = False
         self._quic = quic
         self._quic_logger: QuicLoggerTrace | None = quic._quic_logger
@@ -542,12 +545,13 @@ class H3Connection:
 
         :param session_id: The WebTransport session identifier.
         :param is_unidirectional: Whether to create a unidirectional stream.
-        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
-            If WebTransport is not enabled.
         :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
             If the session ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the session ID is not a client-initiated bidirectional stream.
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
+            If WebTransport is not enabled, or the connection is closing or
+            closed.
         """
         if not self._enable_webtransport:
             raise InvalidConnectionStateError("WebTransport is not enabled")
@@ -561,6 +565,8 @@ class H3Connection:
                 "WebTransport sessions can only be client-initiated bidirectional "
                 "streams"
             )
+
+        self._check_connection_not_closing()
 
         if is_unidirectional:
             stream_id = self._create_uni_stream(StreamType.WEBTRANSPORT)
@@ -642,12 +648,13 @@ class H3Connection:
             If the stream ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a client-initiated bidirectional stream.
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
+            If the connection is closing or closed, both endpoints have not yet
+            enabled HTTP/3 datagrams, or the peer does not accept QUIC datagrams or
+            its limit is too small.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
             If the datagram is sent before the headers, or on a stream which is not
             open.
-        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
-            If both endpoints have not yet enabled HTTP/3 datagrams, or the peer
-            does not accept QUIC datagrams or its limit is too small.
         :raises ~aioquic.h3.exceptions.DatagramCapacityError:
             If the payload exceeds the capacity.
         """
@@ -683,6 +690,8 @@ class H3Connection:
             If the stream ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a request stream.
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
+            If the connection is closing or closed.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
             If data is sent before the headers, after the trailers, or on a stream
             which is not open.
@@ -723,13 +732,15 @@ class H3Connection:
         .. aioquic_transmit::
 
         :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
-            If called on a client.
+            If called on a client, or once the connection is closing or closed.
         """
         # A client's GOAWAY carries a push ID (RFC 9114 section 5.2).
         if self._is_client:
             raise InvalidConnectionStateError(
                 "Cannot send GOAWAY from a client, as server push is not supported"
             )
+
+        self._check_connection_not_closing()
 
         # The first stream after the last request passed to the application.
         if self._last_request_id is None:
@@ -769,12 +780,12 @@ class H3Connection:
             If the stream ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a request stream.
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
+            If the connection is closing or closed, a client starts a request
+            after receiving GOAWAY, or the peer stopped the QPACK encoder stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
             If headers are sent after the trailers or on a stream which is not
             open, or an interim response would end the stream.
-        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
-            If a client starts a request after receiving GOAWAY, or the peer
-            stopped the QPACK encoder stream.
         """
         self._check_sending_allowed(stream_id)
 
@@ -960,6 +971,15 @@ class H3Connection:
             # this makes them longer (RFC 9114 section 10.5.1).
             raise ExcessiveLoad("HEADERS frame is too large")
 
+    def _check_connection_not_closing(self) -> None:
+        """
+        Check the connection is neither closing nor closed.
+        """
+        if self._quic.is_closing():
+            raise InvalidConnectionStateError(
+                "Cannot send once the connection is closing"
+            )
+
     def _check_stream_id(self, stream_id: int) -> None:
         """
         Check the stream ID is one QUIC can represent (RFC 9000 section 2.1).
@@ -987,6 +1007,8 @@ class H3Connection:
             raise InvalidStreamTypeError(
                 "Headers and data can only be sent on request streams"
             )
+
+        self._check_connection_not_closing()
 
         # Only QUIC knows whether a stream without state, or one whose STOP_SENDING
         # it has not reported yet, can still be sent on. HTTP/3 itself never sends
@@ -1045,6 +1067,8 @@ class H3Connection:
             raise InvalidStreamTypeError(
                 "Datagrams can only be sent for client-initiated bidirectional streams"
             )
+
+        self._check_connection_not_closing()
 
         # The stream's send side must be open (RFC 9297 section 2.1). QUIC may
         # know of a STOP_SENDING which H3 has not handled yet, and HTTP/3 never
