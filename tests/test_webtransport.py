@@ -16,10 +16,8 @@ from aioquic.h3.events import (
 from aioquic.h3.exceptions import (
     InvalidConnectionStateError,
     InvalidStreamIdError,
-    InvalidStreamStateError,
     InvalidStreamTypeError,
 )
-from aioquic.quic.events import DatagramFrameReceived
 
 from .test_h3 import (
     closed,
@@ -753,13 +751,6 @@ class WebTransportTest(TestCase):
             # create session
             session_id = self._make_session(h3_client, h3_server)
 
-            # send datagram on a server-initiated stream
-            with self.assertRaisesMessage(
-                InvalidStreamTypeError,
-                "Datagrams can only be sent for client-initiated bidirectional streams",
-            ):
-                h3_client.send_datagram(data=b"foo", stream_id=1)
-
             # send datagram
             h3_client.send_datagram(data=b"foo", stream_id=session_id)
 
@@ -770,37 +761,42 @@ class WebTransportTest(TestCase):
                 [DatagramReceived(data=b"foo", stream_id=session_id)],
             )
 
-    def test_datagram_out_of_range(self) -> None:
+    def test_datagram_data_stream(self) -> None:
+        """
+        Datagrams belong to a session, so both endpoints drop one which carries
+        the ID of a bidirectional data stream.
+        """
         with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
             quic_client,
             quic_server,
         ):
             h3_client = H3Connection(quic_client, enable_webtransport=True)
             h3_server = H3Connection(quic_server, enable_webtransport=True)
+            session_id = self._make_session(h3_client, h3_server)
 
-            for stream_id in (-4, UINT_VAR_MAX + 1):
-                with self.subTest(stream_id=stream_id):
-                    with self.assertRaisesMessage(
-                        InvalidStreamIdError, "Stream ID must be between 0 and 2^62 - 1"
-                    ):
-                        h3_client.send_datagram(data=b"foo", stream_id=stream_id)
-            self.assertEqual(h3_transfer(quic_client, h3_server), [])
-
-            # The largest client-initiated bidirectional stream ID is in range,
-            # but the stream is not open.
-            with self.assertRaisesMessage(
-                InvalidStreamStateError,
-                "Cannot send a datagram for a stream which is not open",
-            ):
-                h3_client.send_datagram(data=b"foo", stream_id=UINT_VAR_MAX - 3)
-
-    def test_handle_datagram_truncated(self) -> None:
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_server = H3Connection(quic_server)
-
-            # receive a datagram with a truncated session ID
-            h3_server.handle_event(DatagramFrameReceived(data=b"\xff"))
+            # Open a bidirectional data stream which both endpoints know.
+            stream_id = h3_client.create_webtransport_stream(session_id)
+            quic_client.send_stream_data(stream_id, b"foo")
             self.assertEqual(
-                closed(quic_server),
-                (ErrorCode.H3_DATAGRAM_ERROR, "Could not parse quarter stream ID"),
+                h3_transfer(quic_client, h3_server),
+                [
+                    WebTransportStreamDataReceived(
+                        data=b"foo",
+                        session_id=session_id,
+                        stream_ended=False,
+                        stream_id=stream_id,
+                    )
+                ],
             )
+
+            for quic_sender, h3_receiver in [
+                (quic_client, h3_server),
+                (quic_server, h3_client),
+            ]:
+                with self.subTest(is_client=quic_sender is quic_client):
+                    # The sender's QUIC connection sends the datagram directly.
+                    quic_sender.send_datagram_frame(
+                        encode_uint_var(stream_id // 4) + b"bar"
+                    )
+                    self.assertEqual(h3_transfer(quic_sender, h3_receiver), [])
+                    self.assertIsNone(closed(h3_receiver._quic))
