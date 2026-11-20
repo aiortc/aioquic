@@ -12,7 +12,11 @@ from aioquic.h3.events import (
     HeadersReceived,
     WebTransportStreamDataReceived,
 )
-from aioquic.h3.exceptions import InvalidStreamIdError, InvalidStreamTypeError
+from aioquic.h3.exceptions import (
+    InvalidConnectionStateError,
+    InvalidStreamIdError,
+    InvalidStreamTypeError,
+)
 from aioquic.quic.events import DatagramFrameReceived
 
 from .test_h3 import (
@@ -548,7 +552,7 @@ class WebTransportTest(TestCase):
                         is_unidirectional=is_unidirectional
                     )
                     with self.assertRaisesMessage(
-                        InvalidStreamTypeError, "WebTransport is not enabled"
+                        InvalidConnectionStateError, "WebTransport is not enabled"
                     ):
                         h3_client.create_webtransport_stream(
                             0, is_unidirectional=is_unidirectional

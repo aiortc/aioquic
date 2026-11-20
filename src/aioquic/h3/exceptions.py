@@ -4,6 +4,13 @@ class H3Error(Exception):
     """
 
 
+class InvalidConnectionStateError(H3Error):
+    """
+    An action was attempted which the connection does not allow in its current
+    state.
+    """
+
+
 class InvalidStreamIdError(H3Error):
     """
     A stream ID was passed which is outside the range QUIC allows, from 0 to

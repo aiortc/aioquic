@@ -31,7 +31,7 @@ from aioquic.h3.events import (
     HeadersReceived,
 )
 from aioquic.h3.exceptions import (
-    H3Error,
+    InvalidConnectionStateError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -2263,7 +2263,7 @@ class H3ConnectionTest(TestCase):
                     transfer(quic_client, quic_server)
 
                 with self.assertRaisesMessage(
-                    H3Error,
+                    InvalidConnectionStateError,
                     "Cannot send headers once the QPACK encoder stream was stopped",
                 ):
                     h3_server.send_headers(
