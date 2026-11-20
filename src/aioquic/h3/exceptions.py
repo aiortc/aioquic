@@ -18,6 +18,13 @@ class InvalidConnectionStateError(H3Error):
     """
 
 
+class InvalidErrorCodeError(H3Error):
+    """
+    An error code was passed which is outside the range QUIC allows, from 0 to
+    2^62 - 1.
+    """
+
+
 class InvalidStreamIdError(H3Error):
     """
     A stream ID was passed which is outside the range QUIC allows, from 0 to

@@ -28,6 +28,7 @@ from aioquic.h3.events import (
 from aioquic.h3.exceptions import (
     DatagramCapacityError,
     InvalidConnectionStateError,
+    InvalidErrorCodeError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -647,6 +648,51 @@ class H3Connection:
 
         return []
 
+    def reset_stream(self, stream_id: int, error_code: int) -> None:
+        """
+        Abruptly terminate the sending part of a request stream.
+
+        This abandons the request or response being sent, for instance to cancel a
+        request, or to stop a response the application cannot complete so that the
+        peer does not take it as complete. The peer can still send on its side of
+        the stream.
+
+        This method has no effect if a reset has already been triggered either by a
+        call to this method or by the reception of a STOP_SENDING frame, or if all
+        the stream's data has already been acknowledged.
+
+        .. aioquic_transmit::
+
+        :param stream_id: The stream ID to reset.
+        :param error_code: The HTTP/3 error code, such as
+            ``ErrorCode.H3_REQUEST_CANCELLED``.
+        :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
+            If the stream ID is out of range.
+        :raises ~aioquic.h3.exceptions.InvalidErrorCodeError:
+            If the error code is out of range.
+        :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
+            If the stream is not a client-initiated bidirectional stream.
+        :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
+            If the peer has not opened the stream.
+        """
+        self._check_stream_id(stream_id)
+        self._check_error_code(error_code)
+        if not stream_is_request_response(stream_id):
+            raise InvalidStreamTypeError("Only request streams can be reset")
+
+        try:
+            self._quic.reset_stream(stream_id, error_code)
+        except StreamStateError as exc:
+            # The arguments are valid, so this is the only refusal left.
+            raise InvalidStreamStateError(
+                "Cannot reset a stream the peer has not opened"
+            ) from exc
+
+        stream = self._stream.get(stream_id)
+        if stream is not None:
+            stream.sending_ended = True
+            self._store_or_discard_stream(stream)
+
     def send_datagram(self, stream_id: int, data: bytes) -> None:
         """
         Send a datagram for the specified stream.
@@ -951,6 +997,13 @@ class H3Connection:
         ):
             # RFC 9114 sections 7.2.1, 7.2.2, 7.2.5 and 7.2.8
             raise FrameUnexpected("Invalid frame type on control stream")
+
+    def _check_error_code(self, error_code: int) -> None:
+        """
+        Check the error code is one QUIC can represent (RFC 9000 section 20).
+        """
+        if not 0 <= error_code <= UINT_VAR_MAX:
+            raise InvalidErrorCodeError("Error code must be between 0 and 2^62 - 1")
 
     def _check_request_frame_header(
         self, stream: H3Stream, frame_type: int, frame_size: int

@@ -38,6 +38,7 @@ from aioquic.h3.events import (
 from aioquic.h3.exceptions import (
     DatagramCapacityError,
     InvalidConnectionStateError,
+    InvalidErrorCodeError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -2840,6 +2841,191 @@ class H3ConnectionTest(TestCase):
                 ],
             )
 
+    def test_reset_stream_by_client(self) -> None:
+        """
+        A client which resets its request can no longer send on the stream, and
+        keeps its state until the response ends.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+
+            h3_client.reset_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
+            with self.assertRaisesMessage(
+                InvalidStreamStateError, "Cannot send on a stream which is not open"
+            ):
+                h3_client.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
+            self.assertIn(stream_id, h3_client._stream)
+
+            # The server sees the request end, and can still respond.
+            h3_transfer(quic_client, h3_server)
+            self.assertTrue(h3_server._stream[stream_id].receiving_ended)
+            h3_server.send_headers(
+                stream_id=stream_id, headers=[(b":status", b"200")], end_stream=True
+            )
+            self.assertEqual(
+                h3_transfer(quic_server, h3_client),
+                [
+                    HeadersReceived(
+                        headers=[(b":status", b"200")],
+                        stream_id=stream_id,
+                        stream_ended=True,
+                    )
+                ],
+            )
+            self.assertNotIn(stream_id, h3_client._stream)
+            self.assertNotIn(stream_id, h3_server._stream)
+
+    def test_reset_stream_by_server(self) -> None:
+        """
+        A server which resets its response once the request has ended releases
+        the stream, and the client gets the error code.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            h3_client.send_data(stream_id=stream_id, data=b"", end_stream=True)
+            h3_transfer(quic_client, h3_server)
+
+            # The server starts a response, then abandons it.
+            h3_server.send_headers(stream_id=stream_id, headers=[(b":status", b"200")])
+            h3_server.reset_stream(stream_id, ErrorCode.H3_INTERNAL_ERROR)
+            self.assertNotIn(stream_id, h3_server._stream)
+            with self.assertRaisesMessage(
+                InvalidStreamStateError, "Cannot send on a stream which is not open"
+            ):
+                h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
+
+            transfer(quic_server, quic_client)
+            self.assertIn(
+                StreamReset(
+                    error_code=ErrorCode.H3_INTERNAL_ERROR, stream_id=stream_id
+                ),
+                drain_events(quic_client),
+            )
+
+    def test_reset_stream_error_code_out_of_range(self) -> None:
+        """
+        Error codes outside 0 to 2^62 - 1 are refused (RFC 9000 section 20.2),
+        and leave the stream untouched.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+
+            for error_code in (-1, UINT_VAR_MAX + 1):
+                with self.subTest(error_code=error_code):
+                    with self.assertRaisesMessage(
+                        InvalidErrorCodeError,
+                        "Error code must be between 0 and 2^62 - 1",
+                    ):
+                        h3_client.reset_stream(stream_id, error_code)
+                    self.assertFalse(h3_client._stream[stream_id].sending_ended)
+
+            h3_client.reset_stream(stream_id, UINT_VAR_MAX)
+            transfer(quic_client, quic_server)
+            self.assertIn(
+                StreamReset(error_code=UINT_VAR_MAX, stream_id=stream_id),
+                drain_events(quic_server),
+            )
+
+    def test_reset_stream_no_effect(self) -> None:
+        """
+        A reset has no effect once the stream was reset, by an earlier reset or the
+        peer's STOP_SENDING, or once all its data was acknowledged.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # Reset twice: the first error code is kept.
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            h3_client.reset_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
+            h3_client.reset_stream(stream_id, ErrorCode.H3_INTERNAL_ERROR)
+            transfer(quic_client, quic_server)
+            self.assertEqual(
+                [e for e in drain_events(quic_server) if isinstance(e, StreamReset)],
+                [
+                    StreamReset(
+                        error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=stream_id
+                    )
+                ],
+            )
+
+            # Reset after STOP_SENDING, before and after H3 has seen it: QUIC
+            # already reset the stream with the peer's error code.
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            quic_server.stop_stream(stream_id, ErrorCode.H3_REQUEST_REJECTED)
+            transfer(quic_server, quic_client)
+            h3_client.reset_stream(stream_id, ErrorCode.H3_INTERNAL_ERROR)
+            for event in drain_events(quic_client):
+                h3_client.handle_event(event)
+            h3_client.reset_stream(stream_id, ErrorCode.H3_INTERNAL_ERROR)
+            transfer(quic_client, quic_server)
+            self.assertEqual(
+                [e for e in drain_events(quic_server) if isinstance(e, StreamReset)],
+                [
+                    StreamReset(
+                        error_code=ErrorCode.H3_REQUEST_REJECTED, stream_id=stream_id
+                    )
+                ],
+            )
+
+            # Reset once the response was acknowledged and the stream discarded.
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            h3_client.send_data(stream_id=stream_id, data=b"", end_stream=True)
+            h3_transfer(quic_client, h3_server)
+            h3_server.send_headers(
+                stream_id=stream_id, headers=[(b":status", b"200")], end_stream=True
+            )
+            h3_transfer(quic_server, h3_client)
+            transfer(quic_client, quic_server)
+            self.assertNotIn(stream_id, h3_server._stream)
+            h3_server.reset_stream(stream_id, ErrorCode.H3_INTERNAL_ERROR)
+            self.assertEqual(transfer(quic_server, quic_client), 0)
+            self.assertNotIn(stream_id, h3_server._stream)
+
+    def test_reset_stream_not_request_stream(self) -> None:
+        """
+        Only request streams can be reset, not unidirectional streams nor
+        server-initiated bidirectional streams, and no state is created for them.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            h3_transfer(quic_client, h3_server)
+
+            # The client's control stream, the server's control stream, and a
+            # server-initiated bidirectional stream.
+            for stream_id in (2, 3, 1):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        InvalidStreamTypeError, "Only request streams can be reset"
+                    ):
+                        h3_server.reset_stream(
+                            stream_id, ErrorCode.H3_REQUEST_CANCELLED
+                        )
+            self.assertNotIn(1, h3_server._stream)
+            self.assertNotIn(1, quic_server._streams)
+
+    def test_reset_stream_unopened_peer_stream(self) -> None:
+        """
+        A server cannot reset a stream the client has not opened.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            with self.assertRaisesMessage(
+                InvalidStreamStateError,
+                "Cannot reset a stream the peer has not opened",
+            ):
+                h3_server.reset_stream(0, ErrorCode.H3_REQUEST_CANCELLED)
+            self.assertNotIn(0, h3_server._stream)
+
     def test_send_after_connection_closed(self) -> None:
         """
         Once the connection is closing, whoever closed it, headers and data are
@@ -3680,6 +3866,12 @@ class H3ConnectionTest(TestCase):
                     ):
                         h3_client.send_data(
                             stream_id=stream_id, data=b"hello", end_stream=True
+                        )
+                    with self.assertRaisesMessage(
+                        InvalidStreamIdError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        h3_client.reset_stream(
+                            stream_id, ErrorCode.H3_REQUEST_CANCELLED
                         )
                     self.assertNotIn(stream_id, h3_client._stream)
 
