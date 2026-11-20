@@ -84,6 +84,38 @@ class PushPromiseReceived(H3Event):
 
 
 @dataclass
+class ResetReceived(H3Event):
+    """
+    The ResetReceived event is fired when the peer abandons the message it was
+    sending on a request stream, once headers were sent or received on it.
+    """
+
+    error_code: int
+    "The error code the peer gave."
+
+    stream_id: int
+    "The ID of the stream which was reset."
+
+
+@dataclass
+class StopReceived(H3Event):
+    """
+    The StopReceived event is fired when the peer asks us to stop sending on a
+    request stream, once headers were sent or received on it.
+
+    This is not always an error: a server which sent a complete response can stop
+    the rest of the request with ``H3_NO_ERROR``, and the event can then arrive
+    before the response (RFC 9114 section 4.1).
+    """
+
+    error_code: int
+    "The error code the peer gave."
+
+    stream_id: int
+    "The ID of the stream which was stopped."
+
+
+@dataclass
 class WebTransportStreamDataReceived(H3Event):
     """
     The WebTransportStreamDataReceived is fired whenever data is received

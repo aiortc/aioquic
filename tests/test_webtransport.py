@@ -11,6 +11,8 @@ from aioquic.h3.events import (
     DatagramReceived,
     GoAwayReceived,
     HeadersReceived,
+    ResetReceived,
+    StopReceived,
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import (
@@ -685,6 +687,46 @@ class WebTransportTest(TestCase):
                         )
                     self.assertNotIn(stream_id, quic_client._streams)
                     self.assertNotIn(stream_id, h3_client._stream)
+
+    def test_session_reset_and_stop_received(self) -> None:
+        """
+        The application is told when the peer resets or stops the CONNECT stream
+        of a session, but not one of the session's data streams.
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # Create session.
+            session_id = self._make_session(h3_client, h3_server)
+
+            # Client opens a bidirectional stream and sends data.
+            stream_id = h3_client.create_webtransport_stream(session_id)
+            quic_client.send_stream_data(stream_id, b"foo")
+            h3_transfer(quic_client, h3_server)
+
+            # Client stops and resets the data stream.
+            quic_client.stop_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
+            quic_client.reset_stream(stream_id, ErrorCode.H3_REQUEST_CANCELLED)
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+
+            # Client stops and resets the CONNECT stream.
+            quic_client.stop_stream(session_id, ErrorCode.H3_REQUEST_CANCELLED)
+            quic_client.reset_stream(session_id, ErrorCode.H3_REQUEST_CANCELLED)
+            self.assertEqual(
+                h3_transfer(quic_client, h3_server),
+                [
+                    StopReceived(
+                        error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=session_id
+                    ),
+                    ResetReceived(
+                        error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=session_id
+                    ),
+                ],
+            )
 
     def test_stream_fragmented_prefix(self) -> None:
         """

@@ -21,6 +21,8 @@ from aioquic.h3.events import (
     H3Event,
     Headers,
     HeadersReceived,
+    ResetReceived,
+    StopReceived,
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import (
@@ -444,6 +446,15 @@ class H3Stream:
     def is_ended(self) -> bool:
         return self.sending_ended and self.receiving_ended
 
+    def is_known_to_app(self) -> bool:
+        """
+        Whether the application has sent or received headers on the stream.
+        """
+        return (
+            self.headers_recv_state != HeadersState.INITIAL
+            or self.headers_send_state != HeadersState.INITIAL
+        )
+
 
 class H3Connection:
     """
@@ -625,9 +636,9 @@ class H3Connection:
                 elif isinstance(event, DatagramFrameReceived):
                     return self._receive_datagram(event.data)
                 elif isinstance(event, StopSendingReceived):
-                    self._receive_stop_sending(event.stream_id)
+                    return self._receive_stop_sending(event)
                 elif isinstance(event, StreamReset):
-                    self._receive_stream_reset(event.stream_id)
+                    return self._receive_stream_reset(event)
             except ProtocolError as exc:
                 self._is_done = True
                 self._quic.close(
@@ -1289,6 +1300,11 @@ class H3Connection:
 
             # update state and emit headers
             if stream.headers_recv_state == HeadersState.INITIAL:
+                # A client which stopped the response before its request headers
+                # arrived wants no answer, so the request is not passed on.
+                if not self._is_client and stream.sending_ended:
+                    self._reject_request(stream)
+                    return http_events
                 if not interim:
                     stream.headers_recv_state = HeadersState.AFTER_HEADERS
                 if not self._is_client and (
@@ -1424,10 +1440,11 @@ class H3Connection:
 
         return [DatagramReceived(data=payload, stream_id=stream_id)]
 
-    def _receive_stop_sending(self, stream_id: int) -> None:
+    def _receive_stop_sending(self, event: StopSendingReceived) -> list[H3Event]:
         """
         Handle the peer asking us to stop sending on a stream.
         """
+        stream_id = event.stream_id
         if stream_id in (
             self._local_control_stream_id,
             self._local_decoder_stream_id,
@@ -1437,12 +1454,18 @@ class H3Connection:
 
         # The QUIC layer has already reset the sending part of the stream. If
         # the stream has no state yet, it picks this up when it is created.
+        http_events: list[H3Event] = []
         stream = self._stream.get(stream_id)
         if stream is None:
             self._check_stream_creation(stream_id)
         else:
+            if not stream.sending_ended and stream.is_known_to_app():
+                http_events.append(
+                    StopReceived(error_code=event.error_code, stream_id=stream_id)
+                )
             stream.sending_ended = True
             self._store_or_discard_stream(stream)
+        return http_events
 
     def _receive_stream_data(self, event: StreamDataReceived) -> list[H3Event]:
         stream_id = event.stream_id
@@ -1645,6 +1668,8 @@ class H3Connection:
                     ),
                 )
             )
+            if stream.rejected:
+                return http_events
 
         # remove processed data from buffer
         stream.buffer = stream.buffer[consumed:]
@@ -1814,10 +1839,11 @@ class H3Connection:
 
         return http_events
 
-    def _receive_stream_reset(self, stream_id: int) -> None:
+    def _receive_stream_reset(self, event: StreamReset) -> list[H3Event]:
         """
         Handle the peer resetting a stream.
         """
+        stream_id = event.stream_id
         if stream_id in (
             self._peer_control_stream_id,
             self._peer_decoder_stream_id,
@@ -1835,7 +1861,12 @@ class H3Connection:
             decoder = self._decoder.cancel_stream(stream_id)
             self._quic.send_stream_data(self._local_decoder_stream_id, decoder)
 
+        http_events: list[H3Event] = []
         if stream is not None:
+            if not stream.receiving_ended and stream.is_known_to_app():
+                http_events.append(
+                    ResetReceived(error_code=event.error_code, stream_id=stream_id)
+                )
             stream.buffer = b""
             stream.receiving_ended = True
 
@@ -1857,6 +1888,7 @@ class H3Connection:
 
         if stream is not None:
             self._store_or_discard_stream(stream)
+        return http_events
 
     def _reject_request(self, stream: H3Stream) -> None:
         """
