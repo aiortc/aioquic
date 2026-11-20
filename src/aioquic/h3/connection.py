@@ -461,19 +461,35 @@ class H3Connection:
         pass it as a keyword argument instead.
 
     :param quic: A :class:`~aioquic.quic.connection.QuicConnection` instance.
-    :param enable_webtransport: Whether to enable WebTransport.
+    :param enable_datagrams: Whether to enable HTTP/3 datagrams (:rfc:`9297`).
+        The QUIC connection must accept DATAGRAM frames, see
+        :attr:`~aioquic.quic.configuration.QuicConfiguration.max_datagram_frame_size`.
+    :param enable_webtransport: Whether to enable WebTransport, which also enables
+        HTTP/3 datagrams.
     """
 
     @deprecate_positional_argument("enable_webtransport")
     def __init__(
-        self, quic: QuicConnection, *, enable_webtransport: bool = False
+        self,
+        quic: QuicConnection,
+        *,
+        enable_datagrams: bool = False,
+        enable_webtransport: bool = False,
     ) -> None:
+        # WebTransport relies on HTTP/3 datagrams, which rely on QUIC datagrams.
+        enable_datagrams = enable_datagrams or enable_webtransport
+        if enable_datagrams and not quic.configuration.max_datagram_frame_size:
+            raise ValueError(
+                "Cannot enable HTTP/3 datagrams unless QUIC accepts datagrams"
+            )
+
         # settings
         # We use no dynamic table, so header blocks never wait for its entries
         # and no stream data is held while they arrive (RFC 9204 sections 2.1.2
         # and 3.2.3).
         self._max_table_capacity = 0
         self._blocked_streams = 0
+        self._enable_datagrams = enable_datagrams
         self._enable_webtransport = enable_webtransport
 
         self._is_client = quic.configuration.is_client
@@ -1082,8 +1098,9 @@ class H3Connection:
             Setting.ENABLE_CONNECT_PROTOCOL: 1,
             Setting.DUMMY: 1,
         }
-        if self._enable_webtransport:
+        if self._enable_datagrams:
             settings[Setting.H3_DATAGRAM] = 1
+        if self._enable_webtransport:
             settings[Setting.ENABLE_WEBTRANSPORT] = 1
         return settings
 
@@ -1307,6 +1324,12 @@ class H3Connection:
         """
         Handle a datagram.
         """
+        # The peer must not send QUIC datagrams until it has received our
+        # SETTINGS_H3_DATAGRAM=1 (RFC 9297 section 2.1.1), so without it they are
+        # not HTTP/3 datagrams.
+        if self._sent_settings.get(Setting.H3_DATAGRAM) != 1:
+            return []
+
         buf = Buffer(data=data)
         try:
             quarter_stream_id = buf.pull_uint_var()
