@@ -879,6 +879,22 @@ class H3Connection:
         """
         self._quic.reset_stream(stream_id, ErrorCode.H3_REQUEST_INCOMPLETE)
 
+    def _check_connection_not_closing(self) -> None:
+        """
+        Check the connection is neither closing nor closed.
+        """
+        if self._quic.is_closing():
+            raise InvalidConnectionStateError(
+                "Cannot send once the connection is closing"
+            )
+
+    def _check_content_length(self, stream: H3Stream) -> None:
+        if (
+            stream.expected_content_length is not None
+            and stream.content_length != stream.expected_content_length
+        ):
+            raise MessageError("content-length does not match data size")
+
     def _check_control_frame_header(self, frame_type: int, frame_size: int) -> None:
         """
         Check a frame header received on the peer's control stream.
@@ -971,22 +987,6 @@ class H3Connection:
             # this makes them longer (RFC 9114 section 10.5.1).
             raise ExcessiveLoad("HEADERS frame is too large")
 
-    def _check_connection_not_closing(self) -> None:
-        """
-        Check the connection is neither closing nor closed.
-        """
-        if self._quic.is_closing():
-            raise InvalidConnectionStateError(
-                "Cannot send once the connection is closing"
-            )
-
-    def _check_stream_id(self, stream_id: int) -> None:
-        """
-        Check the stream ID is one QUIC can represent (RFC 9000 section 2.1).
-        """
-        if not 0 <= stream_id <= UINT_VAR_MAX:
-            raise InvalidStreamIdError("Stream ID must be between 0 and 2^62 - 1")
-
     def _check_sending_allowed(self, stream_id: int) -> None:
         """
         Check headers and data can be sent on the stream, before any state is
@@ -1018,6 +1018,13 @@ class H3Connection:
             stream is not None and stream.sending_ended
         ):
             raise InvalidStreamStateError("Cannot send on a stream which is not open")
+
+    def _check_stream_id(self, stream_id: int) -> None:
+        """
+        Check the stream ID is one QUIC can represent (RFC 9000 section 2.1).
+        """
+        if not 0 <= stream_id <= UINT_VAR_MAX:
+            raise InvalidStreamIdError("Stream ID must be between 0 and 2^62 - 1")
 
     def _create_uni_stream(self, stream_type: int) -> int:
         """
@@ -1177,13 +1184,6 @@ class H3Connection:
             if self._is_client:
                 return GoAwayReceived(stream_id=goaway_id)
         return None
-
-    def _check_content_length(self, stream: H3Stream) -> None:
-        if (
-            stream.expected_content_length is not None
-            and stream.content_length != stream.expected_content_length
-        ):
-            raise MessageError("content-length does not match data size")
 
     def _handle_request_frame(
         self,
