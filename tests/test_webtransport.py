@@ -329,6 +329,46 @@ class WebTransportTest(TestCase):
                 ),
             )
 
+    def test_bidirectional_stream_server_initiated_not_webtransport(self) -> None:
+        """
+        A client which enabled WebTransport closes the connection when a
+        bidirectional stream opened by the server is not a WebTransport stream, see
+        RFC 9114 section 6.1.
+        """
+        for data, end_stream in (
+            (
+                # ":status: 200" from the QPACK static table.
+                encode_frame(FrameType.HEADERS, b"\x00\x00\xd9")
+                + encode_frame(FrameType.DATA, b"hello"),
+                True,
+            ),
+            (encode_frame(FrameType.DATA, b"hello"), False),
+            (encode_frame(0x21, b""), False),
+            (b"", True),
+        ):
+            with (
+                self.subTest(data=data, end_stream=end_stream),
+                h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+                    quic_client,
+                    quic_server,
+                ),
+            ):
+                h3_client = H3Connection(quic_client, enable_webtransport=True)
+                H3Connection(quic_server, enable_webtransport=True)
+                h3_transfer(quic_server, h3_client)
+
+                stream_id = quic_server.get_next_available_stream_id()
+                quic_server.send_stream_data(stream_id, data, end_stream=end_stream)
+                self.assertEqual(h3_transfer(quic_server, h3_client), [])
+                self.assertEqual(
+                    closed(quic_client),
+                    (
+                        ErrorCode.H3_STREAM_CREATION_ERROR,
+                        "Server-initiated bidirectional streams must be WebTransport "
+                        "streams",
+                    ),
+                )
+
     def test_bidirectional_stream_signal_after_unknown_frame(self) -> None:
         """
         A WEBTRANSPORT_STREAM signal must be the very first bytes of a stream
