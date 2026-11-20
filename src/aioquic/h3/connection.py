@@ -640,8 +640,18 @@ class H3Connection:
                 f"Datagram of {len(data)} bytes exceeds the capacity of "
                 f"{capacity} bytes"
             )
+        quarter_stream_id = stream_id // 4
 
-        self._quic.send_datagram_frame(encode_uint_var(stream_id // 4) + data)
+        # log datagram
+        if self._quic_logger is not None:
+            self._quic_logger.log_event(
+                name="http3:datagram_created",
+                data=self._quic_logger.encode_http3_datagram(
+                    length=len(data), quarter_stream_id=quarter_stream_id
+                ),
+            )
+
+        self._quic.send_datagram_frame(encode_uint_var(quarter_stream_id) + data)
 
     def send_data(self, stream_id: int, data: bytes, end_stream: bool) -> None:
         """
@@ -1295,9 +1305,18 @@ class H3Connection:
             quarter_stream_id = buf.pull_uint_var()
         except BufferReadError:
             raise DatagramError("Could not parse quarter stream ID")
-        return [
-            DatagramReceived(data=data[buf.tell() :], stream_id=quarter_stream_id * 4)
-        ]
+        payload = data[buf.tell() :]
+
+        # log datagram
+        if self._quic_logger is not None:
+            self._quic_logger.log_event(
+                name="http3:datagram_parsed",
+                data=self._quic_logger.encode_http3_datagram(
+                    length=len(payload), quarter_stream_id=quarter_stream_id
+                ),
+            )
+
+        return [DatagramReceived(data=payload, stream_id=quarter_stream_id * 4)]
 
     def _receive_stop_sending(self, stream_id: int) -> None:
         """

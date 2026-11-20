@@ -271,6 +271,12 @@ class QuicLoggerTrace:
             "stream_id": stream_id,
         }
 
+    def encode_http3_datagram(self, *, length: int, quarter_stream_id: int) -> dict:
+        return {
+            "quarter_stream_id": quarter_stream_id,
+            "raw": {"payload_length": length},
+        }
+
     def encode_http3_headers_frame(
         self, *, length: int, headers: Headers, stream_id: int
     ) -> dict:
