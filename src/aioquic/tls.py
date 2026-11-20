@@ -1121,6 +1121,72 @@ def push_finished(buf: Buffer, finished: Finished) -> None:
 # CONTEXT
 
 
+class KeyExchange:
+    """
+    An ephemeral key exchange in a group.
+
+    `key_share` is sent to the peer, and :meth:`complete` derives the shared
+    secret from the peer's key share.
+    """
+
+    def __init__(self, group: int) -> None:
+        self._private_key: (
+            ec.EllipticCurvePrivateKey | x25519.X25519PrivateKey | x448.X448PrivateKey
+        )
+        if group == Group.X25519:
+            self._private_key = x25519.X25519PrivateKey.generate()
+        elif group == Group.X448:
+            self._private_key = x448.X448PrivateKey.generate()
+        else:
+            self._private_key = ec.generate_private_key(GROUP_TO_CURVE[group]())
+
+        public_key = self._private_key.public_key()
+        if isinstance(public_key, ec.EllipticCurvePublicKey):
+            public_bytes = public_key.public_bytes(
+                Encoding.X962, PublicFormat.UncompressedPoint
+            )
+        else:
+            public_bytes = public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
+        self.key_share: KeyShareEntry = (group, public_bytes)
+
+    def complete(self, peer_key_share: bytes) -> bytes:
+        """
+        Return the shared secret.
+
+        :param peer_key_share: The peer's key share.
+        :raises ValueError:
+            If the peer's key share is invalid.
+        """
+        private_key = self._private_key
+        if isinstance(private_key, x25519.X25519PrivateKey):
+            return private_key.exchange(
+                x25519.X25519PublicKey.from_public_bytes(peer_key_share)
+            )
+        elif isinstance(private_key, x448.X448PrivateKey):
+            return private_key.exchange(
+                x448.X448PublicKey.from_public_bytes(peer_key_share)
+            )
+        return private_key.exchange(
+            ec.ECDH(),
+            ec.EllipticCurvePublicKey.from_encoded_point(
+                private_key.curve, peer_key_share
+            ),
+        )
+
+    @classmethod
+    def respond(cls, group: int, peer_key_share: bytes) -> tuple[bytes, KeyShareEntry]:
+        """
+        Return the shared secret and the key share to send back, as the server.
+
+        :param group: The group of the client's key share.
+        :param peer_key_share: The client's key share.
+        :raises ValueError:
+            If the client's key share is invalid.
+        """
+        key_exchange = cls(group)
+        return key_exchange.complete(peer_key_share), key_exchange.key_share
+
+
 class KeySchedule:
     def __init__(self, cipher_suite: CipherSuite):
         self.algorithm = cipher_suite_hash(cipher_suite)
@@ -1222,39 +1288,10 @@ GROUP_TO_CURVE: dict = {
     Group.SECP384R1: ec.SECP384R1,
     Group.SECP521R1: ec.SECP521R1,
 }
-CURVE_TO_GROUP = dict((v, k) for k, v in GROUP_TO_CURVE.items())
 
 
 def cipher_suite_hash(cipher_suite: CipherSuite) -> hashes.HashAlgorithm:
     return CIPHER_SUITES[cipher_suite]()
-
-
-def decode_public_key(
-    key_share: KeyShareEntry,
-) -> ec.EllipticCurvePublicKey | x25519.X25519PublicKey | x448.X448PublicKey | None:
-    if key_share[0] == Group.X25519:
-        return x25519.X25519PublicKey.from_public_bytes(key_share[1])
-    elif key_share[0] == Group.X448:
-        return x448.X448PublicKey.from_public_bytes(key_share[1])
-    elif key_share[0] in GROUP_TO_CURVE:
-        return ec.EllipticCurvePublicKey.from_encoded_point(
-            GROUP_TO_CURVE[key_share[0]](), key_share[1]
-        )
-    else:
-        return None
-
-
-def encode_public_key(
-    public_key: ec.EllipticCurvePublicKey | x25519.X25519PublicKey | x448.X448PublicKey,
-) -> KeyShareEntry:
-    if isinstance(public_key, x25519.X25519PublicKey):
-        return (Group.X25519, public_key.public_bytes(Encoding.Raw, PublicFormat.Raw))
-    elif isinstance(public_key, x448.X448PublicKey):
-        return (Group.X448, public_key.public_bytes(Encoding.Raw, PublicFormat.Raw))
-    return (
-        CURVE_TO_GROUP[public_key.curve.__class__],
-        public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint),
-    )
 
 
 def negotiate(
@@ -1442,9 +1479,7 @@ class Context:
         self._dec_key: bytes | None = None
         self.__logger = logger
 
-        self._ec_private_keys: list[ec.EllipticCurvePrivateKey] = []
-        self._x25519_private_key: x25519.X25519PrivateKey | None = None
-        self._x448_private_key: x448.X448PrivateKey | None = None
+        self._key_exchanges: dict[int, KeyExchange] = {}
 
         if is_client:
             self.client_random = os.urandom(32)
@@ -1661,24 +1696,13 @@ class Context:
         supported_groups: list[int] = []
 
         for group in self._supported_groups:
-            if group == Group.X25519:
-                self._x25519_private_key = x25519.X25519PrivateKey.generate()
-                key_share.append(
-                    encode_public_key(self._x25519_private_key.public_key())
-                )
-                supported_groups.append(Group.X25519)
-            elif group == Group.X448:
-                self._x448_private_key = x448.X448PrivateKey.generate()
-                key_share.append(encode_public_key(self._x448_private_key.public_key()))
-                supported_groups.append(Group.X448)
-            elif group == Group.GREASE:
+            if group == Group.GREASE:
                 key_share.append((Group.GREASE, b"\x00"))
-                supported_groups.append(Group.GREASE)
-            elif group in GROUP_TO_CURVE:
-                ec_private_key = ec.generate_private_key(GROUP_TO_CURVE[group]())
-                self._ec_private_keys.append(ec_private_key)
-                key_share.append(encode_public_key(ec_private_key.public_key()))
-                supported_groups.append(group)
+            else:
+                key_exchange = KeyExchange(group)
+                self._key_exchanges[group] = key_exchange
+                key_share.append(key_exchange.key_share)
+            supported_groups.append(group)
 
         assert len(key_share), "no key share entries"
 
@@ -1828,33 +1852,16 @@ class Context:
         self._key_schedule_psk = None
         self._key_schedule_proxy = None
 
-        # perform key exchange
-        shared_key: bytes | None = None
-        try:
-            peer_public_key = decode_public_key(peer_hello.key_share)
-            if (
-                isinstance(peer_public_key, x25519.X25519PublicKey)
-                and self._x25519_private_key is not None
-            ):
-                shared_key = self._x25519_private_key.exchange(peer_public_key)
-            elif (
-                isinstance(peer_public_key, x448.X448PublicKey)
-                and self._x448_private_key is not None
-            ):
-                shared_key = self._x448_private_key.exchange(peer_public_key)
-            elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
-                for ec_private_key in self._ec_private_keys:
-                    if (
-                        ec_private_key.public_key().curve.__class__
-                        == peer_public_key.curve.__class__
-                    ):
-                        shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
-        except ValueError:
-            raise AlertIllegalParameter("ServerHello has an invalid key share")
-        if shared_key is None:
+        # Perform key exchange.
+        peer_group, peer_key_share = peer_hello.key_share
+        if peer_group not in self._key_exchanges:
             raise AlertIllegalParameter(
                 "ServerHello has a key share we did not advertise"
             )
+        try:
+            shared_key = self._key_exchanges[peer_group].complete(peer_key_share)
+        except ValueError:
+            raise AlertIllegalParameter("ServerHello has an invalid key share")
 
         self.key_schedule.update_hash(input_buf.data)
         self.key_schedule.extract(shared_key)
@@ -2221,38 +2228,16 @@ class Context:
             self.key_schedule.extract(None)
             self.key_schedule.update_hash(input_buf.data)
 
-        # perform key exchange
-        public_key: (
-            ec.EllipticCurvePublicKey | x25519.X25519PublicKey | x448.X448PublicKey
-        )
-        shared_key: bytes | None = None
+        # Perform key exchange.
+        for peer_group, peer_key_share in peer_hello.key_share:
+            if peer_group in self._supported_groups:
+                break
+        else:
+            raise AlertHandshakeFailure("ClientHello has no supported key share")
         try:
-            for key_share in peer_hello.key_share:
-                if key_share[0] not in self._supported_groups:
-                    continue
-                peer_public_key = decode_public_key(key_share)
-                if isinstance(peer_public_key, x25519.X25519PublicKey):
-                    self._x25519_private_key = x25519.X25519PrivateKey.generate()
-                    public_key = self._x25519_private_key.public_key()
-                    shared_key = self._x25519_private_key.exchange(peer_public_key)
-                    break
-                elif isinstance(peer_public_key, x448.X448PublicKey):
-                    self._x448_private_key = x448.X448PrivateKey.generate()
-                    public_key = self._x448_private_key.public_key()
-                    shared_key = self._x448_private_key.exchange(peer_public_key)
-                    break
-                elif isinstance(peer_public_key, ec.EllipticCurvePublicKey):
-                    ec_private_key = ec.generate_private_key(
-                        GROUP_TO_CURVE[key_share[0]]()
-                    )
-                    self._ec_private_keys.append(ec_private_key)
-                    public_key = ec_private_key.public_key()
-                    shared_key = ec_private_key.exchange(ec.ECDH(), peer_public_key)
-                    break
+            shared_key, key_share = KeyExchange.respond(peer_group, peer_key_share)
         except ValueError:
             raise AlertIllegalParameter("ClientHello has an invalid key share")
-        if shared_key is None:
-            raise AlertHandshakeFailure("ClientHello has no supported key share")
 
         # send hello
         hello = ServerHello(
@@ -2260,7 +2245,7 @@ class Context:
             legacy_session_id=self.legacy_session_id,
             cipher_suite=cipher_suite,
             compression_method=CompressionMethod.NULL,
-            key_share=encode_public_key(public_key),
+            key_share=key_share,
             pre_shared_key=pre_shared_key,
             supported_version=supported_version,
         )

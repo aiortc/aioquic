@@ -711,7 +711,7 @@ class ContextTest(TestCase):
         # Send client hello with a public key which is not on the curve.
         client_buf = create_buffers()
         client.handle_message(b"", client_buf)
-        public_key = tls.encode_public_key(client._ec_private_keys[0].public_key())[1]
+        public_key = client._key_exchanges[tls.Group.SECP256R1].key_share[1]
         server_input = merge_buffers(client_buf).replace(
             public_key, b"\x05" + public_key[1:]
         )
@@ -733,7 +733,7 @@ class ContextTest(TestCase):
             client.handle_message(b"", client_buf)
         except UnsupportedAlgorithm as exc:
             self.skipTest(str(exc))
-        public_key = tls.encode_public_key(client._x25519_private_key.public_key())[1]
+        public_key = client._key_exchanges[tls.Group.X25519].key_share[1]
         server_input = merge_buffers(client_buf).replace(public_key, bytes(32))
 
         with self.assertRaisesMessage(
@@ -1357,10 +1357,25 @@ class ContextTest(TestCase):
         server = self.create_server()
         server._supported_groups = [tls.Group.SECP384R1]
 
-        self._handshake(client, server)
+        # Send client hello.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        server_input = merge_buffers(client_buf)
+        reset_buffers(client_buf)
 
-        # The server skipped the key share for a group it does not support.
-        self.assertEqual(server._ec_private_keys[0].curve.name, "secp384r1")
+        # Handle client hello, skipping the key share for a group the server does
+        # not support.
+        server_buf = create_buffers()
+        server.handle_message(server_input, server_buf)
+        server_hello = pull_server_hello(
+            Buffer(data=server_buf[tls.Epoch.INITIAL].data)
+        )
+        self.assertEqual(server_hello.key_share[0], tls.Group.SECP384R1)
+
+        # Handle server hello, encrypted extensions, certificate, certificate verify,
+        # finished.
+        client.handle_message(merge_buffers(server_buf), client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
 
     def test_handshake_with_x25519(self) -> None:
         client = self.create_client()
