@@ -2200,6 +2200,70 @@ class H3ConnectionTest(TestCase):
                 )
             self.assertNotIn(stream_id, h3_client._stream)
 
+    def test_send_headers_after_goaway(self) -> None:
+        """
+        Once a client receives GOAWAY, it cannot start new requests, whatever
+        the ID in the frame (RFC 9114 section 5.2). It can still finish the
+        requests it started.
+        """
+        for goaway_id in (8, 2**62 - 4):
+            with (
+                self.subTest(goaway_id=goaway_id),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                h3_transfer(quic_server, h3_client)
+
+                # Stream 0 carries a finished request, stream 4 an unfinished one.
+                self._make_request(h3_client, h3_server)
+                stream_id = self._send_request_headers(h3_client, h3_server)
+                self.assertEqual(stream_id, 4)
+
+                send_goaway(h3_server, encode_uint_var(goaway_id))
+                self.assertEqual(
+                    h3_transfer(quic_server, h3_client),
+                    [GoAwayReceived(stream_id=goaway_id)],
+                )
+
+                # A new request is refused, and leaves no state behind.
+                with self.assertRaisesMessage(
+                    InvalidConnectionStateError,
+                    "Cannot start a request after receiving GOAWAY",
+                ):
+                    h3_client.send_headers(
+                        stream_id=8,
+                        headers=[
+                            (b":method", b"GET"),
+                            (b":scheme", b"https"),
+                            (b":authority", b"localhost"),
+                            (b":path", b"/"),
+                        ],
+                    )
+                self.assertNotIn(8, quic_client._streams)
+                self.assertNotIn(8, h3_client._stream)
+
+                # The finished request still reports the stream's state.
+                with self.assertRaisesMessage(
+                    InvalidStreamStateError, "Cannot send after the stream was ended"
+                ):
+                    h3_client.send_headers(stream_id=0, headers=[(b"x-foo", b"bar")])
+
+                # The unfinished request can be finished.
+                h3_client.send_headers(
+                    stream_id=stream_id, headers=[(b"x-foo", b"bar")], end_stream=True
+                )
+                self.assertEqual(
+                    h3_transfer(quic_client, h3_server),
+                    [
+                        HeadersReceived(
+                            headers=[(b"x-foo", b"bar")],
+                            stream_id=stream_id,
+                            stream_ended=True,
+                        )
+                    ],
+                )
+
     def test_send_headers_after_trailers(self) -> None:
         """
         We should not send HEADERS after trailers.

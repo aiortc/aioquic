@@ -674,9 +674,21 @@ class H3Connection:
             reset, or on a stream the peer has not opened, or an interim response
             would end the stream.
         :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
-            If the peer stopped the QPACK encoder stream.
+            If a client starts a request after receiving GOAWAY, or the peer
+            stopped the QPACK encoder stream.
         """
         self._check_stream_type_for_sending(stream_id)
+
+        # A client must not start requests once it receives GOAWAY (RFC 9114
+        # section 5.2).
+        if (
+            self._is_client
+            and self._received_goaway_id is not None
+            and stream_id >= self._quic.get_next_available_stream_id()
+        ):
+            raise InvalidConnectionStateError(
+                "Cannot start a request after receiving GOAWAY"
+            )
 
         # The stream's state is only stored once the headers are sent.
         stream = self._stream.get(stream_id)
