@@ -492,6 +492,45 @@ class H3ConnectionTest(TestCase):
                         [DatagramReceived(data=b"", stream_id=stream_id)],
                     )
 
+    def test_datagram_qlog(self) -> None:
+        """
+        Datagrams are logged with their quarter stream ID and payload length
+        (h3-events sections 3.7 and 3.8), and refused ones are not logged.
+        """
+        with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+            h3_transfer(quic_server, h3_client)
+            self._send_request_headers(h3_client, h3_server)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            self.assertEqual(stream_id, 4)
+
+            capacity = h3_client.get_datagram_capacity(stream_id)
+            assert capacity is not None
+            with self.assertRaisesMessage(
+                DatagramCapacityError,
+                f"Datagram of {capacity + 1} bytes exceeds the capacity of "
+                f"{capacity} bytes",
+            ):
+                h3_client.send_datagram(stream_id=stream_id, data=bytes(capacity + 1))
+            h3_client.send_datagram(stream_id=stream_id, data=b"foo")
+            h3_transfer(quic_client, h3_server)
+
+            for quic, name in [
+                (quic_client, "http3:datagram_created"),
+                (quic_server, "http3:datagram_parsed"),
+            ]:
+                logger = quic.configuration.quic_logger
+                assert logger is not None
+                self.assertEqual(
+                    [
+                        event["data"]
+                        for event in logger.to_dict()["traces"][0]["events"]
+                        if event["name"] == name
+                    ],
+                    [{"quarter_stream_id": 1, "raw": {"payload_length": 3}}],
+                )
+
     def test_enable_webtransport_positional(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):
             with self.assertWarns(DeprecationWarning) as cm:
