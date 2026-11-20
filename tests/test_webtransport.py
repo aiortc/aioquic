@@ -300,6 +300,35 @@ class WebTransportTest(TestCase):
             # Server opens the stream, client replies.
             self._check_bidirectional_stream(h3_server, h3_client, session_id)
 
+    def test_bidirectional_stream_server_initiated_not_enabled(self) -> None:
+        """
+        A client which did not enable WebTransport closes the connection when the
+        server opens a bidirectional stream, see RFC 9114 section 6.1.
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client)
+            H3Connection(quic_server, enable_webtransport=True)
+            h3_transfer(quic_server, h3_client)
+
+            stream_id = quic_server.get_next_available_stream_id()
+            quic_server.send_stream_data(
+                stream_id,
+                encode_uint_var(FrameType.WEBTRANSPORT_STREAM)
+                + encode_uint_var(0)
+                + b"foo",
+            )
+            self.assertEqual(h3_transfer(quic_server, h3_client), [])
+            self.assertEqual(
+                closed(quic_client),
+                (
+                    ErrorCode.H3_STREAM_CREATION_ERROR,
+                    "Server-initiated bidirectional streams are not allowed",
+                ),
+            )
+
     def test_bidirectional_stream_signal_after_unknown_frame(self) -> None:
         """
         A WEBTRANSPORT_STREAM signal must be the very first bytes of a stream

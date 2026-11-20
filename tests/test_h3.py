@@ -2544,6 +2544,37 @@ class H3ConnectionTest(TestCase):
                 [DataReceived(data=b"hello", stream_id=stream_id, stream_ended=True)],
             )
 
+    def test_handle_server_initiated_bidirectional_stream(self) -> None:
+        """
+        A client which did not enable WebTransport should close the connection
+        when the server opens a bidirectional stream, see RFC 9114 section 6.1.
+        """
+        for event in (
+            StreamDataReceived(
+                data=encode_frame(FrameType.HEADERS, b""),
+                end_stream=False,
+                stream_id=1,
+            ),
+            StreamDataReceived(data=b"", end_stream=True, stream_id=1),
+            StreamReset(error_code=0, stream_id=1),
+            StopSendingReceived(error_code=0, stream_id=1),
+        ):
+            with (
+                self.subTest(event=event),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+
+                self.assertEqual(h3_client.handle_event(event), [])
+                self.assertEqual(
+                    closed(quic_client),
+                    (
+                        ErrorCode.H3_STREAM_CREATION_ERROR,
+                        "Server-initiated bidirectional streams are not allowed",
+                    ),
+                )
+                self.assertNotIn(1, h3_client._stream)
+
     def test_max_push_id_not_sent(self) -> None:
         """
         A client never sends MAX_PUSH_ID, so servers cannot push, see RFC 9114
