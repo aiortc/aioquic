@@ -186,39 +186,36 @@ class QuicConnectionProtocol(asyncio.DatagramProtocol):
             for adapter in self._adapters.values():
                 adapter._connection_terminated()
             self._adapters.clear()
-        elif isinstance(event, events.StopSendingReceived):
+        elif isinstance(
+            event,
+            (events.StopSendingReceived, events.StreamDataReceived, events.StreamReset),
+        ):
+            # The stream handler sees the outcome of the event which opened the
+            # stream. Without one, the streams the peer opens are ignored.
+            stream_handler = None
             adapter = self._adapters.get(event.stream_id, None)
-            if adapter is not None:
+            if adapter is None:
+                if (
+                    self._stream_handler is None
+                    or stream_is_client_initiated(event.stream_id)
+                    == self._quic.configuration.is_client
+                ):
+                    return
+                reader, writer = self._create_stream(event.stream_id)
+                adapter = self._adapters[event.stream_id]
+                stream_handler = self._stream_handler
+
+            if isinstance(event, events.StopSendingReceived):
                 adapter._stop_received(event.error_code)
-        elif isinstance(event, events.StreamDataReceived):
-            adapter = self._adapter_for_event(event.stream_id)
-            if adapter is not None:
+            elif isinstance(event, events.StreamDataReceived):
                 adapter._data_received(event.data, event.end_stream)
-        elif isinstance(event, events.StreamReset):
-            adapter = self._adapter_for_event(event.stream_id)
-            if adapter is not None:
+            else:
                 adapter._reset_received(event.error_code)
 
+            if stream_handler is not None:
+                stream_handler(reader, writer)
+
     # private
-
-    def _adapter_for_event(self, stream_id: int) -> "QuicStreamAdapter | None":
-        """
-        Return the adapter of the stream an event concerns, passing a stream the
-        peer has just opened to the stream handler.
-
-        Without a stream handler, the streams the peer opens are ignored.
-        """
-        adapter = self._adapters.get(stream_id, None)
-        if (
-            adapter is None
-            and self._stream_handler is not None
-            and stream_is_client_initiated(stream_id)
-            != self._quic.configuration.is_client
-        ):
-            reader, writer = self._create_stream(stream_id)
-            self._stream_handler(reader, writer)
-            adapter = self._adapters[stream_id]
-        return adapter
 
     def _create_stream(
         self, stream_id: int
@@ -304,12 +301,6 @@ class QuicStreamAdapter(asyncio.Transport):
             # Nothing is ever sent on the peer's unidirectional streams.
             self._closed.set_result(None)
             self._eof = True
-        else:
-            # The peer may have stopped its stream before its first data arrived,
-            # and QUIC then already reset the sending part (RFC 9000 section 3.5).
-            stream = protocol._quic._streams.get(stream_id)
-            if stream is not None and stream.sender._reset_error_code is not None:
-                self._stop_received(stream.sender._reset_error_code)
 
     def abort(self) -> None:
         """

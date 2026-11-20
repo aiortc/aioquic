@@ -14,7 +14,13 @@ from aioquic.asyncio.protocol import QuicConnectionProtocol, QuicStreamHandler
 from aioquic.asyncio.server import serve
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.connection import NetworkAddress, QuicConnection
-from aioquic.quic.events import ConnectionTerminated, QuicEvent, StreamDataReceived
+from aioquic.quic.events import (
+    ConnectionTerminated,
+    DatagramFrameReceived,
+    QuicEvent,
+    StopSendingReceived,
+    StreamDataReceived,
+)
 from aioquic.quic.logger import QuicLogger
 from aioquic.quic.packet import QuicErrorCode, encode_quic_version_negotiation
 from aioquic.tls import SessionTicket
@@ -1061,7 +1067,71 @@ class HighLevelTest(TestCase):
             self.assertEqual(server._adapters, {})
 
     @asynctest
-    async def test_stream_stopped_before_data(self) -> None:
+    async def test_stream_stopped_after_closing(self) -> None:
+        """
+        A stop which arrives with an event whose handler closes the connection and
+        the stream does not change the error the stream reports.
+        """
+        stopped = asyncio.get_running_loop().create_future()
+        server_streams: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+
+        class ClosingProtocol(QuicConnectionProtocol):
+            """
+            Close the connection, then the stream, when a datagram arrives.
+            """
+
+            def quic_event_received(self, event: QuicEvent) -> None:
+                super().quic_event_received(event)
+                if isinstance(event, DatagramFrameReceived):
+                    self.close()
+                    server_streams[0][1].write_eof()
+                elif isinstance(event, StopSendingReceived):
+                    stopped.set_result(None)
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.append((reader, writer))
+
+        server_configuration = QuicConfiguration(
+            is_client=False, max_datagram_frame_size=65536
+        )
+        load_cert_chain(server_configuration, SERVER_CERTFILE, SERVER_KEYFILE)
+        async with self.run_server(
+            configuration=server_configuration,
+            create_protocol=ClosingProtocol,
+            stream_handler=handle_stream,
+        ) as server_port:
+            configuration = QuicConfiguration(
+                is_client=True, max_datagram_frame_size=65536
+            )
+            configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+            async with connect(
+                self.server_host, server_port, configuration=configuration
+            ) as client:
+                client_reader, client_writer = await client.create_stream()
+                client_writer.write(b"ping")
+                await client.ping()
+                server_reader, server_writer = server_streams[0]
+
+                # QUIC sends the datagram before the STOP_SENDING, so the server
+                # closes the stream before it handles the stop.
+                client.quic_connection.send_datagram_frame(b"close")
+                client.quic_connection.stop_stream(stream_id=0, error_code=5)
+                client.transmit()
+                await asyncio.wait_for(stopped, 1)
+
+                with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                    await server_writer.drain()
+                with self.assertRaisesMessage(ConnectionError, "Connection closed"):
+                    await server_writer.wait_closed()
+
+    @asynctest
+    async def test_stream_stopped_after_finished(self) -> None:
+        """
+        A stream stopped once both its parts ended is not passed to the stream
+        handler again.
+        """
         server_streams: asyncio.Queue[
             tuple[asyncio.StreamReader, asyncio.StreamWriter]
         ] = asyncio.Queue()
@@ -1075,8 +1145,44 @@ class HighLevelTest(TestCase):
             client,
             server,
         ):
+            client_reader, client_writer = await client.create_stream()
+            client_writer.write(b"ping")
+            client_writer.write_eof()
+            server_reader, server_writer = await server_streams.get()
+            self.assertEqual(await server_reader.read(), b"ping")
+
+            # The server ends its part of the stream, which releases the stream,
+            # but QUIC still has to send the data and the end of the stream.
+            server_writer.write(b"pong")
+            server_writer.write_eof()
+            self.assertEqual(server._adapters, {})
+
+            # The client stops the stream before the server's data arrives.
+            client.quic_connection.stop_stream(stream_id=0, error_code=5)
+            client.transmit()
+            await server.ping()
+            self.assertEqual(server_streams.empty(), True)
+            self.assertEqual(server._adapters, {})
+
+    @asynctest
+    async def test_stream_stopped_before_data(self) -> None:
+        server_streams: asyncio.Queue[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        ] = asyncio.Queue()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.put_nowait((reader, writer))
+            # The stop is already known, so the data is discarded.
+            writer.write(b"banner")
+
+        async with self.run_client_and_server(stream_handler=handle_stream) as (
+            client,
+            server,
+        ):
             # QUIC sends STOP_SENDING before the stream's first data, so the
-            # server learns of the stop before it learns of the stream.
+            # server learns of the stream through the stop.
             client_reader, client_writer = await client.create_stream()
             client_writer.write(b"ping")
             client.quic_connection.stop_stream(stream_id=0, error_code=5)
@@ -1097,6 +1203,85 @@ class HighLevelTest(TestCase):
             self.assertEqual(await server_reader.read(), b"ping")
             await server.ping()
             self.assertEqual(server._adapters, {})
+
+    @asynctest
+    async def test_stream_stopped_before_data_and_finished(self) -> None:
+        """
+        A stream stopped before its first data is still reported as stopped when
+        QUIC discards it before its data reaches the server.
+        """
+        server_protocols: list[QuicConnectionProtocol] = []
+        server_streams: asyncio.Queue[
+            tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        ] = asyncio.Queue()
+
+        class DatagramEchoProtocol(QuicConnectionProtocol):
+            """
+            Echo datagrams, transmitting straight away.
+            """
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                server_protocols.append(self)
+
+            def quic_event_received(self, event: QuicEvent) -> None:
+                super().quic_event_received(event)
+                if isinstance(event, DatagramFrameReceived):
+                    self.quic_connection.send_datagram_frame(event.data)
+                    self.transmit()
+
+        def handle_stream(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            server_streams.put_nowait((reader, writer))
+
+        server_configuration = QuicConfiguration(
+            is_client=False, max_datagram_frame_size=65536
+        )
+        load_cert_chain(server_configuration, SERVER_CERTFILE, SERVER_KEYFILE)
+        async with self.run_server(
+            configuration=server_configuration,
+            create_protocol=DatagramEchoProtocol,
+            stream_handler=handle_stream,
+        ) as server_port:
+            configuration = QuicConfiguration(
+                is_client=True, max_datagram_frame_size=65536
+            )
+            configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
+            async with connect(
+                self.server_host, server_port, configuration=configuration
+            ) as client:
+                server = server_protocols[0]
+
+                # The client stops the stream before sending any data.
+                client_reader, client_writer = await client.create_stream()
+                client.quic_connection.send_stream_data(0, b"")
+                client.quic_connection.stop_stream(stream_id=0, error_code=5)
+                client.transmit()
+
+                # Once the client acknowledges the reset, its data and the end of
+                # the stream finish the stream. A datagram sent with them is
+                # handled first, and its echo makes QUIC discard the stream
+                # before its data reaches the server.
+                await server.ping()
+                client_writer.write(b"ping")
+                client_writer.write_eof()
+                client.quic_connection.send_datagram_frame(b"hello")
+                client.transmit()
+                server_reader, server_writer = await server_streams.get()
+
+                message = "Stream 0 stopped by peer with error code 5"
+                server_writer.write(b"pong")
+                with self.assertRaisesMessage(ConnectionResetError, message):
+                    await server_writer.drain()
+                with self.assertRaisesMessage(ConnectionResetError, message):
+                    await asyncio.wait_for(server_writer.wait_closed(), 1)
+                self.assertEqual(server_writer.is_closing(), True)
+                server_writer.close()
+
+                # The server can still read the client's data.
+                self.assertEqual(await server_reader.read(), b"ping")
+                self.assertEqual(server._adapters, {})
 
     @asynctest
     async def test_stream_stopped_by_peer(self) -> None:
