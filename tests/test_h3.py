@@ -1,5 +1,6 @@
 import contextlib
 import copy
+import itertools
 import time
 from typing import Any
 from unittest.mock import patch
@@ -38,6 +39,7 @@ from aioquic.h3.events import (
 from aioquic.h3.exceptions import (
     DatagramCapacityError,
     InvalidConnectionStateError,
+    InvalidErrorCodeError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -1579,7 +1581,7 @@ class H3ConnectionTest(TestCase):
                     ],
                 )
                 self.assertEqual(h3_transfer(quic_client, h3_server), [])
-                self.assertTrue(h3_server._stream[stream_id].rejected)
+                self.assertTrue(h3_server._stream[stream_id].terminated)
 
                 # The client's QUIC connection sends what H3 would refuse to.
                 quic_client.send_datagram_frame(
@@ -3681,6 +3683,10 @@ class H3ConnectionTest(TestCase):
                         h3_client.send_data(
                             stream_id=stream_id, data=b"hello", end_stream=True
                         )
+                    with self.assertRaisesMessage(
+                        InvalidStreamIdError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        h3_client.terminate_request(stream_id)
                     self.assertNotIn(stream_id, h3_client._stream)
 
             # Nothing was sent, so the server keeps the connection open.
@@ -3767,6 +3773,384 @@ class H3ConnectionTest(TestCase):
             self.assertEqual(
                 closed(quic_server), (ErrorCode.QPACK_DECOMPRESSION_FAILED, "")
             )
+
+    def test_terminate_request_after_complete_response(self) -> None:
+        """
+        A server which terminates after sending a complete response still delivers
+        it, and only asks the client to stop sending what remains of the request,
+        with H3_NO_ERROR by default (RFC 9114 section 4.1).
+        """
+        for request_ended, error_code in itertools.product(
+            (True, False), (None, ErrorCode.H3_REQUEST_CANCELLED)
+        ):
+            with (
+                self.subTest(request_ended=request_ended, error_code=error_code),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                stream_id = self._send_request_headers(h3_client, h3_server)
+                if request_ended:
+                    h3_client.send_data(stream_id=stream_id, data=b"", end_stream=True)
+                    h3_transfer(quic_client, h3_server)
+
+                # The response is complete, but not yet acknowledged.
+                h3_server.send_headers(
+                    stream_id=stream_id, headers=[(b":status", b"200")]
+                )
+                h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=True)
+                h3_server.terminate_request(stream_id, error_code=error_code)
+
+                # The STOP_SENDING travels ahead of the response, which still
+                # arrives in full.
+                events = [
+                    HeadersReceived(
+                        headers=[(b":status", b"200")],
+                        stream_id=stream_id,
+                        stream_ended=False,
+                    ),
+                    DataReceived(data=b"hello", stream_id=stream_id, stream_ended=True),
+                ]
+                if not request_ended:
+                    events.insert(
+                        0,
+                        StopReceived(
+                            error_code=(
+                                ErrorCode.H3_NO_ERROR
+                                if error_code is None
+                                else error_code
+                            ),
+                            stream_id=stream_id,
+                        ),
+                    )
+                self.assertEqual(h3_transfer(quic_server, h3_client), events)
+
+                # The client's reset, in answer to the STOP_SENDING, releases the
+                # server's state.
+                h3_transfer(quic_client, h3_server)
+                self.assertNotIn(stream_id, h3_server._stream)
+
+    def test_terminate_request_again(self) -> None:
+        """
+        Terminating a request again has no effect, an earlier reset keeps its error
+        code, and nothing is sent once all the stream's data was acknowledged.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # Terminate twice: the first error code is kept, in both directions.
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            h3_client.terminate_request(
+                stream_id, error_code=ErrorCode.H3_REQUEST_CANCELLED
+            )
+            h3_client.terminate_request(
+                stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
+            )
+            transfer(quic_client, quic_server)
+            self.assertEqual(
+                [
+                    e
+                    for e in drain_events(quic_server)
+                    if isinstance(e, (StopSendingReceived, StreamReset))
+                ],
+                [
+                    StopSendingReceived(
+                        error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=stream_id
+                    ),
+                    StreamReset(
+                        error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=stream_id
+                    ),
+                ],
+            )
+
+            # Terminate after the server's STOP_SENDING: QUIC already reset the
+            # stream with the server's error code.
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            quic_server.stop_stream(stream_id, ErrorCode.H3_REQUEST_REJECTED)
+            transfer(quic_server, quic_client)
+            h3_client.terminate_request(
+                stream_id, error_code=ErrorCode.H3_INTERNAL_ERROR
+            )
+            transfer(quic_client, quic_server)
+            self.assertIn(
+                StreamReset(
+                    error_code=ErrorCode.H3_REQUEST_REJECTED, stream_id=stream_id
+                ),
+                drain_events(quic_server),
+            )
+
+            # Terminate once the response was acknowledged and the stream discarded.
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            h3_client.send_data(stream_id=stream_id, data=b"", end_stream=True)
+            h3_transfer(quic_client, h3_server)
+            h3_server.send_headers(
+                stream_id=stream_id, headers=[(b":status", b"200")], end_stream=True
+            )
+            h3_transfer(quic_server, h3_client)
+            transfer(quic_client, quic_server)
+            self.assertNotIn(stream_id, h3_server._stream)
+            h3_server.terminate_request(stream_id)
+            self.assertEqual(transfer(quic_server, quic_client), 0)
+            self.assertNotIn(stream_id, h3_server._stream)
+
+    def test_terminate_request_by_both(self) -> None:
+        """
+        When both endpoints terminate a request at once, neither reports the
+        peer's termination, and both release their state.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+
+            h3_client.terminate_request(stream_id)
+            h3_server.terminate_request(
+                stream_id, error_code=ErrorCode.H3_REQUEST_REJECTED
+            )
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertEqual(h3_transfer(quic_server, h3_client), [])
+            self.assertNotIn(stream_id, h3_client._stream)
+            self.assertNotIn(stream_id, h3_server._stream)
+
+    def test_terminate_request_by_client(self) -> None:
+        """
+        A client which terminates its request ends the directions of the stream which
+        are still open (RFC 9114 section 4.1.1), with H3_REQUEST_CANCELLED by default,
+        and drops the response.
+        """
+        for request_ended in (True, False):
+            with (
+                self.subTest(request_ended=request_ended),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                stream_id = self._send_request_headers(h3_client, h3_server)
+                if request_ended:
+                    h3_client.send_data(stream_id=stream_id, data=b"", end_stream=True)
+                    h3_transfer(quic_client, h3_server)
+
+                # The server starts a response, which is still in flight.
+                h3_server.send_headers(
+                    stream_id=stream_id, headers=[(b":status", b"200")]
+                )
+                h3_server.send_data(
+                    stream_id=stream_id, data=b"hello", end_stream=False
+                )
+
+                h3_client.terminate_request(stream_id)
+                with self.assertRaisesMessage(
+                    InvalidStreamStateError, "Cannot send on a stream which is not open"
+                ):
+                    h3_client.send_data(
+                        stream_id=stream_id, data=b"hello", end_stream=True
+                    )
+
+                # The response in flight is dropped.
+                self.assertEqual(h3_transfer(quic_server, h3_client), [])
+                self.assertIn(stream_id, h3_client._stream)
+
+                # The server learns which directions were terminated.
+                stop = StopReceived(
+                    error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=stream_id
+                )
+                reset = ResetReceived(
+                    error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=stream_id
+                )
+                self.assertEqual(
+                    h3_transfer(quic_client, h3_server),
+                    [stop] if request_ended else [stop, reset],
+                )
+
+                # The server's reset, in answer to the STOP_SENDING, releases the
+                # client's state without reporting it.
+                self.assertEqual(h3_transfer(quic_server, h3_client), [])
+                self.assertNotIn(stream_id, h3_client._stream)
+                self.assertNotIn(stream_id, h3_server._stream)
+
+    def test_terminate_request_by_server(self) -> None:
+        """
+        A server which abandons its response terminates the directions of the
+        stream which are still open (RFC 9114 section 4.1.1).
+        """
+        for request_ended in (True, False):
+            with (
+                self.subTest(request_ended=request_ended),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                stream_id = self._send_request_headers(h3_client, h3_server)
+                if request_ended:
+                    h3_client.send_data(stream_id=stream_id, data=b"", end_stream=True)
+                    h3_transfer(quic_client, h3_server)
+
+                # The server starts a response, then abandons it.
+                h3_server.send_headers(
+                    stream_id=stream_id, headers=[(b":status", b"200")]
+                )
+                h3_transfer(quic_server, h3_client)
+                h3_server.terminate_request(stream_id)
+                with self.assertRaisesMessage(
+                    InvalidStreamStateError, "Cannot send on a stream which is not open"
+                ):
+                    h3_server.send_data(
+                        stream_id=stream_id, data=b"hello", end_stream=True
+                    )
+
+                # The client is only asked to stop sending if it still was.
+                reset = ResetReceived(
+                    error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=stream_id
+                )
+                stop = StopReceived(
+                    error_code=ErrorCode.H3_REQUEST_CANCELLED, stream_id=stream_id
+                )
+                self.assertEqual(
+                    h3_transfer(quic_server, h3_client),
+                    [reset] if request_ended else [stop, reset],
+                )
+                if not request_ended:
+                    h3_transfer(quic_client, h3_server)
+                self.assertNotIn(stream_id, h3_server._stream)
+
+    def test_terminate_request_connection_closing(self) -> None:
+        """
+        Once the connection is closing, terminating still drops what QUIC received
+        for the request, and invalid calls are still refused.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+
+            # The response reaches QUIC, but is not yet passed to HTTP/3.
+            h3_server.send_headers(stream_id=stream_id, headers=[(b":status", b"200")])
+            h3_server.send_data(stream_id=stream_id, data=b"hello", end_stream=False)
+            transfer(quic_server, quic_client)
+            quic_client.close()
+
+            h3_client.terminate_request(stream_id)
+            self.assertEqual(
+                [
+                    http_event
+                    for quic_event in drain_events(quic_client)
+                    for http_event in h3_client.handle_event(quic_event)
+                ],
+                [],
+            )
+
+            with self.assertRaisesMessage(
+                InvalidStreamStateError, "Cannot terminate a request which was not sent"
+            ):
+                h3_client.terminate_request(40000)
+            self.assertNotIn(40000, quic_client._streams)
+
+            with self.assertRaisesMessage(
+                InvalidStreamTypeError, "Only requests can be terminated"
+            ):
+                h3_client.terminate_request(2)
+
+    def test_terminate_request_drops_datagrams(self) -> None:
+        """
+        Once a request is terminated, its datagrams still in flight are dropped.
+        """
+        with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client, enable_datagrams=True)
+            h3_server = H3Connection(quic_server, enable_datagrams=True)
+            h3_transfer(quic_server, h3_client)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+            h3_server.send_headers(stream_id=stream_id, headers=[(b":status", b"200")])
+            h3_transfer(quic_server, h3_client)
+
+            h3_server.send_datagram(stream_id=stream_id, data=b"foo")
+            h3_client.terminate_request(stream_id)
+            self.assertEqual(h3_transfer(quic_server, h3_client), [])
+            self.assertEqual(
+                datagrams_parsed(quic_client),
+                [{"quarter_stream_id": stream_id // 4, "raw": {"payload_length": 3}}],
+            )
+
+    def test_terminate_request_error_code_out_of_range(self) -> None:
+        """
+        Error codes outside 0 to 2^62 - 1 are refused (RFC 9000 section 20),
+        and leave the stream untouched.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+
+            for error_code in (-1, UINT_VAR_MAX + 1):
+                with self.subTest(error_code=error_code):
+                    with self.assertRaisesMessage(
+                        InvalidErrorCodeError,
+                        "Error code must be between 0 and 2^62 - 1",
+                    ):
+                        h3_client.terminate_request(stream_id, error_code=error_code)
+                    self.assertFalse(h3_client._stream[stream_id].terminated)
+
+            h3_client.terminate_request(stream_id, error_code=UINT_VAR_MAX)
+            transfer(quic_client, quic_server)
+            self.assertIn(
+                StreamReset(error_code=UINT_VAR_MAX, stream_id=stream_id),
+                drain_events(quic_server),
+            )
+
+    def test_terminate_request_not_request_stream(self) -> None:
+        """
+        Only requests can be terminated, not unidirectional streams nor
+        server-initiated bidirectional streams, and no state is created for them.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            h3_transfer(quic_client, h3_server)
+
+            # The client's control stream, the server's control stream, and a
+            # server-initiated bidirectional stream.
+            for stream_id in (2, 3, 1):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        InvalidStreamTypeError, "Only requests can be terminated"
+                    ):
+                        h3_server.terminate_request(stream_id)
+            self.assertNotIn(1, h3_server._stream)
+            self.assertNotIn(1, quic_server._streams)
+
+    def test_terminate_request_unopened_local_stream(self) -> None:
+        """
+        A client cannot terminate a request on a stream it has not opened, which
+        would open it and skip the stream IDs before it.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+            self._send_request_headers(h3_client, h3_server)
+            self.assertEqual(quic_client.get_next_available_stream_id(), 4)
+
+            for stream_id in (4, 40000):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        InvalidStreamStateError,
+                        "Cannot terminate a request which was not sent",
+                    ):
+                        h3_client.terminate_request(stream_id)
+                    self.assertNotIn(stream_id, quic_client._streams)
+            self.assertEqual(quic_client.get_next_available_stream_id(), 4)
+
+    def test_terminate_request_unopened_peer_stream(self) -> None:
+        """
+        A server which terminates a stream the client has not opened has no effect,
+        as HTTP/3 has no state for it, like a stream which ended.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            h3_server.terminate_request(0)
+            self.assertNotIn(0, h3_server._stream)
+            self.assertNotIn(0, quic_server._streams)
 
     def test_uni_stream_grease(self) -> None:
         with h3_client_and_server() as (quic_client, quic_server):

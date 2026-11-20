@@ -28,6 +28,7 @@ from aioquic.h3.events import (
 from aioquic.h3.exceptions import (
     DatagramCapacityError,
     InvalidConnectionStateError,
+    InvalidErrorCodeError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -429,8 +430,8 @@ class H3Stream:
     def __init__(self, stream_id: int) -> None:
         self.buffer = b""
         self.receiving_ended = False
-        self.rejected = False
         self.sending_ended = False
+        self.terminated = False
         self.frame_received = False
         self.frame_size: int | None = None
         self.frame_type: int | None = None
@@ -772,9 +773,9 @@ class H3Connection:
                 and stream.stream_id >= stream_id
                 and stream.frame_received
                 and stream.session_id is None
-                and not stream.rejected
+                and not stream.terminated
             ):
-                self._reject_request(stream)
+                self._terminate_request(stream, ErrorCode.H3_REQUEST_REJECTED)
 
     def send_headers(
         self, stream_id: int, headers: Headers, end_stream: bool = False
@@ -861,6 +862,70 @@ class H3Connection:
             stacklevel=2,
         )
         raise NoAvailablePushIDError
+
+    def terminate_request(
+        self, stream_id: int, *, error_code: int | None = None
+    ) -> None:
+        """
+        Abruptly terminate the directions of a request stream which are still open.
+
+        This is how requests are cancelled (RFC 9114 section 4.1.1). The request or
+        response being sent is abandoned, the peer is asked to stop sending, and
+        what it still sends is dropped: no further events are reported for the
+        stream.
+
+        A client terminates a request whose response is no longer of interest. A
+        server terminates a request it cannot or chooses not to answer, with
+        ``ErrorCode.H3_REQUEST_REJECTED`` if it did not process the request, so
+        that the client can retry it.
+
+        By default, a server whose response has ended asks the client to stop
+        sending with ``ErrorCode.H3_NO_ERROR`` (RFC 9114 section 4.1), and
+        ``ErrorCode.H3_REQUEST_CANCELLED`` is used otherwise.
+
+        This method has no effect on a direction of the stream which has already
+        ended, on a request which was already terminated, or, on a server, on a
+        stream the client has not opened.
+
+        .. aioquic_transmit::
+
+        :param stream_id: The request's stream ID.
+        :param error_code: The HTTP/3 error code, or ``None`` for the default
+            described above.
+        :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
+            If the stream ID is out of range.
+        :raises ~aioquic.h3.exceptions.InvalidErrorCodeError:
+            If the error code is out of range.
+        :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
+            If the stream is not a client-initiated bidirectional stream.
+        :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
+            If a client terminates a stream it has not opened.
+        """
+        self._check_stream_id(stream_id)
+        if error_code is not None:
+            self._check_error_code(error_code)
+        if not stream_is_request_response(stream_id):
+            raise InvalidStreamTypeError("Only requests can be terminated")
+
+        # Without state, both directions of the stream have ended, or the client
+        # has not opened it.
+        stream = self._stream.get(stream_id)
+        if stream is not None:
+            if error_code is None:
+                # Once a server's response has ended, only the request remains, and
+                # stopping it is not an error (RFC 9114 section 4.1).
+                error_code = (
+                    ErrorCode.H3_NO_ERROR
+                    if not self._is_client and stream.sending_ended
+                    else ErrorCode.H3_REQUEST_CANCELLED
+                )
+            self._terminate_request(stream, error_code)
+        elif self._is_client and stream_id >= self._quic.get_next_available_stream_id():
+            # A client stream which carries nothing yet is not a request, and QUIC
+            # would open it, skipping the stream IDs before it.
+            raise InvalidStreamStateError(
+                "Cannot terminate a request which was not sent"
+            )
 
     @property
     def quic_connection(self) -> QuicConnection:
@@ -951,6 +1016,13 @@ class H3Connection:
         ):
             # RFC 9114 sections 7.2.1, 7.2.2, 7.2.5 and 7.2.8
             raise FrameUnexpected("Invalid frame type on control stream")
+
+    def _check_error_code(self, error_code: int) -> None:
+        """
+        Check the error code is one QUIC can represent (RFC 9000 section 20).
+        """
+        if not 0 <= error_code <= UINT_VAR_MAX:
+            raise InvalidErrorCodeError("Error code must be between 0 and 2^62 - 1")
 
     def _check_request_frame_header(
         self, stream: H3Stream, frame_type: int, frame_size: int
@@ -1303,7 +1375,7 @@ class H3Connection:
                 # A client which stopped the response before its request headers
                 # arrived wants no answer, so the request is not passed on.
                 if not self._is_client and stream.sending_ended:
-                    self._reject_request(stream)
+                    self._terminate_request(stream, ErrorCode.H3_REQUEST_REJECTED)
                     return http_events
                 if not interim:
                     stream.headers_recv_state = HeadersState.AFTER_HEADERS
@@ -1428,16 +1500,17 @@ class H3Connection:
             )
 
         # Datagrams for a stream which does not exist yet, or whose receive side
-        # has ended, are dropped (RFC 9297 section 2.1).
+        # has ended, are dropped (RFC 9297 section 2.1), as are those of a
+        # terminated request.
         stream_id = quarter_stream_id * 4
         stream = self._stream.get(stream_id)
-        if stream is None or stream.receiving_ended:
+        if stream is None or stream.receiving_ended or stream.terminated:
             return []
 
         # Datagrams are also dropped until the stream's headers have been received,
         # as the request and its response define what the datagrams mean (RFC 9297
-        # section 2). This covers requests a server rejected and WebTransport
-        # streams, which never pass headers to the application.
+        # section 2). This covers WebTransport streams, which never pass headers to
+        # the application.
         if stream.headers_recv_state == HeadersState.INITIAL:
             return []
 
@@ -1504,7 +1577,7 @@ class H3Connection:
 
         if stream_ended:
             stream.receiving_ended = True
-        if stream.rejected:
+        if stream.terminated:
             return http_events
         stream.buffer += data
 
@@ -1572,7 +1645,7 @@ class H3Connection:
                         and self._enable_webtransport
                     )
                 ):
-                    self._reject_request(stream)
+                    self._terminate_request(stream, ErrorCode.H3_REQUEST_REJECTED)
                     return http_events
 
                 self._check_request_frame_header(
@@ -1671,7 +1744,7 @@ class H3Connection:
                     ),
                 )
             )
-            if stream.rejected:
+            if stream.terminated:
                 return http_events
 
         # remove processed data from buffer
@@ -1866,7 +1939,11 @@ class H3Connection:
 
         http_events: list[H3Event] = []
         if stream is not None:
-            if not stream.receiving_ended and stream.is_known_to_app():
+            if (
+                not stream.receiving_ended
+                and not stream.terminated
+                and stream.is_known_to_app()
+            ):
                 http_events.append(
                     ResetReceived(error_code=event.error_code, stream_id=stream_id)
                 )
@@ -1893,19 +1970,6 @@ class H3Connection:
             self._store_or_discard_stream(stream)
         return http_events
 
-    def _reject_request(self, stream: H3Stream) -> None:
-        """
-        Reject a request which was not passed to the application, so that the
-        client can retry it (RFC 9114 section 4.1.1).
-        """
-        stream.buffer = b""
-        stream.rejected = True
-        stream.sending_ended = True
-        self._quic.reset_stream(stream.stream_id, ErrorCode.H3_REQUEST_REJECTED)
-        if not stream.receiving_ended:
-            self._quic.stop_stream(stream.stream_id, ErrorCode.H3_REQUEST_REJECTED)
-        self._store_or_discard_stream(stream)
-
     def _store_or_discard_stream(self, stream: H3Stream) -> None:
         """
         Store a stream's state, or discard it once both sides have ended.
@@ -1914,6 +1978,23 @@ class H3Connection:
             self._stream.pop(stream.stream_id, None)
         else:
             self._stream[stream.stream_id] = stream
+
+    def _terminate_request(self, stream: H3Stream, error_code: int) -> None:
+        """
+        Abruptly terminate the directions of a request stream which are still
+        open, and drop what the peer still sends (RFC 9114 section 4.1.1).
+        """
+        if stream.terminated:
+            return
+        stream.buffer = b""
+        stream.terminated = True
+        # A reset would abandon a complete message not yet acknowledged.
+        if not stream.sending_ended:
+            stream.sending_ended = True
+            self._quic.reset_stream(stream.stream_id, error_code)
+        if not stream.receiving_ended:
+            self._quic.stop_stream(stream.stream_id, error_code)
+        self._store_or_discard_stream(stream)
 
     def _validate_settings(self, settings: dict[int, int]) -> None:
         for setting in [
