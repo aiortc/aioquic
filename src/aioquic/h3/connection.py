@@ -1019,6 +1019,25 @@ class H3Connection:
         ):
             raise InvalidStreamStateError("Cannot send on a stream which is not open")
 
+    def _check_stream_creation(self, stream_id: int) -> None:
+        """
+        Check the peer is allowed to open the stream, before any state is created
+        for it.
+        """
+        # HTTP/3 does not use server-initiated bidirectional streams, unless an
+        # extension which uses them, such as WebTransport, was negotiated
+        # (RFC 9114 section 6.1). Only our own setting is checked, as such a
+        # stream can arrive before the server's SETTINGS.
+        if (
+            self._is_client
+            and not stream_is_unidirectional(stream_id)
+            and not stream_is_client_initiated(stream_id)
+            and not self._enable_webtransport
+        ):
+            raise StreamCreationError(
+                "Server-initiated bidirectional streams are not allowed"
+            )
+
     def _check_stream_id(self, stream_id: int) -> None:
         """
         Check the stream ID is one QUIC can represent (RFC 9000 section 2.1).
@@ -1402,7 +1421,9 @@ class H3Connection:
         # The QUIC layer has already reset the sending part of the stream. If
         # the stream has no state yet, it picks this up when it is created.
         stream = self._stream.get(stream_id)
-        if stream is not None:
+        if stream is None:
+            self._check_stream_creation(stream_id)
+        else:
             stream.sending_ended = True
             self._store_or_discard_stream(stream)
 
@@ -1410,6 +1431,7 @@ class H3Connection:
         stream_id = event.stream_id
         stream = self._stream.get(stream_id)
         if stream is None:
+            self._check_stream_creation(stream_id)
             stream = H3Stream(stream_id)
             # We never send on the peer's unidirectional streams, the only
             # unidirectional streams with state, and sending on a request stream
@@ -1787,6 +1809,8 @@ class H3Connection:
             raise ClosedCriticalStream("Resetting a critical stream is not allowed")
 
         stream = self._stream.get(stream_id)
+        if stream is None:
+            self._check_stream_creation(stream_id)
 
         # Header blocks on the stream will not be decoded, let the peer's
         # encoder know (RFC 9204 section 4.4.2).
