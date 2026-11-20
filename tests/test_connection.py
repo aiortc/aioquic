@@ -6029,18 +6029,42 @@ class QuicConnectionTest(QuicConnectionTestCase):
 
             self.assertIsNone(client.next_event())
 
-            # client receives another STOP_SENDING
+            # client receives another STOP_SENDING, which changes nothing
             client._handle_stop_sending_frame(
                 client_receive_context(client),
                 QuicFrameType.STOP_SENDING,
                 Buffer(data=b"\x00\x12"),
             )
+            self.assertIsNone(client.next_event())
 
-            event = client.next_event()
-            assert isinstance(event, events.StopSendingReceived)
-            self.assertEqual(event.stream_id, 0)
-            self.assertEqual(event.error_code, 0x12)
+    def test_handle_stop_sending_frame_after_fin(self) -> None:
+        with client_and_server() as (client, server):
+            client.send_stream_data(stream_id=0, data=b"hello", end_stream=True)
+            consume_events(client)
 
+            # The stream is reset, but the application already ended it.
+            client._handle_stop_sending_frame(
+                client_receive_context(client),
+                QuicFrameType.STOP_SENDING,
+                Buffer(data=b"\x00\x11"),
+            )
+            self.assertTrue(client._streams[0].sender.reset_pending)
+            self.assertIsNone(client.next_event())
+
+    def test_handle_stop_sending_frame_after_reset_stream(self) -> None:
+        with client_and_server() as (client, server):
+            client.send_stream_data(stream_id=0, data=b"hello")
+            client.reset_stream(stream_id=0, error_code=7)
+            consume_events(client)
+
+            # The application already reset the stream.
+            client._handle_stop_sending_frame(
+                client_receive_context(client),
+                QuicFrameType.STOP_SENDING,
+                Buffer(data=b"\x00\x11"),
+            )
+            frame = client._streams[0].sender.get_reset_frame()
+            self.assertEqual(frame.error_code, 7)
             self.assertIsNone(client.next_event())
 
     def test_handle_stop_sending_frame_after_reset_stream_at(self) -> None:
@@ -6050,6 +6074,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         ):
             client.send_stream_data(0, b"abcdefgh")
             client.reset_stream_at(0, 7, 3)
+            consume_events(client)
             stream = client._streams[0]
 
             # The RESET_STREAM keeps the error code of the RESET_STREAM_AT.
@@ -6062,6 +6087,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertTrue(stream.sender.reset_pending)
             frame = stream.sender.get_reset_frame()
             self.assertEqual((frame.error_code, frame.reliable_size), (7, None))
+            self.assertIsNone(client.next_event())
 
     def test_handle_stop_sending_frame_receive_only(self) -> None:
         with client_and_server() as (client, server):

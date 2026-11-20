@@ -278,6 +278,15 @@ class QuicStreamSender:
         self._stream_id = stream_id
 
     @property
+    def is_ended(self) -> bool:
+        """
+        Whether the sending part was ended, by writing its FIN or resetting it.
+
+        Unlike `is_finished`, this does not wait for the peer's acknowledgement.
+        """
+        return self._buffer_fin is not None or self._reset_error_code is not None
+
+    @property
     def next_offset(self) -> int:
         """
         The offset for the next frame to send.
