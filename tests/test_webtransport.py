@@ -9,6 +9,7 @@ from aioquic.h3.connection import (
 )
 from aioquic.h3.events import (
     DatagramReceived,
+    GoAwayReceived,
     HeadersReceived,
     WebTransportStreamDataReceived,
 )
@@ -186,6 +187,28 @@ class WebTransportTest(TestCase):
             # open.
             self.assertNotIn(stream_id, h3_server._stream)
             self.assertFalse(quic_server._streams[stream_id].sender.reset_pending)
+
+    def test_bidirectional_stream_after_goaway(self) -> None:
+        """
+        A server's GOAWAY rejects requests, not the WebTransport streams of a
+        session it accepted.
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+            h3_server = H3Connection(quic_server, enable_webtransport=True)
+
+            # Create session, then shut down.
+            session_id = self._make_session(h3_client, h3_server)
+            h3_server.send_goaway()
+            self.assertEqual(
+                h3_transfer(quic_server, h3_client), [GoAwayReceived(stream_id=4)]
+            )
+
+            # Client opens a stream above the GOAWAY's ID, server replies.
+            self._check_bidirectional_stream(h3_client, h3_server, session_id)
 
     def test_bidirectional_stream_opener_receives_reset(self) -> None:
         """

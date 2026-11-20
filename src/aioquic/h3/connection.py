@@ -425,6 +425,7 @@ class H3Stream:
     def __init__(self, stream_id: int) -> None:
         self.buffer = b""
         self.receiving_ended = False
+        self.rejected = False
         self.sending_ended = False
         self.frame_received = False
         self.frame_size: int | None = None
@@ -489,6 +490,11 @@ class H3Connection:
         # The maximum push ID received by a server, which never pushes.
         self._max_push_id: int | None = None
         self._received_goaway_id: int | None = None
+        self._sent_goaway_id: int | None = None
+
+        # The highest request stream ID whose headers a server passed to the
+        # application.
+        self._last_request_id: int | None = None
 
         self._local_control_stream_id: int | None = None
         self._local_decoder_stream_id: int | None = None
@@ -651,6 +657,49 @@ class H3Connection:
         if end_stream:
             stream.sending_ended = True
             self._store_or_discard_stream(stream)
+
+    def send_goaway(self) -> None:
+        """
+        Send a GOAWAY frame to start shutting down the connection gracefully.
+
+        The requests already passed to the application can still be answered.
+        Requests on later streams are rejected with ``H3_REQUEST_REJECTED``, so
+        that the client can retry them on another connection. The connection
+        stays open.
+
+        .. aioquic_transmit::
+
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
+            If called on a client.
+        """
+        # A client's GOAWAY carries a push ID (RFC 9114 section 5.2).
+        if self._is_client:
+            raise InvalidConnectionStateError(
+                "Cannot send GOAWAY from a client, as server push is not supported"
+            )
+
+        # The first stream after the last request passed to the application.
+        if self._last_request_id is None:
+            stream_id = 0
+        else:
+            stream_id = self._last_request_id + 4
+        self._quic.send_stream_data(
+            self._local_control_stream_id,
+            encode_frame(FrameType.GOAWAY, encode_uint_var(stream_id)),
+        )
+        self._sent_goaway_id = stream_id
+
+        # Reject the requests already received in part. Later ones are rejected
+        # as they arrive (RFC 9114 section 5.2).
+        for stream in list(self._stream.values()):
+            if (
+                stream_is_request_response(stream.stream_id)
+                and stream.stream_id >= stream_id
+                and stream.frame_received
+                and stream.session_id is None
+                and not stream.rejected
+            ):
+                self._reject_request(stream)
 
     def send_headers(
         self, stream_id: int, headers: Headers, end_stream: bool = False
@@ -1082,6 +1131,11 @@ class H3Connection:
             if stream.headers_recv_state == HeadersState.INITIAL:
                 if not interim:
                     stream.headers_recv_state = HeadersState.AFTER_HEADERS
+                if not self._is_client and (
+                    self._last_request_id is None
+                    or stream.stream_id > self._last_request_id
+                ):
+                    self._last_request_id = stream.stream_id
             else:
                 stream.headers_recv_state = HeadersState.AFTER_TRAILERS
             http_events.append(
@@ -1222,9 +1276,11 @@ class H3Connection:
         """
         http_events: list[H3Event] = []
 
-        stream.buffer += data
         if stream_ended:
             stream.receiving_ended = True
+        if stream.rejected:
+            return http_events
+        stream.buffer += data
 
         # shortcut for WEBTRANSPORT_STREAM frame fragments
         if (
@@ -1278,6 +1334,20 @@ class H3Connection:
                 except BufferReadError:
                     break
                 consumed = buf.tell()
+
+                # Requests at or above the ID of our GOAWAY are rejected (RFC 9114
+                # section 5.2). WebTransport streams are not requests.
+                if (
+                    not stream.frame_received
+                    and self._sent_goaway_id is not None
+                    and stream.stream_id >= self._sent_goaway_id
+                    and not (
+                        stream.frame_type == FrameType.WEBTRANSPORT_STREAM
+                        and self._enable_webtransport
+                    )
+                ):
+                    self._reject_request(stream)
+                    return http_events
 
                 self._check_request_frame_header(
                     stream=stream,
@@ -1585,6 +1655,19 @@ class H3Connection:
 
         if stream is not None:
             self._store_or_discard_stream(stream)
+
+    def _reject_request(self, stream: H3Stream) -> None:
+        """
+        Reject a request which was not passed to the application, so that the
+        client can retry it (RFC 9114 section 4.1.1).
+        """
+        stream.buffer = b""
+        stream.rejected = True
+        stream.sending_ended = True
+        self._quic.reset_stream(stream.stream_id, ErrorCode.H3_REQUEST_REJECTED)
+        if not stream.receiving_ended:
+            self._quic.stop_stream(stream.stream_id, ErrorCode.H3_REQUEST_REJECTED)
+        self._store_or_discard_stream(stream)
 
     def _store_or_discard_stream(self, stream: H3Stream) -> None:
         """

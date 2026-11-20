@@ -150,12 +150,29 @@ def qpack_decoder_bytes_sent(quic: QuicConnection) -> int:
 
 def send_goaway(h3: H3Connection, frame_data: bytes) -> None:
     """
-    Send a GOAWAY frame on the control stream of `h3`, which cannot send one.
+    Send a GOAWAY frame with any payload on the control stream of `h3`, as
+    another implementation could.
     """
     assert h3._local_control_stream_id is not None
     h3._quic.send_stream_data(
         h3._local_control_stream_id, encode_frame(FrameType.GOAWAY, frame_data)
     )
+
+
+def stop_sending_sent(quic: QuicConnection) -> list[int]:
+    """
+    Return the stream IDs of the STOP_SENDING frames `quic` has sent, according
+    to its qlog.
+    """
+    logger = quic.configuration.quic_logger
+    assert logger is not None
+    return [
+        frame["stream_id"]
+        for event in logger.to_dict()["traces"][0]["events"]
+        if event["name"] == "quic:packet_sent"
+        for frame in event["data"]["frames"]
+        if frame["frame_type"] == "stop_sending"
+    ]
 
 
 class H3ConnectionTest(TestCase):
@@ -2226,6 +2243,185 @@ class H3ConnectionTest(TestCase):
                 )
             self.assertNotIn(stream_id, h3_client._stream)
 
+    def test_send_goaway(self) -> None:
+        """
+        A server's GOAWAY carries the stream after the last request passed to
+        the application, and a repeated GOAWAY carries the same ID.
+        """
+        for request_count, goaway_id in [(0, 0), (2, 8)]:
+            with (
+                self.subTest(request_count=request_count),
+                h3_client_and_server() as (quic_client, quic_server),
+            ):
+                h3_client = H3Connection(quic_client)
+                h3_server = H3Connection(quic_server)
+                for _ in range(request_count):
+                    self._send_request_headers(h3_client, h3_server)
+
+                h3_server.send_goaway()
+                h3_server.send_goaway()
+                self.assertEqual(
+                    h3_transfer(quic_server, h3_client),
+                    [
+                        GoAwayReceived(stream_id=goaway_id),
+                        GoAwayReceived(stream_id=goaway_id),
+                    ],
+                )
+                self.assertIsNone(closed(quic_client))
+
+    def test_send_goaway_from_client(self) -> None:
+        """
+        A client's GOAWAY carries a push ID, so a client cannot send one without
+        server push (RFC 9114 section 5.2).
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            with self.assertRaisesMessage(
+                InvalidConnectionStateError,
+                "Cannot send GOAWAY from a client, as server push is not supported",
+            ):
+                h3_client.send_goaway()
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertIsNone(closed(quic_server))
+
+    def test_send_goaway_rejects_partial_requests(self) -> None:
+        """
+        Sending GOAWAY rejects the requests on later streams whose headers are
+        still being received (RFC 9114 section 5.2). Requests on earlier streams
+        are kept.
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            request = [
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":authority", b"localhost"),
+                (b":path", b"/"),
+            ]
+            for stream_id in (0, 4, 8):
+                h3_client.send_headers(stream_id=stream_id, headers=request)
+            transfer(quic_client, quic_server)
+
+            # The server receives streams 0 and 8 but for their last byte, and all
+            # of stream 4.
+            last_bytes = {}
+            http_events = []
+            for event in drain_events(quic_server):
+                if isinstance(event, StreamDataReceived) and event.stream_id in (0, 8):
+                    last_bytes[event.stream_id] = event.data[-1:]
+                    event = StreamDataReceived(
+                        data=event.data[:-1],
+                        end_stream=False,
+                        stream_id=event.stream_id,
+                    )
+                http_events.extend(h3_server.handle_event(event))
+            self.assertEqual(
+                http_events,
+                [HeadersReceived(headers=request, stream_id=4, stream_ended=False)],
+            )
+
+            # Only stream 8 is rejected.
+            h3_server.send_goaway()
+            transfer(quic_server, quic_client)
+            self.assertEqual(
+                [
+                    event
+                    for event in drain_events(quic_client)
+                    if isinstance(event, (StopSendingReceived, StreamReset))
+                ],
+                [
+                    StopSendingReceived(
+                        error_code=ErrorCode.H3_REQUEST_REJECTED, stream_id=8
+                    ),
+                    StreamReset(error_code=ErrorCode.H3_REQUEST_REJECTED, stream_id=8),
+                ],
+            )
+
+            # A second GOAWAY does not stop the stream again.
+            h3_server.send_goaway()
+            transfer(quic_server, quic_client)
+            self.assertEqual(stop_sending_sent(quic_server), [8])
+
+            # The rest of stream 8 is discarded, stream 0 is processed.
+            http_events = []
+            for stream_id in (0, 8):
+                http_events.extend(
+                    h3_server.handle_event(
+                        StreamDataReceived(
+                            data=last_bytes[stream_id],
+                            end_stream=False,
+                            stream_id=stream_id,
+                        )
+                    )
+                )
+            self.assertEqual(
+                http_events,
+                [HeadersReceived(headers=request, stream_id=0, stream_ended=False)],
+            )
+
+    def test_send_goaway_rejects_requests(self) -> None:
+        """
+        After sending GOAWAY, a server rejects requests on later streams in both
+        directions with H3_REQUEST_REJECTED, so that the client can retry them
+        (RFC 9114 sections 4.1.1 and 5.2).
+        """
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            # The server processes the requests on streams 0 and 4.
+            self._send_request_headers(h3_client, h3_server)
+            self._send_request_headers(h3_client, h3_server)
+            h3_server.send_goaway()
+
+            # The client sends a request before it receives the GOAWAY.
+            request = [
+                (b":method", b"GET"),
+                (b":scheme", b"https"),
+                (b":authority", b"localhost"),
+                (b":path", b"/"),
+            ]
+            h3_client.send_headers(stream_id=8, headers=request)
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            transfer(quic_server, quic_client)
+            self.assertEqual(
+                [
+                    event
+                    for event in drain_events(quic_client)
+                    if isinstance(event, (StopSendingReceived, StreamReset))
+                ],
+                [
+                    StopSendingReceived(
+                        error_code=ErrorCode.H3_REQUEST_REJECTED, stream_id=8
+                    ),
+                    StreamReset(error_code=ErrorCode.H3_REQUEST_REJECTED, stream_id=8),
+                ],
+            )
+
+            # Data the client sent before it saw the rejection is discarded,
+            # without stopping the stream again.
+            self.assertEqual(
+                h3_server.handle_event(
+                    StreamDataReceived(
+                        data=encode_frame(FrameType.DATA, b"hello"),
+                        end_stream=False,
+                        stream_id=8,
+                    )
+                ),
+                [],
+            )
+            self.assertEqual(h3_server._stream[8].buffer, b"")
+            transfer(quic_server, quic_client)
+            self.assertEqual(stop_sending_sent(quic_server), [8])
+
+            # The client's reset ends the request.
+            self.assertEqual(h3_transfer(quic_client, h3_server), [])
+            self.assertNotIn(8, h3_server._stream)
+
     def test_send_headers_after_goaway(self) -> None:
         """
         Once a client receives GOAWAY, it cannot start new requests, whatever
@@ -2246,7 +2442,12 @@ class H3ConnectionTest(TestCase):
                 stream_id = self._send_request_headers(h3_client, h3_server)
                 self.assertEqual(stream_id, 4)
 
-                send_goaway(h3_server, encode_uint_var(goaway_id))
+                # send_goaway() sends the stream after the last request. Other
+                # servers can send a higher ID, such as 2^62-4 to stop new requests.
+                if goaway_id == 8:
+                    h3_server.send_goaway()
+                else:
+                    send_goaway(h3_server, encode_uint_var(goaway_id))
                 self.assertEqual(
                     h3_transfer(quic_server, h3_client),
                     [GoAwayReceived(stream_id=goaway_id)],
