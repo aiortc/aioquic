@@ -1305,6 +1305,8 @@ class H3Connection:
             quarter_stream_id = buf.pull_uint_var()
         except BufferReadError:
             raise DatagramError("Could not parse quarter stream ID")
+        if quarter_stream_id > UINT_VAR_MAX // 4:
+            raise DatagramError("Quarter stream ID is too large")
         payload = data[buf.tell() :]
 
         # log datagram
@@ -1316,7 +1318,21 @@ class H3Connection:
                 ),
             )
 
-        return [DatagramReceived(data=payload, stream_id=quarter_stream_id * 4)]
+        # Datagrams for a stream which does not exist yet, or whose receive side
+        # has ended, are dropped (RFC 9297 section 2.1).
+        stream_id = quarter_stream_id * 4
+        stream = self._stream.get(stream_id)
+        if stream is None or stream.receiving_ended:
+            return []
+
+        # Datagrams are also dropped until the stream's headers have been received,
+        # as the request and its response define what the datagrams mean (RFC 9297
+        # section 2). This covers requests a server rejected and WebTransport
+        # streams, which never pass headers to the application.
+        if stream.headers_recv_state == HeadersState.INITIAL:
+            return []
+
+        return [DatagramReceived(data=payload, stream_id=stream_id)]
 
     def _receive_stop_sending(self, stream_id: int) -> None:
         """

@@ -29,8 +29,8 @@ class DataReceived(H3Event):
 @dataclass
 class DatagramReceived(H3Event):
     """
-    The DatagramReceived is fired whenever a datagram is received from the
-    the remote peer.
+    The DatagramReceived event is fired when a datagram is received for a stream
+    whose headers have been received and whose receive side is open.
     """
 
     data: bytes
