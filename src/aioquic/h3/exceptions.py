@@ -4,6 +4,12 @@ class H3Error(Exception):
     """
 
 
+class InvalidConnectionStateError(H3Error):
+    """
+    An action was attempted while the HTTP/3 connection was in an invalid state.
+    """
+
+
 class InvalidStreamIdError(H3Error):
     """
     A stream ID was passed which is outside the range QUIC allows, from 0 to
@@ -27,10 +33,4 @@ class InvalidStreamTypeError(H3Error):
 class NoAvailablePushIDError(H3Error):
     """
     Kept for compatibility, as server push is no longer supported.
-    """
-
-
-class GoAwayIdError(H3Error):
-    """
-    The GOAWAY ID is greater than the ID in a previous GOAWAY frame.
     """

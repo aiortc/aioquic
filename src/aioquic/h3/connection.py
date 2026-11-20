@@ -23,8 +23,8 @@ from aioquic.h3.events import (
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import (
-    GoAwayIdError,
     H3Error,
+    InvalidConnectionStateError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -677,9 +677,10 @@ class H3Connection:
             If the stream is not a request stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
             If headers are sent after the trailers, after the stream was ended or
-            reset, or on a stream the peer has not opened, if a new request is
-            started after receiving GOAWAY, or if an interim response would end
-            the stream.
+            reset, or on a stream the peer has not opened, or if an interim
+            response would end the stream.
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
+            If a new request is started after receiving GOAWAY.
         :raises ~aioquic.h3.exceptions.H3Error:
             If the peer stopped the QPACK encoder stream.
         """
@@ -688,7 +689,7 @@ class H3Connection:
         # The stream's state is only stored once the headers are sent.
         stream = self._stream.get(stream_id)
         if self._is_client and stream is None and self._received_goaway_id is not None:
-            raise InvalidStreamStateError(
+            raise InvalidConnectionStateError(
                 "Cannot initiate a new request after receiving GOAWAY"
             )
         if stream is None:
@@ -747,8 +748,8 @@ class H3Connection:
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError: If called on a
             client connection or if the ID is not a client-initiated bidirectional
             stream ID.
-        :raises ~aioquic.h3.exceptions.GoAwayIdError: If the ID increases from
-            the previous GOAWAY frame.
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError: If the ID
+            increases from the previous GOAWAY frame.
         """
         validate_stream_id(stream_id)
         if self._is_client:
@@ -763,7 +764,9 @@ class H3Connection:
             self._sent_goaway_stream_id is not None
             and stream_id > self._sent_goaway_stream_id
         ):
-            raise GoAwayIdError("GOAWAY increased the ID of a previous GOAWAY")
+            raise InvalidConnectionStateError(
+                "GOAWAY increased the ID of a previous GOAWAY"
+            )
 
         frame_data = encode_uint_var(stream_id)
         assert self._local_control_stream_id is not None
@@ -1039,10 +1042,9 @@ class H3Connection:
                 raise IdError("GOAWAY increased the ID of a previous GOAWAY")
             self._received_goaway_id = goaway_id
 
-            # Report the direction-specific ID
             if self._is_client:
                 return GoAwayReceived(stream_id=goaway_id)
-            return GoAwayReceived(push_id=goaway_id)
+            # Server push is unsupported, so do not surface client GOAWAY.
         return None
 
     def _check_content_length(self, stream: H3Stream) -> None:

@@ -31,8 +31,8 @@ from aioquic.h3.events import (
     HeadersReceived,
 )
 from aioquic.h3.exceptions import (
-    GoAwayIdError,
     H3Error,
+    InvalidConnectionStateError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -314,8 +314,9 @@ class H3ConnectionTest(TestCase):
 
     def test_handle_control_frame_goaway(self) -> None:
         """
-        Both endpoints report received GOAWAY IDs. Later GOAWAY frames may keep
-        or lower the ID, but not raise it, see RFC 9114 section 5.2.
+        Clients report server GOAWAY IDs. Servers validate client GOAWAY IDs
+        without reporting them because server push is unsupported. Later GOAWAY
+        frames may keep or lower the ID, but not raise it (RFC 9114 section 5.2).
         """
         for is_client, goaway_ids, expected_events in [
             (True, [8], [GoAwayReceived(stream_id=8)]),
@@ -328,16 +329,8 @@ class H3ConnectionTest(TestCase):
                     GoAwayReceived(stream_id=4),
                 ],
             ),
-            (False, [3], [GoAwayReceived(push_id=3)]),
-            (
-                False,
-                [3, 3, 1],
-                [
-                    GoAwayReceived(push_id=3),
-                    GoAwayReceived(push_id=3),
-                    GoAwayReceived(push_id=1),
-                ],
-            ),
+            (False, [3], []),
+            (False, [3, 3, 1], []),
         ]:
             with (
                 self.subTest(is_client=is_client, goaway_ids=goaway_ids),
@@ -2263,7 +2256,7 @@ class H3ConnectionTest(TestCase):
                 h3_client.send_goaway(0)
 
             h3_server.send_goaway(stream_id=8)
-            with self.assertRaises(GoAwayIdError):
+            with self.assertRaises(InvalidConnectionStateError):
                 h3_server.send_goaway(stream_id=12)
 
             h3_server.send_goaway(stream_id=4)
@@ -2308,7 +2301,7 @@ class H3ConnectionTest(TestCase):
 
             stream_id = quic_client.get_next_available_stream_id()
             with self.assertRaisesMessage(
-                InvalidStreamStateError,
+                InvalidConnectionStateError,
                 "Cannot initiate a new request after receiving GOAWAY",
             ):
                 h3_client.send_headers(
