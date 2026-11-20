@@ -23,7 +23,7 @@ from aioquic.h3.events import (
     WebTransportStreamDataReceived,
 )
 from aioquic.h3.exceptions import (
-    H3Error,
+    InvalidConnectionStateError,
     InvalidStreamIdError,
     InvalidStreamStateError,
     InvalidStreamTypeError,
@@ -518,14 +518,15 @@ class H3Connection:
 
         :param session_id: The WebTransport session identifier.
         :param is_unidirectional: Whether to create a unidirectional stream.
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
+            If WebTransport is not enabled.
         :raises ~aioquic.h3.exceptions.InvalidStreamIdError:
             If the session ID is out of range.
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
-            If WebTransport is not enabled, or the session ID is not a
-            client-initiated bidirectional stream.
+            If the session ID is not a client-initiated bidirectional stream.
         """
         if not self._enable_webtransport:
-            raise InvalidStreamTypeError("WebTransport is not enabled")
+            raise InvalidConnectionStateError("WebTransport is not enabled")
 
         self._check_stream_id(session_id)
 
@@ -672,7 +673,7 @@ class H3Connection:
             If headers are sent after the trailers, after the stream was ended or
             reset, or on a stream the peer has not opened, or an interim response
             would end the stream.
-        :raises ~aioquic.h3.exceptions.H3Error:
+        :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
             If the peer stopped the QPACK encoder stream.
         """
         self._check_stream_type_for_sending(stream_id)
@@ -913,7 +914,7 @@ class H3Connection:
         except StreamStateError as exc:
             # The peer stopped the stream, which closes the connection (RFC 9204
             # section 4.2).
-            raise H3Error(
+            raise InvalidConnectionStateError(
                 "Cannot send headers once the QPACK encoder stream was stopped"
             ) from exc
         return frame_data

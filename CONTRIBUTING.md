@@ -121,6 +121,11 @@ change. Skip anything a reader can trivially deduce from the diff: do not
 enumerate the modified files, restate renamed symbols, or narrate the
 changes function by function.
 
+Write plain sentences of one idea each. Leave out any caveat that would
+need more explanation to be understood. When folding further changes
+into a commit, reread its message and correct whatever the final diff no
+longer matches.
+
 Quote the RFC only where its wording matters, such as the MUST or SHOULD
 that justifies a behaviour change, and keep the quote to the relevant
 sentence. When the fix is obvious from the RFC, citing the section is
