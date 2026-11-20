@@ -58,6 +58,9 @@ Exceptions
     .. autoclass:: InvalidConnectionStateError
         :members:
 
+    .. autoclass:: InvalidErrorCodeError
+        :members:
+
     .. autoclass:: InvalidStreamIdError
         :members:
 
