@@ -1,7 +1,13 @@
 import contextlib
 
+from aioquic.buffer import UINT_VAR_MAX
 from aioquic.h0.connection import H0_ALPN, H0Connection
 from aioquic.h3.events import DataReceived, H3Event, HeadersReceived
+from aioquic.h3.exceptions import (
+    InvalidConnectionStateError,
+    InvalidStreamIdError,
+    InvalidStreamStateError,
+)
 from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import StreamDataReceived
 
@@ -31,6 +37,20 @@ def h0_transfer(
         http_events.extend(h0_receiver.handle_event(event))
         event = quic_receiver.next_event()
     return http_events
+
+
+def send_request(h0_client: H0Connection, h0_server: H0Connection) -> int:
+    """
+    Send a request from `h0_client` to `h0_server` and return its stream ID.
+    """
+    stream_id = h0_client.quic_connection.get_next_available_stream_id()
+    h0_client.send_headers(
+        stream_id=stream_id,
+        headers=[(b":method", b"GET"), (b":path", b"/")],
+        end_stream=True,
+    )
+    h0_transfer(h0_client.quic_connection, h0_server)
+    return stream_id
 
 
 class H0ConnectionTest(TestCase):
@@ -199,3 +219,76 @@ class H0ConnectionTest(TestCase):
         with h0_client_and_server() as (quic_client, quic_server):
             h0_client = H0Connection(quic_client)
             self.assertIs(h0_client.quic_connection, quic_client)
+
+    def test_send_after_connection_closed(self) -> None:
+        """
+        Once the connection is closing, headers and data are refused before
+        anything is queued. A stream ID out of range is still reported as such.
+        """
+        with h0_client_and_server() as (quic_client, quic_server):
+            h0_client = H0Connection(quic_client)
+            stream_id = quic_client.get_next_available_stream_id()
+
+            quic_client.close()
+            with self.assertRaisesMessage(
+                InvalidConnectionStateError,
+                "Cannot send once the connection is closing",
+            ):
+                h0_client.send_headers(
+                    stream_id=stream_id,
+                    headers=[(b":method", b"GET"), (b":path", b"/")],
+                )
+            with self.assertRaisesMessage(
+                InvalidConnectionStateError,
+                "Cannot send once the connection is closing",
+            ):
+                h0_client.send_data(stream_id=stream_id, data=b"", end_stream=True)
+            self.assertNotIn(stream_id, quic_client._streams)
+
+            for invalid_stream_id in (-4, UINT_VAR_MAX + 1):
+                with self.subTest(stream_id=invalid_stream_id):
+                    with self.assertRaisesMessage(
+                        InvalidStreamIdError, "Stream ID must be between 0 and 2^62 - 1"
+                    ):
+                        h0_client.send_data(
+                            stream_id=invalid_stream_id, data=b"", end_stream=True
+                        )
+
+    def test_send_on_stream_not_open(self) -> None:
+        """
+        Headers and data are refused on a stream which is not open: one the peer
+        has not opened, or one which was ended, reset, or stopped by the peer.
+        """
+        with h0_client_and_server() as (quic_client, quic_server):
+            h0_client = H0Connection(quic_client)
+            h0_server = H0Connection(quic_server)
+            ended_stream_id = send_request(h0_client, h0_server)
+            reset_stream_id = send_request(h0_client, h0_server)
+            stopped_stream_id = send_request(h0_client, h0_server)
+
+            h0_server.send_data(stream_id=ended_stream_id, data=b"", end_stream=True)
+            quic_server.reset_stream(reset_stream_id, error_code=0)
+            quic_client.stop_stream(stopped_stream_id, error_code=0)
+            h0_transfer(quic_client, h0_server)
+
+            for stream_id in (
+                quic_client.get_next_available_stream_id(),
+                ended_stream_id,
+                reset_stream_id,
+                stopped_stream_id,
+            ):
+                with self.subTest(stream_id=stream_id):
+                    with self.assertRaisesMessage(
+                        InvalidStreamStateError,
+                        "Cannot send on a stream which is not open",
+                    ):
+                        h0_server.send_headers(
+                            stream_id=stream_id, headers=[(b":status", b"200")]
+                        )
+                    with self.assertRaisesMessage(
+                        InvalidStreamStateError,
+                        "Cannot send on a stream which is not open",
+                    ):
+                        h0_server.send_data(
+                            stream_id=stream_id, data=b"hello", end_stream=True
+                        )
