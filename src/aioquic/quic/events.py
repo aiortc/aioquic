@@ -98,7 +98,8 @@ class ProtocolNegotiated(QuicEvent):
 class StopSendingReceived(QuicEvent):
     """
     The StopSendingReceived event is fired when the remote peer requests
-    stopping data transmission on a stream.
+    stopping data transmission on a stream, before the application ended the
+    stream or reset it. The stream is then reset with the peer's error code.
     """
 
     error_code: int

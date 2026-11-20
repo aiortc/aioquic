@@ -2933,11 +2933,15 @@ class QuicConnection:
         #
         # https://datatracker.ietf.org/doc/html/rfc9000#section-3.5
         stream = self._get_or_create_stream(frame_type, stream_id)
+        was_ended = stream.sender.is_ended
         stream.sender.reset(error_code=error_code)
 
-        self._events.append(
-            events.StopSendingReceived(error_code=error_code, stream_id=stream_id)
-        )
+        # Only report a stop which ends the sending part: once the application
+        # ended it, with a FIN or a reset, it has nothing left to send.
+        if not was_ended:
+            self._events.append(
+                events.StopSendingReceived(error_code=error_code, stream_id=stream_id)
+            )
 
     def _handle_stream_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
