@@ -304,6 +304,13 @@ class H3ConnectionTest(TestCase):
             h3_transfer(quic_server, h3_client)
             first_stream_id = self._send_request_headers(h3_client, h3_server)
 
+            # The server can only send datagrams once it has sent its response
+            # headers.
+            h3_server.send_headers(
+                stream_id=first_stream_id, headers=[(b":status", b"200")]
+            )
+            h3_transfer(quic_server, h3_client)
+
             # Stream IDs from 256, 65536 and 2^32 on need quarter stream IDs of
             # 2, 4 and 8 bytes. The peer's stream limit holds the last two
             # streams back, so the peer drops their datagrams, but still parses
@@ -352,6 +359,52 @@ class H3ConnectionTest(TestCase):
                         )
                     h3_transfer(sender._quic, receiver)
                     self.assertEqual(datagrams_parsed(receiver._quic), expected)
+
+    def test_datagram_capacity_before_headers(self) -> None:
+        """
+        A server cannot send datagrams until it has sent its final response
+        headers, as the client drops datagrams which arrive before them. This is
+        checked before whether datagrams are enabled.
+        """
+        for datagram in (True, False):
+            with (
+                self.subTest(datagram=datagram),
+                h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (
+                    quic_client,
+                    quic_server,
+                ),
+            ):
+                h3_client = H3Connection(quic_client, enable_webtransport=datagram)
+                h3_server = H3Connection(quic_server, enable_webtransport=datagram)
+                h3_transfer(quic_server, h3_client)
+                stream_id = self._send_request_headers(h3_client, h3_server)
+
+                # Neither before the response, nor after an interim response.
+                for headers in (None, [(b":status", b"103")]):
+                    if headers is not None:
+                        h3_server.send_headers(stream_id=stream_id, headers=headers)
+                    self.assertIsNone(h3_server.get_datagram_capacity(stream_id))
+                    with self.assertRaisesMessage(
+                        InvalidStreamStateError,
+                        "Cannot send a datagram before the headers",
+                    ):
+                        h3_server.send_datagram(stream_id=stream_id, data=b"foo")
+
+                if datagram:
+                    h3_server.send_headers(
+                        stream_id=stream_id, headers=[(b":status", b"200")]
+                    )
+                    self.assertEqual(h3_server.get_datagram_capacity(stream_id), 1157)
+
+                    # The headers are delivered first: QUIC would put a datagram
+                    # sent in the same flight ahead of them, and the client would
+                    # drop it.
+                    h3_transfer(quic_server, h3_client)
+                    h3_server.send_datagram(stream_id=stream_id, data=b"foo")
+                    self.assertEqual(
+                        h3_transfer(quic_server, h3_client),
+                        [DatagramReceived(data=b"foo", stream_id=stream_id)],
+                    )
 
     def test_datagram_capacity_not_negotiated(self) -> None:
         """

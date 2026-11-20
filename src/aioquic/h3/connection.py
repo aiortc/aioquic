@@ -627,7 +627,8 @@ class H3Connection:
         :raises ~aioquic.h3.exceptions.InvalidStreamTypeError:
             If the stream is not a client-initiated bidirectional stream.
         :raises ~aioquic.h3.exceptions.InvalidStreamStateError:
-            If the stream's send side is not open.
+            If the datagram is sent before the headers, or on a stream which is not
+            open.
         :raises ~aioquic.h3.exceptions.InvalidConnectionStateError:
             If both endpoints have not yet enabled HTTP/3 datagrams, or the peer
             does not accept QUIC datagrams or its limit is too small.
@@ -1041,6 +1042,12 @@ class H3Connection:
             raise InvalidStreamStateError(
                 "Cannot send a datagram for a stream which is not open"
             )
+
+        # Datagrams belong to a request whose semantics define them (RFC 9297
+        # section 2), and the client only learns from the response headers whether
+        # the server accepted that request.
+        if stream.headers_send_state == HeadersState.INITIAL:
+            raise InvalidStreamStateError("Cannot send a datagram before the headers")
 
         # Both endpoints must send SETTINGS_H3_DATAGRAM=1 (RFC 9297 section 2.1.1).
         for settings in (self._sent_settings, self._received_settings):
