@@ -950,7 +950,18 @@ class H3Connection:
         This is called as soon as the frame header is parsed, so that invalid
         frames are rejected without buffering their payload.
         """
-        if frame_type == FrameType.PUSH_PROMISE:
+        if (
+            self._is_client
+            and not stream_is_client_initiated(stream.stream_id)
+            and frame_type != FrameType.WEBTRANSPORT_STREAM
+        ):
+            # Server-initiated bidirectional streams are only accepted for
+            # WebTransport (RFC 9114 section 6.1), which opens them with
+            # WEBTRANSPORT_STREAM. Once it has, frames are no longer parsed.
+            raise StreamCreationError(
+                "Server-initiated bidirectional streams must be WebTransport streams"
+            )
+        elif frame_type == FrameType.PUSH_PROMISE:
             if self._is_client:
                 # We never send MAX_PUSH_ID, so any push ID is larger than the
                 # maximum push ID (RFC 9114 section 7.2.5).
@@ -1301,6 +1312,12 @@ class H3Connection:
         Handle the end of a request stream which is not conveyed by
         a DATA or HEADERS frame.
         """
+        if self._is_client and not stream_is_client_initiated(stream.stream_id):
+            # The server's stream ended before WEBTRANSPORT_STREAM, see
+            # _check_request_frame_header().
+            raise StreamCreationError(
+                "Server-initiated bidirectional streams must be WebTransport streams"
+            )
         if not self._is_client and stream.headers_recv_state == HeadersState.INITIAL:
             # The application never saw the request, so nothing would respond.
             self._abort_incomplete_request(stream.stream_id)
