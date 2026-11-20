@@ -1,6 +1,7 @@
 import contextlib
 import copy
 from typing import Any
+from unittest.mock import patch
 
 from aioquic.buffer import UINT_VAR_MAX, Buffer, encode_uint_var
 from aioquic.h3.connection import (
@@ -299,8 +300,8 @@ class H3ConnectionTest(TestCase):
         is refused.
         """
         with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client, enable_webtransport=True)
-            h3_server = H3Connection(quic_server, enable_webtransport=True)
+            h3_client = H3Connection(quic_client, enable_datagrams=True)
+            h3_server = H3Connection(quic_server, enable_datagrams=True)
             h3_transfer(quic_server, h3_client)
             first_stream_id = self._send_request_headers(h3_client, h3_server)
 
@@ -374,8 +375,8 @@ class H3ConnectionTest(TestCase):
                     quic_server,
                 ),
             ):
-                h3_client = H3Connection(quic_client, enable_webtransport=datagram)
-                h3_server = H3Connection(quic_server, enable_webtransport=datagram)
+                h3_client = H3Connection(quic_client, enable_datagrams=datagram)
+                h3_server = H3Connection(quic_server, enable_datagrams=datagram)
                 h3_transfer(quic_server, h3_client)
                 stream_id = self._send_request_headers(h3_client, h3_server)
 
@@ -419,12 +420,8 @@ class H3ConnectionTest(TestCase):
                     quic_server,
                 ),
             ):
-                h3_client = H3Connection(
-                    quic_client, enable_webtransport=client_datagram
-                )
-                h3_server = H3Connection(
-                    quic_server, enable_webtransport=server_datagram
-                )
+                h3_client = H3Connection(quic_client, enable_datagrams=client_datagram)
+                h3_server = H3Connection(quic_server, enable_datagrams=server_datagram)
                 h3_transfer(quic_server, h3_client)
                 stream_id = self._send_request_headers(h3_client, h3_server)
                 self.assertIsNone(h3_client.get_datagram_capacity(stream_id))
@@ -437,8 +434,8 @@ class H3ConnectionTest(TestCase):
 
         # The server's SETTINGS have not been received yet.
         with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client, enable_webtransport=True)
-            h3_server = H3Connection(quic_server, enable_webtransport=True)
+            h3_client = H3Connection(quic_client, enable_datagrams=True)
+            h3_server = H3Connection(quic_server, enable_datagrams=True)
             stream_id = self._send_request_headers(h3_client, h3_server)
             self.assertIsNone(h3_client.get_datagram_capacity(stream_id))
             with self.assertRaisesMessage(
@@ -463,8 +460,8 @@ class H3ConnectionTest(TestCase):
                     quic_server,
                 ),
             ):
-                h3_client = H3Connection(quic_client, enable_webtransport=datagram)
-                h3_server = H3Connection(quic_server, enable_webtransport=datagram)
+                h3_client = H3Connection(quic_client, enable_datagrams=datagram)
+                h3_server = H3Connection(quic_server, enable_datagrams=datagram)
                 h3_transfer(quic_server, h3_client)
                 ended_stream_id = self._send_request_headers(h3_client, h3_server)
                 stopped_stream_id = self._send_request_headers(h3_client, h3_server)
@@ -529,8 +526,15 @@ class H3ConnectionTest(TestCase):
                     },
                 ) as (quic_client, quic_server),
             ):
-                h3_client = H3Connection(quic_client, enable_webtransport=True)
-                h3_server = H3Connection(quic_server, enable_webtransport=True)
+                h3_client = H3Connection(quic_client, enable_datagrams=True)
+
+                # The server stands in for another implementation, which could
+                # enable HTTP/3 datagrams whatever its QUIC limit. The limit it
+                # advertised in the handshake is unchanged.
+                with patch.object(
+                    quic_server.configuration, "max_datagram_frame_size", 65535
+                ):
+                    h3_server = H3Connection(quic_server, enable_datagrams=True)
                 h3_transfer(quic_server, h3_client)
                 stream_id = self._send_request_headers(h3_client, h3_server)
                 self.assertIsNone(closed(quic_client))
@@ -588,8 +592,8 @@ class H3ConnectionTest(TestCase):
         (h3-events sections 3.7 and 3.8), and refused ones are not logged.
         """
         with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client, enable_webtransport=True)
-            h3_server = H3Connection(quic_server, enable_webtransport=True)
+            h3_client = H3Connection(quic_client, enable_datagrams=True)
+            h3_server = H3Connection(quic_server, enable_datagrams=True)
             h3_transfer(quic_server, h3_client)
             self._send_request_headers(h3_client, h3_server)
             stream_id = self._send_request_headers(h3_client, h3_server)
@@ -621,8 +625,65 @@ class H3ConnectionTest(TestCase):
                     [{"quarter_stream_id": 1, "raw": {"payload_length": 3}}],
                 )
 
+    def test_enable_datagrams(self) -> None:
+        """
+        HTTP/3 datagrams can be enabled without WebTransport, and WebTransport
+        also enables them.
+        """
+        for kwargs, webtransport in [
+            ({"enable_datagrams": True}, None),
+            ({"enable_webtransport": True}, 1),
+        ]:
+            with (
+                self.subTest(**kwargs),
+                h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (
+                    quic_client,
+                    quic_server,
+                ),
+            ):
+                h3_client = H3Connection(quic_client, **kwargs)
+                h3_server = H3Connection(quic_server, **kwargs)
+                assert h3_client.sent_settings is not None
+                self.assertEqual(h3_client.sent_settings[Setting.H3_DATAGRAM], 1)
+                self.assertEqual(
+                    h3_client.sent_settings.get(Setting.ENABLE_WEBTRANSPORT),
+                    webtransport,
+                )
+
+                h3_transfer(quic_server, h3_client)
+                stream_id = self._send_request_headers(h3_client, h3_server)
+                h3_client.send_datagram(stream_id=stream_id, data=b"foo")
+                self.assertEqual(
+                    h3_transfer(quic_client, h3_server),
+                    [DatagramReceived(data=b"foo", stream_id=stream_id)],
+                )
+
+    def test_enable_datagrams_without_quic_datagrams(self) -> None:
+        """
+        HTTP/3 datagrams, which WebTransport relies on, cannot be enabled unless
+        QUIC accepts DATAGRAM frames.
+        """
+        for max_datagram_frame_size in (None, 0):
+            for kwargs in ({"enable_datagrams": True}, {"enable_webtransport": True}):
+                with (
+                    self.subTest(
+                        max_datagram_frame_size=max_datagram_frame_size, **kwargs
+                    ),
+                    h3_client_and_server(
+                        {
+                            **QUIC_CONFIGURATION_OPTIONS,
+                            "max_datagram_frame_size": max_datagram_frame_size,
+                        }
+                    ) as (quic_client, _),
+                    self.assertRaisesMessage(
+                        ValueError,
+                        "Cannot enable HTTP/3 datagrams unless QUIC accepts datagrams",
+                    ),
+                ):
+                    H3Connection(quic_client, **kwargs)
+
     def test_enable_webtransport_positional(self) -> None:
-        with h3_client_and_server() as (quic_client, quic_server):
+        with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
             with self.assertWarns(DeprecationWarning) as cm:
                 h3_client = H3Connection(quic_client, True)  # type: ignore[call-arg]
             self.assertEqual(
@@ -643,7 +704,7 @@ class H3ConnectionTest(TestCase):
             ):
                 H3Connection(
                     quic_client,
-                    True,  # type: ignore[misc]
+                    True,  # type: ignore[call-arg]
                     enable_webtransport=False,
                 )
 
@@ -1436,8 +1497,8 @@ class H3ConnectionTest(TestCase):
                 quic_client,
                 quic_server,
             ):
-                h3_client = H3Connection(quic_client)
-                h3_server = H3Connection(quic_server)
+                h3_client = H3Connection(quic_client, enable_datagrams=True)
+                h3_server = H3Connection(quic_server, enable_datagrams=True)
                 h3_transfer(quic_server, h3_client)
 
                 # Only the type and length of the HEADERS frame arrive.
@@ -1460,8 +1521,8 @@ class H3ConnectionTest(TestCase):
                 quic_client,
                 quic_server,
             ):
-                h3_client = H3Connection(quic_client)
-                h3_server = H3Connection(quic_server)
+                h3_client = H3Connection(quic_client, enable_datagrams=True)
+                h3_server = H3Connection(quic_server, enable_datagrams=True)
                 h3_transfer(quic_server, h3_client)
 
                 # The request arrives after the server sent GOAWAY, so it is
@@ -1492,8 +1553,8 @@ class H3ConnectionTest(TestCase):
                 quic_client,
                 quic_server,
             ):
-                h3_client = H3Connection(quic_client)
-                h3_server = H3Connection(quic_server)
+                h3_client = H3Connection(quic_client, enable_datagrams=True)
+                h3_server = H3Connection(quic_server, enable_datagrams=True)
                 h3_transfer(quic_server, h3_client)
                 stream_id = self._send_request_headers(h3_client, h3_server)
 
@@ -1527,6 +1588,25 @@ class H3ConnectionTest(TestCase):
                 )
                 self.assertIsNone(closed(quic_client))
 
+    def test_handle_datagram_not_enabled(self) -> None:
+        """
+        Without HTTP/3 datagrams enabled, QUIC datagrams are ignored, even ones
+        which could not be parsed as HTTP/3 datagrams (RFC 9297 section 2.1.1).
+        """
+        with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client, enable_datagrams=True)
+            h3_server = H3Connection(quic_server)
+            h3_transfer(quic_server, h3_client)
+            stream_id = self._send_request_headers(h3_client, h3_server)
+
+            # The client's QUIC connection sends the datagrams directly.
+            for data in (encode_uint_var(stream_id // 4) + b"foo", b"\xff"):
+                with self.subTest(data=data):
+                    quic_client.send_datagram_frame(data)
+                    self.assertEqual(h3_transfer(quic_client, h3_server), [])
+                    self.assertIsNone(closed(quic_server))
+            self.assertEqual(datagrams_parsed(quic_server), [])
+
     def test_handle_datagram_quarter_stream_id_too_large(self) -> None:
         """
         A quarter stream ID above 2^60 - 1 closes the connection (RFC 9297
@@ -1543,7 +1623,7 @@ class H3ConnectionTest(TestCase):
                     quic_server,
                 ),
             ):
-                h3_server = H3Connection(quic_server)
+                h3_server = H3Connection(quic_server, enable_datagrams=True)
 
                 # The client's QUIC connection sends what H3 would refuse to.
                 quic_client.send_datagram_frame(
@@ -1559,8 +1639,8 @@ class H3ConnectionTest(TestCase):
         ended (RFC 9297 section 2.1).
         """
         with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
-            h3_client = H3Connection(quic_client)
-            h3_server = H3Connection(quic_server)
+            h3_client = H3Connection(quic_client, enable_datagrams=True)
+            h3_server = H3Connection(quic_server, enable_datagrams=True)
             h3_transfer(quic_server, h3_client)
             open_stream_id = self._send_request_headers(h3_client, h3_server)
 
@@ -1603,8 +1683,8 @@ class H3ConnectionTest(TestCase):
                     self.assertIsNone(closed(quic_server))
 
     def test_handle_datagram_truncated(self) -> None:
-        with h3_client_and_server() as (quic_client, quic_server):
-            h3_server = H3Connection(quic_server)
+        with h3_client_and_server(QUIC_DATAGRAM_OPTIONS) as (quic_client, quic_server):
+            h3_server = H3Connection(quic_server, enable_datagrams=True)
 
             # receive a datagram with a truncated quarter stream ID
             h3_server.handle_event(DatagramFrameReceived(data=b"\xff"))

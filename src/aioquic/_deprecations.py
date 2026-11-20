@@ -12,8 +12,8 @@ def deprecate_positional_argument(name: str) -> Callable[[F], F]:
     Let the decorated function accept its keyword-only argument `name`
     positionally, with a deprecation warning.
 
-    The decorated function must declare `name` as its first keyword-only
-    argument.
+    The decorated function must declare `name` as a keyword-only argument, and
+    one positional argument beyond its own is passed as `name`.
     """
 
     def decorator(func: F) -> F:
