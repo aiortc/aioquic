@@ -508,6 +508,41 @@ class WebTransportTest(TestCase):
             self.assertEqual(h3_transfer(quic_client, h3_server), [])
             self.assertIsNone(closed(quic_server))
 
+    def test_create_webtransport_stream_after_connection_closed(self) -> None:
+        """
+        Once the connection is closing, no WebTransport stream can be created. An
+        invalid session ID is still reported as such.
+        """
+        with h3_client_and_server(QUIC_CONFIGURATION_OPTIONS) as (
+            quic_client,
+            quic_server,
+        ):
+            h3_client = H3Connection(quic_client, enable_webtransport=True)
+
+            quic_client.close()
+            for is_unidirectional in (False, True):
+                with self.subTest(is_unidirectional=is_unidirectional):
+                    stream_id = quic_client.get_next_available_stream_id(
+                        is_unidirectional=is_unidirectional
+                    )
+                    with self.assertRaisesMessage(
+                        InvalidConnectionStateError,
+                        "Cannot send once the connection is closing",
+                    ):
+                        h3_client.create_webtransport_stream(
+                            0, is_unidirectional=is_unidirectional
+                        )
+                    with self.assertRaisesMessage(
+                        InvalidStreamTypeError,
+                        "WebTransport sessions can only be client-initiated "
+                        "bidirectional streams",
+                    ):
+                        h3_client.create_webtransport_stream(
+                            1, is_unidirectional=is_unidirectional
+                        )
+                    self.assertNotIn(stream_id, quic_client._streams)
+                    self.assertNotIn(stream_id, h3_client._stream)
+
     def test_create_webtransport_stream_invalid_session(self) -> None:
         """
         A session ID must be the ID of a client-initiated bidirectional stream,
