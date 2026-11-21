@@ -56,6 +56,7 @@ from aioquic.quic.packet import (
 )
 from aioquic.quic.packet_builder import QuicDeliveryState, QuicPacketBuilder
 from aioquic.quic.recovery import K_GRANULARITY, QuicPacketPacer
+from cryptography.hazmat.backends import default_backend
 
 from .utils import (
     SERVER_CACERTFILE,
@@ -3893,6 +3894,25 @@ class QuicConnectionTest(QuicConnectionTestCase):
                     break
 
             self.assertEqual(received, b"hello")
+
+    @skipIf(not default_backend().mlkem_supported(), "ML-KEM is not supported")
+    def test_connect_with_x25519mlkem768(self) -> None:
+        def patch(client: QuicConnection) -> None:
+            """
+            Patch client's TLS initialization to only offer X25519MLKEM768, whose
+            key share makes the ClientHello span two Initial packets.
+            """
+            real_initialize = client._initialize
+
+            def patched_initialize(peer_cid: bytes) -> None:
+                real_initialize(peer_cid)
+                client.tls._supported_groups = [tls.Group.X25519MLKEM768]
+
+            client._initialize = patched_initialize  # type: ignore[method-assign]
+
+        with client_and_server(client_patch=patch) as (client, server):
+            self.assertEqual(client.tls.state, tls.State.CLIENT_POST_HANDSHAKE)
+            self.assertEqual(server.tls.state, tls.State.SERVER_POST_HANDSHAKE)
 
     def test_connect_with_0rtt(self) -> None:
         client_ticket, ticket_store = self.create_session_ticket()

@@ -41,8 +41,9 @@ from aioquic.tls import (
 )
 from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, mlkem, x25519
 
 from .utils import (
     SERVER_CACERTFILE,
@@ -174,7 +175,7 @@ class ContextTest(TestCase):
     def assertClientHello(self, data: bytes) -> None:
         self.assertEqual(data[0], tls.HandshakeType.CLIENT_HELLO)
         self.assertGreaterEqual(len(data), 161)
-        self.assertLessEqual(len(data), 536)
+        self.assertLessEqual(len(data), 1347)
 
     def create_client(
         self,
@@ -1272,7 +1273,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 502)
-        self.assertLessEqual(len(client_input), 2263)
+        self.assertLessEqual(len(client_input), 3197)
 
         reset_buffers(server_buf)
 
@@ -1716,6 +1717,59 @@ class ContextTest(TestCase):
         self.assertEqual(client._dec_key, server._enc_key)
         self.assertEqual(client._enc_key, server._dec_key)
 
+    @skipIf(not default_backend().mlkem_supported(), "ML-KEM is not supported")
+    def test_handshake_with_hello_retry_request_x25519mlkem768(self) -> None:
+        """
+        A server can ask for an X25519MLKEM768 key share with a
+        HelloRetryRequest, which the client sends in its second ClientHello.
+        """
+        client = self.create_client()
+        client._supported_groups = [tls.Group.SECP521R1, tls.Group.X25519MLKEM768]
+        server = self.create_server()
+
+        # Send client hello, with only the SECP521R1 key share, which the server
+        # does not support.
+        client_buf = create_buffers()
+        with send_first_key_share_only():
+            client.handle_message(b"", client_buf)
+
+        # Handle client hello, send hello retry request for X25519MLKEM768.
+        server_buf = create_buffers()
+        server.handle_message(merge_buffers(client_buf), server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_CLIENT_HELLO)
+
+        # Handle hello retry request, send the second client hello.
+        client_hello = self._client_retry_hello(client, merge_buffers(server_buf))
+        self.assertEqual(
+            [
+                (group, len(key_share))
+                for group, key_share in pull_client_hello(
+                    Buffer(data=client_hello)
+                ).key_share
+            ],
+            [(tls.Group.X25519MLKEM768, 1216)],
+        )
+
+        # Handle the second client hello, send server hello, encrypted
+        # extensions, certificate, certificate verify, finished.
+        server_buf = create_buffers()
+        server.handle_message(client_hello, server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
+
+        # Handle server hello, encrypted extensions, certificate, certificate
+        # verify, finished. Send finished.
+        client_buf = create_buffers()
+        client.handle_message(merge_buffers(server_buf), client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+
+        # Handle finished.
+        server.handle_message(merge_buffers(client_buf), create_buffers())
+        self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
+
+        # Check keys match.
+        self.assertEqual(client._dec_key, server._enc_key)
+        self.assertEqual(client._enc_key, server._dec_key)
+
     def test_handshake_with_legacy_session_id(self) -> None:
         client = self.create_client()
         client.legacy_session_id = bytes(32)
@@ -1823,6 +1877,16 @@ class ContextTest(TestCase):
     def test_handshake_with_x25519(self) -> None:
         client = self.create_client()
         client._supported_groups = [tls.Group.X25519]
+        server = self.create_server()
+
+        try:
+            self._handshake(client, server)
+        except UnsupportedAlgorithm as exc:
+            self.skipTest(str(exc))
+
+    def test_handshake_with_x25519mlkem768(self) -> None:
+        client = self.create_client()
+        client._supported_groups = [tls.Group.X25519MLKEM768]
         server = self.create_server()
 
         try:
@@ -2157,6 +2221,86 @@ class ContextTest(TestCase):
                 self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
                 self.assertEqual(client.session_resumed, resumed)
                 self.assertEqual(epochs.count(tls.Epoch.ZERO_RTT), 1)
+
+
+@skipIf(not default_backend().mlkem_supported(), "ML-KEM is not supported")
+class KeyExchangeTest(TestCase):
+    def test_supported_groups_x25519mlkem768(self) -> None:
+        # Servers accept X25519MLKEM768, but clients do not offer it yet.
+        self.assertNotIn(
+            tls.Group.X25519MLKEM768, Context(is_client=True)._supported_groups
+        )
+        self.assertIn(
+            tls.Group.X25519MLKEM768, Context(is_client=False)._supported_groups
+        )
+
+    def test_x25519mlkem768_complete(self) -> None:
+        key_exchange = tls.KeyExchange(tls.Group.X25519MLKEM768)
+        group, key_share = key_exchange.key_share
+        self.assertEqual(group, tls.Group.X25519MLKEM768)
+        self.assertEqual(len(key_share), 1216)
+
+        # Respond as the server, using the primitives directly.
+        mlkem_shared_secret, ciphertext = mlkem.MLKEM768PublicKey.from_public_bytes(
+            key_share[:1184]
+        ).encapsulate()
+        x25519_private_key = x25519.X25519PrivateKey.generate()
+        x25519_shared_secret = x25519_private_key.exchange(
+            x25519.X25519PublicKey.from_public_bytes(key_share[1184:])
+        )
+        server_key_share = (
+            ciphertext + x25519_private_key.public_key().public_bytes_raw()
+        )
+
+        self.assertEqual(
+            key_exchange.complete(server_key_share),
+            mlkem_shared_secret + x25519_shared_secret,
+        )
+
+        for label, peer_key_share in [
+            ("too short", server_key_share[:-1]),
+            ("too long", server_key_share + b"\x00"),
+            ("short ciphertext", server_key_share[:1000]),
+            ("all-zero X25519 share", ciphertext + bytes(32)),
+        ]:
+            with self.subTest(label), self.assertRaises(ValueError):
+                key_exchange.complete(peer_key_share)
+
+    def test_x25519mlkem768_respond(self) -> None:
+        # Offer a key share as the client, using the primitives directly.
+        mlkem_private_key = mlkem.MLKEM768PrivateKey.generate()
+        x25519_private_key = x25519.X25519PrivateKey.generate()
+        client_key_share = (
+            mlkem_private_key.public_key().public_bytes_raw()
+            + x25519_private_key.public_key().public_bytes_raw()
+        )
+
+        shared_secret, (group, key_share) = tls.KeyExchange.respond(
+            tls.Group.X25519MLKEM768, client_key_share
+        )
+        self.assertEqual(group, tls.Group.X25519MLKEM768)
+        self.assertEqual(len(key_share), 1120)
+        self.assertEqual(
+            shared_secret,
+            mlkem_private_key.decapsulate(key_share[:1088])
+            + x25519_private_key.exchange(
+                x25519.X25519PublicKey.from_public_bytes(key_share[1088:])
+            ),
+        )
+
+        for label, peer_key_share in [
+            ("too short", client_key_share[:-1]),
+            ("too long", client_key_share + b"\x00"),
+            # The first coefficient is 4095, which is not reduced modulo 3329, so
+            # the encapsulation key check fails (FIPS 203 section 7.2).
+            (
+                "unreduced coefficient",
+                bytes([0xFF, client_key_share[1] | 0x0F]) + client_key_share[2:],
+            ),
+            ("all-zero X25519 share", client_key_share[:1184] + bytes(32)),
+        ]:
+            with self.subTest(label), self.assertRaises(ValueError):
+                tls.KeyExchange.respond(tls.Group.X25519MLKEM768, peer_key_share)
 
 
 class TlsTest(TestCase):
