@@ -2372,6 +2372,15 @@ class QuicConnection:
                     reason_phrase=str(exc),
                 )
 
+            # A HelloRetryRequest rejects 0-RTT (RFC 9001 section 4.6.2), so stop
+            # sending 0-RTT packets.
+            if (
+                self._is_client
+                and self.tls.hello_retry_requested
+                and self._cryptos[tls.Epoch.ZERO_RTT].send.is_valid()
+            ):
+                self._cryptos[tls.Epoch.ZERO_RTT].send.teardown()
+
             # Update the current epoch.
             if not self._handshake_complete and self.tls.state in [
                 tls.State.CLIENT_POST_HANDSHAKE,

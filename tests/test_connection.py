@@ -65,6 +65,7 @@ from .utils import (
     SKIP_TESTS,
     TestCase,
     load_cert_chain,
+    send_first_key_share_only,
 )
 
 CLIENT_ADDR = ("1.2.3.4", 1234)
@@ -207,6 +208,19 @@ def new_connection_id(
     buf.push_bytes(bytes(16))  # stateless reset token
     buf.seek(0)
     return buf
+
+
+def only_support_secp256r1(connection: QuicConnection) -> None:
+    """
+    Patch a connection's TLS initialization to only support SECP256R1.
+    """
+    real_initialize = connection._initialize
+
+    def patched_initialize(peer_cid: bytes) -> None:
+        real_initialize(peer_cid)
+        connection.tls._supported_groups = [tls.Group.SECP256R1]
+
+    connection._initialize = patched_initialize  # type: ignore[method-assign]
 
 
 @contextlib.contextmanager
@@ -3682,18 +3696,6 @@ class QuicConnectionTest(QuicConnectionTestCase):
         HelloRetryRequest, once the server has handled the second ClientHello.
         """
 
-        def server_patch(server: QuicConnection) -> None:
-            """
-            Patch server's TLS initialization to only support SECP256R1.
-            """
-            real_initialize = server._initialize
-
-            def patched_initialize(peer_cid: bytes) -> None:
-                real_initialize(peer_cid)
-                server.tls._supported_groups = [tls.Group.SECP256R1]
-
-            server._initialize = patched_initialize  # type: ignore[method-assign]
-
         client_hellos: list[tls.ClientHello] = []
         real_push_client_hello = tls.push_client_hello
 
@@ -3714,7 +3716,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 ],
             },
             handshake=False,
-            server_patch=server_patch,
+            server_patch=only_support_secp256r1,
         ) as (client, server):
             # Client sends INITIAL.
             now = 0.0
@@ -3781,6 +3783,60 @@ class QuicConnectionTest(QuicConnectionTestCase):
                     pull_quic_header(Buffer(data=data), host_cid_length=8).version,
                     QuicProtocolVersion.VERSION_2,
                 )
+
+    def test_connect_with_compatible_version_negotiation_1_to_2_and_client_retry(
+        self,
+    ) -> None:
+        """
+        The client originally connects using version 1 but prefers version 2,
+        and answers the server's HelloRetryRequest, which is in version 2.
+
+        The client sends its second ClientHello in version 1, and only switches
+        to version 2 with the ServerHello.
+        """
+
+        def versions(items: list[tuple[bytes, NetworkAddress]]) -> list[int]:
+            return [
+                pull_quic_header(Buffer(data=data), host_cid_length=8).version
+                for data, addr in items
+            ]
+
+        with client_and_server(
+            client_options={
+                "original_version": QuicProtocolVersion.VERSION_1,
+                "supported_versions": [
+                    QuicProtocolVersion.VERSION_2,
+                    QuicProtocolVersion.VERSION_1,
+                ],
+            },
+            handshake=False,
+            server_patch=only_support_secp256r1,
+        ) as (client, server):
+            # Client sends a ClientHello with only its X25519 key share.
+            now = time.time()
+            with send_first_key_share_only():
+                client.connect(SERVER_ADDR, now=now)
+            for data, addr in client.datagrams_to_send(now=now):
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+
+            # Server sends a HelloRetryRequest in version 2.
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(versions(items), [QuicProtocolVersion.VERSION_2])
+            for data, addr in items:
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            self.assertTrue(client.tls.hello_retry_requested)
+
+            # Client sends its second ClientHello in version 1.
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(versions(items), [QuicProtocolVersion.VERSION_1])
+            for data, addr in items:
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+
+            # The handshake completes in version 2.
+            roundtrip_until_done(server, client)
+            self.check_handshake(client=client, server=server)
+            self.assertEqual(client._version, QuicProtocolVersion.VERSION_2)
+            self.assertEqual(server._version, QuicProtocolVersion.VERSION_2)
 
     def test_connect_with_compatible_version_negotiation_2(self) -> None:
         """
@@ -3858,6 +3914,45 @@ class QuicConnectionTest(QuicConnectionTestCase):
             event = server.next_event()
             assert isinstance(event, events.StreamDataReceived)
             self.assertEqual(event.data, b"hello")
+
+    def test_connect_with_0rtt_and_hello_retry_request(self) -> None:
+        """
+        A HelloRetryRequest rejects 0-RTT (RFC 9001 section 4.6.2), so the client
+        stops sending 0-RTT packets, and its data is sent again in 1-RTT ones.
+        """
+        client_ticket, ticket_store = self.create_session_ticket()
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+            server_patch=only_support_secp256r1,
+            handshake=False,
+        ) as (client, server):
+            # Client sends a ClientHello with only its X25519 key share, and 0-RTT
+            # data.
+            with send_first_key_share_only():
+                client.connect(SERVER_ADDR, now=time.time())
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, b"hello")
+            self.assertTrue(client._cryptos[tls.Epoch.ZERO_RTT].send.is_valid())
+
+            # Server asks for a SECP256R1 key share, client stops sending 0-RTT.
+            roundtrip(client, server)
+            self.assertTrue(client.tls.hello_retry_requested)
+            self.assertFalse(client._cryptos[tls.Epoch.ZERO_RTT].send.is_valid())
+
+            # The handshake resumes the session, and the data arrives.
+            roundtrip_until_done(client, server)
+            self.assertEqual(client.tls.state, tls.State.CLIENT_POST_HANDSHAKE)
+            self.assertTrue(client.tls.session_resumed)
+            self.assertEqual(
+                [
+                    event.data
+                    for event in iter(server.next_event, None)
+                    if isinstance(event, events.StreamDataReceived)
+                ],
+                [b"hello"],
+            )
 
     def test_connect_with_0rtt_bad_max_early_data(self) -> None:
         client_ticket = None

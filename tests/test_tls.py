@@ -56,6 +56,7 @@ from .utils import (
     generate_ed25519_certificate,
     generate_rsa_certificate,
     load_cert_chain,
+    send_first_key_share_only,
 )
 
 # TLS treats the QUIC transport parameters as opaque data.
@@ -356,6 +357,128 @@ class ContextTest(TestCase):
                 "ServerHello has a cipher suite we did not advertise"
             ),
         )
+
+    def test_client_bad_hello_after_hello_retry_request(self) -> None:
+        """
+        The ServerHello after a HelloRetryRequest must keep its cipher suite
+        (RFC 9846 section 4.2.4) and use the requested group (RFC 9846 section
+        4.3.8).
+        """
+        cases: list[tuple[str, dict[str, Any], tls.Alert]] = [
+            (
+                "cipher suite",
+                {"cipher_suite": tls.CipherSuite.TLS_AES_128_GCM_SHA256},
+                tls.AlertIllegalParameter(
+                    "ServerHello has a cipher suite other than the HelloRetryRequest's"
+                ),
+            ),
+            (
+                "group",
+                {"key_share": (tls.Group.X25519, bytes(32))},
+                tls.AlertIllegalParameter(
+                    "ServerHello has a key share we did not advertise"
+                ),
+            ),
+        ]
+        for desc, changes, exc in cases:
+            with self.subTest(desc):
+                client = self.create_client()
+                server = self.create_server()
+                client_hello = self._client_retry_hello(
+                    client, self._client_hello_retry_request(client, server)
+                )
+                server_buf = create_buffers()
+                server.handle_message(client_hello, server_buf)
+
+                with self.assertRaisesMessage(type(exc), str(exc)):
+                    client.handle_message(
+                        modify_server_hello(merge_buffers(server_buf), **changes),
+                        create_buffers(),
+                    )
+
+    def test_client_bad_hello_retry_request(self) -> None:
+        """
+        A HelloRetryRequest may only ask for a key share in a group we offered
+        without one, or send a cookie (RFC 9846 sections 4.2.4 and 4.3.8).
+        """
+        cases: list[tuple[str, dict[str, Any], tls.Alert]] = [
+            (
+                "group not advertised",
+                {"selected_group": tls.Group.SECP384R1},
+                tls.AlertIllegalParameter(
+                    "HelloRetryRequest has a group we did not advertise"
+                ),
+            ),
+            (
+                "GREASE group",
+                {"selected_group": tls.Group.GREASE},
+                tls.AlertIllegalParameter(
+                    "HelloRetryRequest has a group we did not advertise"
+                ),
+            ),
+            (
+                "group already shared",
+                {"selected_group": tls.Group.X25519},
+                tls.AlertIllegalParameter(
+                    "HelloRetryRequest has a group we sent a key share for"
+                ),
+            ),
+            (
+                "no change",
+                {"selected_group": None},
+                tls.AlertIllegalParameter(
+                    "HelloRetryRequest does not change the ClientHello"
+                ),
+            ),
+            (
+                "pre_shared_key",
+                {"other_extensions": [(tls.ExtensionType.PRE_SHARED_KEY, bytes(2))]},
+                tls.AlertIllegalParameter(
+                    "HelloRetryRequest has a prohibited extension 0x0029"
+                ),
+            ),
+            (
+                "cipher suite not advertised",
+                {"cipher_suite": 0x1304},
+                tls.AlertIllegalParameter(
+                    "HelloRetryRequest has a cipher suite we did not advertise"
+                ),
+            ),
+        ]
+        for desc, changes, exc in cases:
+            with self.subTest(desc):
+                client = self.create_client()
+                server = self.create_server()
+                hello_retry_request = self._client_hello_retry_request(
+                    client,
+                    server,
+                    client_groups=[
+                        tls.Group.X25519,
+                        tls.Group.SECP256R1,
+                        tls.Group.GREASE,
+                    ],
+                )
+
+                with self.assertRaisesMessage(type(exc), str(exc)):
+                    client.handle_message(
+                        modify_server_hello(hello_retry_request, **changes),
+                        create_buffers(),
+                    )
+
+    def test_client_bad_hello_retry_request_twice(self) -> None:
+        """
+        A second HelloRetryRequest requires an unexpected_message alert (RFC 9846
+        section 4.2.4).
+        """
+        client = self.create_client()
+        server = self.create_server()
+        hello_retry_request = self._client_hello_retry_request(client, server)
+        self._client_retry_hello(client, hello_retry_request)
+
+        with self.assertRaisesMessage(
+            tls.AlertUnexpectedMessage, "Received a second HelloRetryRequest"
+        ):
+            client.handle_message(hello_retry_request, create_buffers())
 
     def test_client_bad_hello_compression_method(self) -> None:
         self.handshake_with_client_input_corruption(
@@ -1071,6 +1194,41 @@ class ContextTest(TestCase):
         with self.assertRaises(tls.AlertDecryptError):
             server.handle_message(server_input, server_buf)
 
+    def _client_hello_retry_request(
+        self,
+        client: Context,
+        server: Context,
+        client_groups: list[int] = [tls.Group.X25519, tls.Group.SECP256R1],
+    ) -> bytes:
+        """
+        Send the client's ClientHello with only its first key share, to a server
+        which only supports SECP256R1, and return the server's
+        HelloRetryRequest.
+        """
+        client._supported_groups = client_groups
+        server._supported_groups = [tls.Group.SECP256R1]
+
+        # Send client hello.
+        client_buf = create_buffers()
+        with send_first_key_share_only():
+            client.handle_message(b"", client_buf)
+
+        # Handle client hello, send hello retry request.
+        server_buf = create_buffers()
+        server.handle_message(merge_buffers(client_buf), server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_CLIENT_HELLO)
+        return merge_buffers(server_buf)
+
+    def _client_retry_hello(self, client: Context, hello_retry_request: bytes) -> bytes:
+        """
+        Handle a HelloRetryRequest and return the client's second ClientHello.
+        """
+        client_buf = create_buffers()
+        client.handle_message(hello_retry_request, client_buf)
+        self.assertTrue(client.hello_retry_requested)
+        self.assertEqual(client.state, State.CLIENT_EXPECT_SERVER_HELLO)
+        return merge_buffers(client_buf)
+
     def _hello_retry_request(
         self, client: Context, server: Context
     ) -> tuple[bytes, bytes]:
@@ -1495,6 +1653,69 @@ class ContextTest(TestCase):
         self.assertEqual(client._dec_key, server._enc_key)
         self.assertEqual(client._enc_key, server._dec_key)
 
+    def test_handshake_with_hello_retry_request_cookie(self) -> None:
+        """
+        The second ClientHello echoes the HelloRetryRequest's cookie, and keeps
+        its key shares if no group was selected (RFC 9846 section 4.2.2).
+        """
+        for desc, changes, groups in [
+            ("with group", {}, [tls.Group.SECP256R1]),
+            ("cookie only", {"selected_group": None}, [tls.Group.X25519]),
+        ]:
+            with self.subTest(desc):
+                client = self.create_client()
+                server = self.create_server()
+                hello_retry_request = modify_server_hello(
+                    self._client_hello_retry_request(client, server),
+                    cookie=b"cookie",
+                    **changes,
+                )
+
+                client_hello = pull_client_hello(
+                    Buffer(data=self._client_retry_hello(client, hello_retry_request))
+                )
+                self.assertEqual(client_hello.cookie, b"cookie")
+                self.assertEqual([group for group, _ in client_hello.key_share], groups)
+
+    def test_handshake_with_hello_retry_request_from_client(self) -> None:
+        """
+        A client which receives a HelloRetryRequest sends the same ClientHello
+        with a key share in the requested group (RFC 9846 section 4.2.2).
+        """
+        client = self.create_client()
+        server = self.create_server()
+        hello_retry_request = self._client_hello_retry_request(client, server)
+
+        # Handle hello retry request, send the second client hello.
+        client_hello = self._client_retry_hello(client, hello_retry_request)
+        self.assertEqual(
+            [
+                group
+                for group, _ in pull_client_hello(Buffer(data=client_hello)).key_share
+            ],
+            [tls.Group.SECP256R1],
+        )
+
+        # Handle the second client hello, send server hello, encrypted
+        # extensions, certificate, certificate verify, finished.
+        server_buf = create_buffers()
+        server.handle_message(client_hello, server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
+
+        # Handle server hello, encrypted extensions, certificate, certificate
+        # verify, finished. Send finished.
+        client_buf = create_buffers()
+        client.handle_message(merge_buffers(server_buf), client_buf)
+        self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+
+        # Handle finished.
+        server.handle_message(merge_buffers(client_buf), create_buffers())
+        self.assertEqual(server.state, State.SERVER_POST_HANDSHAKE)
+
+        # Check keys match.
+        self.assertEqual(client._dec_key, server._enc_key)
+        self.assertEqual(client._enc_key, server._dec_key)
+
     def test_handshake_with_legacy_session_id(self) -> None:
         client = self.create_client()
         client.legacy_session_id = bytes(32)
@@ -1895,6 +2116,48 @@ class ContextTest(TestCase):
         self.assertFalse(server.early_data_accepted)
         self.assertNotIn(tls.Epoch.ZERO_RTT, epochs)
 
+    def test_session_ticket_with_hello_retry_request_from_client(self) -> None:
+        """
+        After a HelloRetryRequest, the client keeps its PSK if the selected
+        cipher suite has the same hash, without early data, and drops it
+        otherwise (RFC 9846 section 4.2.4).
+        """
+        ticket = dataclasses.replace(
+            create_session_ticket(), max_early_data_size=0xFFFFFFFF
+        )
+        for desc, server_cipher_suites, resumed in [
+            ("same hash", [tls.CipherSuite.TLS_AES_256_GCM_SHA384], True),
+            ("other hash", [tls.CipherSuite.TLS_AES_128_GCM_SHA256], False),
+        ]:
+            with self.subTest(desc):
+                client = self.create_client()
+                client.session_ticket = ticket
+                epochs: list[tls.Epoch] = []
+                client.update_traffic_key_cb = lambda d, epoch, c, s: epochs.append(
+                    epoch
+                )
+                server = self.create_server(cipher_suites=server_cipher_suites)
+                server.get_session_ticket_cb = lambda label: ticket
+                hello_retry_request = self._client_hello_retry_request(client, server)
+                self.assertEqual(epochs, [tls.Epoch.ZERO_RTT])
+
+                client_hello = self._client_retry_hello(client, hello_retry_request)
+                parsed = pull_client_hello(Buffer(data=client_hello))
+                self.assertFalse(parsed.early_data)
+                self.assertEqual(parsed.pre_shared_key is not None, resumed)
+
+                # The server resumes the session if it was offered.
+                server_buf = create_buffers()
+                server.handle_message(client_hello, server_buf)
+                self.assertEqual(server.session_resumed, resumed)
+                self.assertFalse(server.early_data_accepted)
+
+                client_buf = create_buffers()
+                client.handle_message(merge_buffers(server_buf), client_buf)
+                self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
+                self.assertEqual(client.session_resumed, resumed)
+                self.assertEqual(epochs.count(tls.Epoch.ZERO_RTT), 1)
+
 
 class TlsTest(TestCase):
     def test_cipher_suite_aliases(self) -> None:
@@ -1927,6 +2190,28 @@ class TlsTest(TestCase):
             tls.HELLO_RETRY_REQUEST_RANDOM,
             hashlib.sha256(b"HelloRetryRequest").digest(),
         )
+
+    def test_pull_server_hello_with_hello_retry_request(self) -> None:
+        """
+        A HelloRetryRequest's key_share only has the selected group, and it may
+        have a cookie (RFC 9846 section 4.2.4).
+        """
+        hello = ServerHello(
+            random=tls.HELLO_RETRY_REQUEST_RANDOM,
+            legacy_session_id=b"",
+            cipher_suite=tls.CipherSuite.TLS_AES_128_GCM_SHA256,
+            compression_method=tls.CompressionMethod.NULL,
+            cookie=b"cookie",
+            selected_group=tls.Group.SECP256R1,
+            supported_version=tls.TLS_VERSION_1_3,
+        )
+        buf = Buffer(capacity=256)
+        push_server_hello(buf, hello)
+        self.assertEqual(pull_server_hello(Buffer(data=buf.data)), hello)
+
+        # The cookie must not be empty.
+        with self.assertRaisesMessage(tls.AlertDecodeError, "cookie is empty"):
+            pull_server_hello(Buffer(data=modify_server_hello(buf.data, cookie=b"")))
 
     def test_pull_block_incomplete_read(self) -> None:
         """
