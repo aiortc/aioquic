@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import replace
 from typing import Any
 from unittest import skipIf
+from unittest.mock import patch
 
 from aioquic import tls
 from aioquic.buffer import UINT_VAR_MAX, Buffer, encode_uint_var
@@ -3457,6 +3458,25 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.assertEqual(event.data, bytes(2500))
             self.assertTrue(event.end_stream)
 
+    def test_connect_with_hello_retry_and_different_transport_parameters(
+        self,
+    ) -> None:
+        """
+        The ClientHello after a HelloRetryRequest must have the same transport
+        parameters as the first one (RFC 9846 section 4.2.2).
+        """
+        with self._connect_with_hello_retry_request(
+            other_extensions=[(tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS, b"")]
+        ) as (client, server, hello_retry_request):
+            self.assertEqual(
+                server._close_event,
+                events.ConnectionTerminated(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=QuicFrameType.CRYPTO,
+                    reason_phrase="ClientHello has different transport parameters",
+                ),
+            )
+
     def test_connect_with_legacy_session_id(self) -> None:
         def patch_with(legacy_session_id: bytes) -> Callable[[QuicConnection], None]:
             def patch(client: QuicConnection) -> None:
@@ -3649,6 +3669,118 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.check_handshake(client=client, server=server)
             self.assertEqual(client._version, QuicProtocolVersion.VERSION_2)
             self.assertEqual(server._version, QuicProtocolVersion.VERSION_2)
+
+    @contextlib.contextmanager
+    def _connect_with_hello_retry_request(
+        self, **second_client_hello_changes: Any
+    ) -> Iterator[tuple[QuicConnection, QuicConnection, list[bytes]]]:
+        """
+        Connect a client which originally uses version 1 but prefers version 2,
+        to a server which asks for another key share with a HelloRetryRequest.
+
+        Yield the client, the server and the datagrams which carry the
+        HelloRetryRequest, once the server has handled the second ClientHello.
+        """
+
+        def server_patch(server: QuicConnection) -> None:
+            """
+            Patch server's TLS initialization to only support SECP256R1.
+            """
+            real_initialize = server._initialize
+
+            def patched_initialize(peer_cid: bytes) -> None:
+                real_initialize(peer_cid)
+                server.tls._supported_groups = [tls.Group.SECP256R1]
+
+            server._initialize = patched_initialize  # type: ignore[method-assign]
+
+        client_hellos: list[tls.ClientHello] = []
+        real_push_client_hello = tls.push_client_hello
+
+        def push_client_hello(buf: Buffer, hello: tls.ClientHello) -> None:
+            """
+            Only send the client's first key share, which is X25519.
+            """
+            hello = replace(hello, key_share=hello.key_share[:1])
+            client_hellos.append(hello)
+            real_push_client_hello(buf, hello)
+
+        with client_and_server(
+            client_options={
+                "original_version": QuicProtocolVersion.VERSION_1,
+                "supported_versions": [
+                    QuicProtocolVersion.VERSION_2,
+                    QuicProtocolVersion.VERSION_1,
+                ],
+            },
+            handshake=False,
+            server_patch=server_patch,
+        ) as (client, server):
+            # Client sends INITIAL.
+            now = 0.0
+            with patch("aioquic.tls.push_client_hello", push_client_hello):
+                client.connect(SERVER_ADDR, now=now)
+            for data, addr in client.datagrams_to_send(now=now):
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+
+            # Server sends a HelloRetryRequest.
+            hello_retry_request = [
+                data for data, addr in server.datagrams_to_send(now=now)
+            ]
+            self.assertEqual(server.tls.state, tls.State.SERVER_EXPECT_CLIENT_HELLO)
+
+            # The client cannot answer a HelloRetryRequest yet, so send its second
+            # ClientHello, with the requested key share, directly. It still uses
+            # version 1, which the server must accept (RFC 9369 section 4.1).
+            buf = Buffer(capacity=4096)
+            tls.push_client_hello(
+                buf,
+                replace(
+                    client_hellos[0],
+                    key_share=[
+                        client.tls._key_exchanges[tls.Group.SECP256R1].key_share
+                    ],
+                    **second_client_hello_changes,
+                ),
+            )
+            client._crypto_streams[tls.Epoch.INITIAL].sender.write(buf.data)
+            for data, addr in client.datagrams_to_send(now=now):
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+
+            yield client, server, hello_retry_request
+
+    def test_connect_with_compatible_version_negotiation_1_to_2_and_hello_retry(
+        self,
+    ) -> None:
+        """
+        The client originally connects using version 1 but prefers version 2,
+        and the server asks for another key share with a HelloRetryRequest.
+
+        The server sets the Negotiated Version to version 2 before it sends the
+        HelloRetryRequest, as it sends all CRYPTO data in the Negotiated Version
+        (RFC 9369 section 4.1).
+        """
+        with self._connect_with_hello_retry_request() as (
+            client,
+            server,
+            hello_retry_request,
+        ):
+            self.assertEqual(
+                [
+                    pull_quic_header(Buffer(data=data), host_cid_length=8).version
+                    for data in hello_retry_request
+                ],
+                [QuicProtocolVersion.VERSION_2],
+            )
+
+            # Server sends its ServerHello in version 2.
+            self.assertEqual(server.tls.state, tls.State.SERVER_EXPECT_FINISHED)
+            self.assertEqual(server._version, QuicProtocolVersion.VERSION_2)
+            for data, addr in server.datagrams_to_send(now=0.0):
+                self.assertEqual(
+                    pull_quic_header(Buffer(data=data), host_cid_length=8).version,
+                    QuicProtocolVersion.VERSION_2,
+                )
 
     def test_connect_with_compatible_version_negotiation_2(self) -> None:
         """

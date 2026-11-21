@@ -41,6 +41,11 @@ from .buffer import Buffer, BufferReadError
 TLS_VERSION_1_2 = 0x0303
 TLS_VERSION_1_3 = 0x0304
 
+# A HelloRetryRequest is a ServerHello with this random (RFC 9846 section 4.2.3).
+HELLO_RETRY_REQUEST_RANDOM = bytes.fromhex(
+    "cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c"
+)
+
 CLIENT_CONTEXT_STRING = b"TLS 1.3, client CertificateVerify"
 SERVER_CONTEXT_STRING = b"TLS 1.3, server CertificateVerify"
 
@@ -1486,6 +1491,11 @@ class Context:
 
         self._key_exchanges: dict[int, KeyExchange] = {}
 
+        # The group a HelloRetryRequest asked for, and the messages which start
+        # the transcript in place of the first ClientHello (RFC 9846 section 4.1).
+        self._hello_retry_group: int | None = None
+        self._hello_retry_transcript = b""
+
         if is_client:
             self.client_random = os.urandom(32)
             self.legacy_session_id = b""
@@ -2173,6 +2183,43 @@ class Context:
                 AlertNoApplicationProtocol("ClientHello has no common ALPN protocol"),
             )
 
+        # Select the key share to use.
+        if self._hello_retry_group is None:
+            # Use the client's first key share in a group we support.
+            for peer_group, peer_key_share in peer_hello.key_share:
+                if peer_group in self._supported_groups:
+                    break
+            else:
+                # Failing that, ask for a key share in the client's first group
+                # which we support (RFC 9846 section 4.2.1).
+                for group in peer_hello.supported_groups:
+                    if group in self._supported_groups:
+                        self._server_send_hello_retry_request(
+                            initial_buf,
+                            cipher_suite=cipher_suite,
+                            client_hello=input_buf.data,
+                            group=group,
+                            legacy_session_id=peer_hello.legacy_session_id,
+                            supported_version=supported_version,
+                        )
+                        return
+                raise AlertHandshakeFailure("ClientHello has no supported key share")
+        else:
+            # After a HelloRetryRequest, the client must send a single key share,
+            # in the requested group, and no early data (RFC 9846 section 4.2.2).
+            if [group for group, _ in peer_hello.key_share] != [
+                self._hello_retry_group
+            ]:
+                raise AlertIllegalParameter(
+                    "ClientHello does not have a single key share in the requested "
+                    "group"
+                )
+            if peer_hello.early_data:
+                raise AlertIllegalParameter(
+                    "ClientHello has early data after a HelloRetryRequest"
+                )
+            peer_group, peer_key_share = peer_hello.key_share[0]
+
         # notify application
         if self.alpn_cb:
             self.alpn_cb(self.alpn_negotiated)
@@ -2207,6 +2254,7 @@ class Context:
                     hash_offset + 3, hash_offset + 3 + binder_length
                 )
 
+                self.key_schedule.update_hash(self._hello_retry_transcript)
                 self.key_schedule.update_hash(input_buf.data_slice(0, hash_offset))
                 expected_binder = self.key_schedule.finished_verify_data(binder_key)
 
@@ -2239,14 +2287,10 @@ class Context:
         if pre_shared_key is None:
             self.key_schedule = KeySchedule(cipher_suite)
             self.key_schedule.extract(None)
+            self.key_schedule.update_hash(self._hello_retry_transcript)
             self.key_schedule.update_hash(input_buf.data)
 
         # Perform key exchange.
-        for peer_group, peer_key_share in peer_hello.key_share:
-            if peer_group in self._supported_groups:
-                break
-        else:
-            raise AlertHandshakeFailure("ClientHello has no supported key share")
         try:
             shared_key, key_share = KeyExchange.respond(peer_group, peer_key_share)
         except ValueError:
@@ -2344,6 +2388,48 @@ class Context:
             self._set_state(State.SERVER_EXPECT_CERTIFICATE)
         else:
             self._server_expect_finished()
+
+    def _server_send_hello_retry_request(
+        self,
+        output_buf: Buffer,
+        *,
+        cipher_suite: CipherSuite,
+        client_hello: bytes,
+        group: int,
+        legacy_session_id: bytes,
+        supported_version: int,
+    ) -> None:
+        if self.__logger:
+            self.__logger.debug(
+                "TLS sending HelloRetryRequest for group %s", Group(group).name
+            )
+
+        start = output_buf.tell()
+        push_server_hello(
+            output_buf,
+            ServerHello(
+                random=HELLO_RETRY_REQUEST_RANDOM,
+                legacy_session_id=legacy_session_id,
+                cipher_suite=cipher_suite,
+                compression_method=CompressionMethod.NULL,
+                supported_version=supported_version,
+                other_extensions=[
+                    (ExtensionType.KEY_SHARE, group.to_bytes(2, byteorder="big"))
+                ],
+            ),
+        )
+
+        # The transcript starts again with a hash of the first ClientHello, then
+        # the HelloRetryRequest (RFC 9846 section 4.1).
+        digest = hashes.Hash(cipher_suite_hash(cipher_suite))
+        digest.update(client_hello)
+        client_hello_hash = digest.finalize()
+        self._hello_retry_group = group
+        self._hello_retry_transcript = (
+            bytes([HandshakeType.MESSAGE_HASH, 0, 0, len(client_hello_hash)])
+            + client_hello_hash
+            + output_buf.data_slice(start, output_buf.tell())
+        )
 
     def _server_handle_certificate(self, input_buf: Buffer) -> None:
         certificate = pull_certificate(input_buf)
