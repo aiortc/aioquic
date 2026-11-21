@@ -1452,9 +1452,12 @@ class Context:
             self._signature_algorithms.append(SignatureAlgorithm.ED25519)
         if default_backend().ed448_supported():
             self._signature_algorithms.append(SignatureAlgorithm.ED448)
-        self._supported_groups = [Group.SECP256R1, Group.SECP384R1]
+        # In order of preference: X25519 is the most common choice, and the
+        # hardest to implement wrongly. X448 comes last as few peers support it.
+        self._supported_groups: list[int] = []
         if default_backend().x25519_supported():
             self._supported_groups.append(Group.X25519)
+        self._supported_groups += [Group.SECP256R1, Group.SECP384R1]
         if default_backend().x448_supported():
             self._supported_groups.append(Group.X448)
         self._supported_versions = [TLS_VERSION_1_3]
