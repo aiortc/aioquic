@@ -667,6 +667,7 @@ class ClientHello:
 
     # extensions
     alpn_protocols: list[str] | None = None
+    cookie: bytes | None = None
     early_data: bool = False
     key_share: list[KeyShareEntry] | None = None
     pre_shared_key: OfferedPsks | None = None
@@ -677,6 +678,14 @@ class ClientHello:
     supported_versions: list[int] | None = None
 
     other_extensions: list[Extension] = field(default_factory=list)
+
+
+def pull_cookie(buf: Buffer) -> bytes:
+    cookie = pull_opaque(buf, 2)
+    # An out-of-range length requires a decode_error (RFC 9846 section 6).
+    if not cookie:
+        raise AlertDecodeError("cookie is empty")
+    return cookie
 
 
 def pull_handshake_type(buf: Buffer, expected_type: HandshakeType) -> None:
@@ -740,6 +749,8 @@ def pull_client_hello(buf: Buffer) -> ClientHello:
                 hello.alpn_protocols = pull_list(
                     buf, 2, partial(pull_alpn_protocol, buf)
                 )
+            elif extension_type == ExtensionType.COOKIE:
+                hello.cookie = pull_cookie(buf)
             elif extension_type == ExtensionType.EARLY_DATA:
                 hello.early_data = True
             elif extension_type == ExtensionType.PRE_SHARED_KEY:
@@ -792,6 +803,10 @@ def push_client_hello(buf: Buffer, hello: ClientHello) -> None:
                         buf, 2, partial(push_alpn_protocol, buf), hello.alpn_protocols
                     )
 
+            if hello.cookie is not None:
+                with push_extension(buf, ExtensionType.COOKIE):
+                    push_opaque(buf, 2, hello.cookie)
+
             for extension_type, extension_value in hello.other_extensions:
                 with push_extension(buf, extension_type):
                     buf.push_bytes(extension_value)
@@ -814,8 +829,10 @@ class ServerHello:
     compression_method: int
 
     # extensions
+    cookie: bytes | None = None
     key_share: KeyShareEntry | None = None
     pre_shared_key: int | None = None
+    selected_group: int | None = None
     supported_version: int | None = None
     other_extensions: list[tuple[int, bytes]] = field(default_factory=list)
 
@@ -835,13 +852,25 @@ def pull_server_hello(buf: Buffer) -> ServerHello:
             compression_method=buf.pull_uint8(),
         )
 
+        # A HelloRetryRequest has different extensions (RFC 9846 section 4.2.4):
+        # key_share only has the selected group, and a cookie may be sent.
+        is_hello_retry_request = hello.random == HELLO_RETRY_REQUEST_RANDOM
+
         # extensions
         def pull_extension(extension_type: int, extension_length: int) -> None:
             if extension_type == ExtensionType.SUPPORTED_VERSIONS:
                 hello.supported_version = buf.pull_uint16()
             elif extension_type == ExtensionType.KEY_SHARE:
-                hello.key_share = pull_key_share(buf)
-            elif extension_type == ExtensionType.PRE_SHARED_KEY:
+                if is_hello_retry_request:
+                    hello.selected_group = buf.pull_uint16()
+                else:
+                    hello.key_share = pull_key_share(buf)
+            elif extension_type == ExtensionType.COOKIE and is_hello_retry_request:
+                hello.cookie = pull_cookie(buf)
+            elif (
+                extension_type == ExtensionType.PRE_SHARED_KEY
+                and not is_hello_retry_request
+            ):
                 hello.pre_shared_key = buf.pull_uint16()
             else:
                 hello.other_extensions.append(
@@ -872,6 +901,14 @@ def push_server_hello(buf: Buffer, hello: ServerHello) -> None:
             if hello.key_share is not None:
                 with push_extension(buf, ExtensionType.KEY_SHARE):
                     push_key_share(buf, hello.key_share)
+
+            if hello.selected_group is not None:
+                with push_extension(buf, ExtensionType.KEY_SHARE):
+                    buf.push_uint16(hello.selected_group)
+
+            if hello.cookie is not None:
+                with push_extension(buf, ExtensionType.COOKIE):
+                    push_opaque(buf, 2, hello.cookie)
 
             if hello.pre_shared_key is not None:
                 with push_extension(buf, ExtensionType.PRE_SHARED_KEY):
@@ -1299,6 +1336,21 @@ def cipher_suite_hash(cipher_suite: CipherSuite) -> hashes.HashAlgorithm:
     return CIPHER_SUITES[cipher_suite]()
 
 
+def hello_retry_transcript(
+    client_hello_hash: bytes, hello_retry_request: bytes
+) -> bytes:
+    """
+    Return the messages which start the transcript after a HelloRetryRequest:
+    a message_hash of the first ClientHello, then the HelloRetryRequest
+    (RFC 9846 section 4.1).
+    """
+    return (
+        bytes([HandshakeType.MESSAGE_HASH, 0, 0, len(client_hello_hash)])
+        + client_hello_hash
+        + hello_retry_request
+    )
+
+
 def negotiate(
     supported: list[T], offered: list[Any] | None, exc: Alert | None = None
 ) -> T:
@@ -1489,11 +1541,12 @@ class Context:
         self._dec_key: bytes | None = None
         self.__logger = logger
 
+        self._client_hello: ClientHello | None = None
         self._key_exchanges: dict[int, KeyExchange] = {}
 
-        # The group a HelloRetryRequest asked for, and the messages which start
+        # The HelloRetryRequest sent or received, and the messages which start
         # the transcript in place of the first ClientHello (RFC 9846 section 4.1).
-        self._hello_retry_group: int | None = None
+        self._hello_retry_request: ServerHello | None = None
         self._hello_retry_transcript = b""
 
         if is_client:
@@ -1504,6 +1557,14 @@ class Context:
             self.client_random = None
             self.legacy_session_id = None
             self.state = State.SERVER_EXPECT_CLIENT_HELLO
+
+    @property
+    def hello_retry_requested(self) -> bool:
+        """
+        Returns True if the server asked for another ClientHello with a
+        HelloRetryRequest.
+        """
+        return self._hello_retry_request is not None
 
     @property
     def peer_certificates(self) -> list[x509.Certificate]:
@@ -1749,18 +1810,43 @@ class Context:
             supported_versions=self._supported_versions,
             other_extensions=self.handshake_extensions,
         )
+        if (
+            self.session_ticket
+            and self.session_ticket.is_valid
+            and self.session_ticket.max_early_data_size is not None
+        ):
+            hello.early_data = True
+            self._early_data_offered = True
+
+        self._client_push_hello(output_buf, hello)
+        self._set_state(State.CLIENT_EXPECT_SERVER_HELLO)
+
+    def _client_push_hello(self, output_buf: Buffer, hello: ClientHello) -> None:
+        """
+        Send a ClientHello, with our PSK unless a HelloRetryRequest selected a
+        cipher suite with another hash (RFC 9846 section 4.2.4).
+        """
+        if self._hello_retry_request is None:
+            cipher_suites = self._cipher_suites
+        else:
+            cipher_suites = [CipherSuite(self._hello_retry_request.cipher_suite)]
 
         # PSK
-        if self.session_ticket and self.session_ticket.is_valid:
+        hello.pre_shared_key = None
+        self._key_schedule_psk = None
+        if (
+            self.session_ticket
+            and self.session_ticket.is_valid
+            and (
+                self._hello_retry_request is None
+                or cipher_suite_hash(self.session_ticket.cipher_suite).name
+                == cipher_suite_hash(cipher_suites[0]).name
+            )
+        ):
             self._key_schedule_psk = KeySchedule(self.session_ticket.cipher_suite)
             self._key_schedule_psk.extract(self.session_ticket.resumption_secret)
             binder_key = self._key_schedule_psk.derive_secret(b"res binder")
             binder_length = self._key_schedule_psk.algorithm.digest_size
-
-            # update hello
-            if self.session_ticket.max_early_data_size is not None:
-                hello.early_data = True
-                self._early_data_offered = True
             hello.pre_shared_key = OfferedPsks(
                 identities=[
                     (self.session_ticket.ticket, self.session_ticket.obfuscated_age)
@@ -1768,8 +1854,9 @@ class Context:
                 binders=[bytes(binder_length)],
             )
 
-        self._key_schedule_proxy = KeyScheduleProxy(self._cipher_suites)
+        self._key_schedule_proxy = KeyScheduleProxy(cipher_suites)
         self._key_schedule_proxy.extract(None)
+        self._key_schedule_proxy.update_hash(self._hello_retry_transcript)
 
         with push_message(self._key_schedule_proxy, output_buf):
             hello_start = output_buf.tell()
@@ -1783,6 +1870,7 @@ class Context:
                 # placeholder (RFC 9846 section 4.3.11.2).
                 binder_start = output_buf.tell() - binder_length
                 binders_start = binder_start - 3
+                self._key_schedule_psk.update_hash(self._hello_retry_transcript)
                 self._key_schedule_psk.update_hash(
                     output_buf.data_slice(hello_start, binders_start)
                 )
@@ -1803,10 +1891,18 @@ class Context:
                         early_key,
                     )
 
-        self._set_state(State.CLIENT_EXPECT_SERVER_HELLO)
+        self._client_hello = hello
 
     def _client_handle_hello(self, input_buf: Buffer, output_buf: Buffer) -> None:
         peer_hello = pull_server_hello(input_buf)
+
+        # A HelloRetryRequest is a ServerHello with a special random, and both
+        # are checked the same way (RFC 9846 section 4.2.4).
+        is_hello_retry_request = peer_hello.random == HELLO_RETRY_REQUEST_RANDOM
+        if is_hello_retry_request:
+            hello_name = "HelloRetryRequest"
+        else:
+            hello_name = "ServerHello"
 
         # A cipher suite we did not offer requires an illegal_parameter alert
         # (RFC 9846 section 4.2.3).
@@ -1814,38 +1910,54 @@ class Context:
             self._cipher_suites,
             [peer_hello.cipher_suite],
             AlertIllegalParameter(
-                "ServerHello has a cipher suite we did not advertise"
+                f"{hello_name} has a cipher suite we did not advertise"
             ),
         )
         if peer_hello.compression_method not in self._legacy_compression_methods:
             raise AlertIllegalParameter(
-                "ServerHello has a compression method we did not advertise"
+                f"{hello_name} has a compression method we did not advertise"
             )
         # The server must echo our legacy_session_id (RFC 9846 section 4.2.3).
         if peer_hello.legacy_session_id != self.legacy_session_id:
             raise AlertIllegalParameter(
-                "ServerHello has a legacy_session_id we did not send"
+                f"{hello_name} has a legacy_session_id we did not send"
             )
         if peer_hello.supported_version not in self._supported_versions:
             raise AlertIllegalParameter(
-                "ServerHello has a version we did not advertise"
+                f"{hello_name} has a version we did not advertise"
+            )
+
+        # Every extension the message may carry has been parsed, so any other one
+        # is either in the wrong message or unsolicited (RFC 9846 section 4.3).
+        for extension_type, _ in peer_hello.other_extensions:
+            if extension_type in list(ExtensionType):
+                raise AlertIllegalParameter(
+                    f"{hello_name} has a prohibited extension {extension_type:#06x}"
+                )
+            raise AlertUnsupportedExtension(
+                f"{hello_name} has an unsolicited extension {extension_type:#06x}"
+            )
+
+        if is_hello_retry_request:
+            self._client_handle_hello_retry_request(
+                peer_hello, cipher_suite, input_buf, output_buf
+            )
+            return
+
+        # After a HelloRetryRequest, the cipher suite must not change (RFC 9846
+        # section 4.2.4).
+        if (
+            self._hello_retry_request is not None
+            and cipher_suite != self._hello_retry_request.cipher_suite
+        ):
+            raise AlertIllegalParameter(
+                "ServerHello has a cipher suite other than the HelloRetryRequest's"
             )
 
         # We only offer (EC)DHE key exchange, so the server must send a key share
         # (RFC 9846 section 9.2).
         if peer_hello.key_share is None:
             raise AlertMissingExtension("ServerHello has no key share")
-
-        # Every extension a ServerHello may carry has been parsed, so any other one
-        # is either in the wrong message or unsolicited (RFC 9846 section 4.3).
-        for extension_type, _ in peer_hello.other_extensions:
-            if extension_type in list(ExtensionType):
-                raise AlertIllegalParameter(
-                    f"ServerHello has a prohibited extension {extension_type:#06x}"
-                )
-            raise AlertUnsupportedExtension(
-                f"ServerHello has an unsolicited extension {extension_type:#06x}"
-            )
 
         # If the server accepted our PSK, keep its key schedule. The server may
         # select any cipher suite with the PSK's hash (RFC 9846 section 4.3.11):
@@ -1893,6 +2005,60 @@ class Context:
         )
 
         self._set_state(State.CLIENT_EXPECT_ENCRYPTED_EXTENSIONS)
+
+    def _client_handle_hello_retry_request(
+        self,
+        peer_hello: ServerHello,
+        cipher_suite: CipherSuite,
+        input_buf: Buffer,
+        output_buf: Buffer,
+    ) -> None:
+        # Only one HelloRetryRequest is allowed (RFC 9846 section 4.2.4).
+        if self._hello_retry_request is not None:
+            raise AlertUnexpectedMessage("Received a second HelloRetryRequest")
+
+        # The server may ask for a key share in a group we offered without one
+        # (RFC 9846 section 4.3.8), and it must ask for some change.
+        hello = self._client_hello
+        group = peer_hello.selected_group
+        if group is not None:
+            if group not in self._supported_groups or group == Group.GREASE:
+                raise AlertIllegalParameter(
+                    "HelloRetryRequest has a group we did not advertise"
+                )
+            if group in [g for g, _ in hello.key_share]:
+                raise AlertIllegalParameter(
+                    "HelloRetryRequest has a group we sent a key share for"
+                )
+        elif peer_hello.cookie is None:
+            raise AlertIllegalParameter(
+                "HelloRetryRequest does not change the ClientHello"
+            )
+
+        if self.__logger:
+            self.__logger.debug(
+                "TLS received HelloRetryRequest for group %s",
+                Group(group).name if group is not None else None,
+            )
+
+        # The transcript starts again with a hash of the first ClientHello, then
+        # the HelloRetryRequest.
+        self._hello_retry_request = peer_hello
+        self._hello_retry_transcript = hello_retry_transcript(
+            self._key_schedule_proxy.select(cipher_suite).hash.copy().finalize(),
+            input_buf.data,
+        )
+
+        # Send the same ClientHello, with a key share in the selected group, the
+        # cookie, and without early data (RFC 9846 section 4.2.2).
+        if group is not None:
+            key_exchange = KeyExchange(group)
+            self._key_exchanges = {group: key_exchange}
+            hello.key_share = [key_exchange.key_share]
+        hello.cookie = peer_hello.cookie
+        hello.early_data = False
+        self._early_data_offered = False
+        self._client_push_hello(output_buf, hello)
 
     def _client_handle_encrypted_extensions(self, input_buf: Buffer) -> None:
         encrypted_extensions = pull_encrypted_extensions(input_buf)
@@ -2184,7 +2350,7 @@ class Context:
             )
 
         # Select the key share to use.
-        if self._hello_retry_group is None:
+        if self._hello_retry_request is None:
             # Use the client's first key share in a group we support.
             for peer_group, peer_key_share in peer_hello.key_share:
                 if peer_group in self._supported_groups:
@@ -2208,7 +2374,7 @@ class Context:
             # After a HelloRetryRequest, the client must send a single key share,
             # in the requested group, and no early data (RFC 9846 section 4.2.2).
             if [group for group, _ in peer_hello.key_share] != [
-                self._hello_retry_group
+                self._hello_retry_request.selected_group
             ]:
                 raise AlertIllegalParameter(
                     "ClientHello does not have a single key share in the requested "
@@ -2404,31 +2570,21 @@ class Context:
                 "TLS sending HelloRetryRequest for group %s", Group(group).name
             )
 
-        start = output_buf.tell()
-        push_server_hello(
-            output_buf,
-            ServerHello(
-                random=HELLO_RETRY_REQUEST_RANDOM,
-                legacy_session_id=legacy_session_id,
-                cipher_suite=cipher_suite,
-                compression_method=CompressionMethod.NULL,
-                supported_version=supported_version,
-                other_extensions=[
-                    (ExtensionType.KEY_SHARE, group.to_bytes(2, byteorder="big"))
-                ],
-            ),
+        self._hello_retry_request = ServerHello(
+            random=HELLO_RETRY_REQUEST_RANDOM,
+            legacy_session_id=legacy_session_id,
+            cipher_suite=cipher_suite,
+            compression_method=CompressionMethod.NULL,
+            selected_group=group,
+            supported_version=supported_version,
         )
+        start = output_buf.tell()
+        push_server_hello(output_buf, self._hello_retry_request)
 
-        # The transcript starts again with a hash of the first ClientHello, then
-        # the HelloRetryRequest (RFC 9846 section 4.1).
         digest = hashes.Hash(cipher_suite_hash(cipher_suite))
         digest.update(client_hello)
-        client_hello_hash = digest.finalize()
-        self._hello_retry_group = group
-        self._hello_retry_transcript = (
-            bytes([HandshakeType.MESSAGE_HASH, 0, 0, len(client_hello_hash)])
-            + client_hello_hash
-            + output_buf.data_slice(start, output_buf.tell())
+        self._hello_retry_transcript = hello_retry_transcript(
+            digest.finalize(), output_buf.data_slice(start, output_buf.tell())
         )
 
     def _server_handle_certificate(self, input_buf: Buffer) -> None:

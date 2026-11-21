@@ -9,8 +9,10 @@ import tempfile
 import unittest
 from collections.abc import Callable, Coroutine, Iterator
 from typing import TYPE_CHECKING, ParamSpec, TypeVar
+from unittest.mock import patch
 
 from aioquic import tls
+from aioquic.buffer import Buffer
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.packet import QuicPacketType
 from aioquic.quic.packet_builder import QuicSentPacket
@@ -360,6 +362,23 @@ def load_cert_chain(
     configuration.certificate = certificate
     configuration.certificate_chain = list(certificate_chain)
     configuration.private_key = private_key
+
+
+@contextlib.contextmanager
+def send_first_key_share_only() -> Iterator[None]:
+    """
+    Make ClientHellos only carry their first key share, so that a server which
+    supports one of the other groups asks for it with a HelloRetryRequest.
+    """
+    real_push_client_hello = tls.push_client_hello
+
+    def push_client_hello(buf: Buffer, hello: tls.ClientHello) -> None:
+        # Change the ClientHello in place, so the client knows what it sent.
+        hello.key_share = hello.key_share[:1]
+        real_push_client_hello(buf, hello)
+
+    with patch("aioquic.tls.push_client_hello", push_client_hello):
+        yield
 
 
 _parse_cert_chain = functools.cache(tls._load_cert_chain)
