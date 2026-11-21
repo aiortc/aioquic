@@ -455,6 +455,7 @@ class QuicConnection:
         self._remote_max_streams_uni = 0
         self._remote_preferred_address: QuicPreferredAddress | None = None
         self._remote_reset_stream_at = False
+        self._remote_transport_parameters: bytes | None = None
         self._remote_version_information: QuicVersionInformation | None = None
         self._retry_count = 0
         self._retry_source_connection_id = retry_source_connection_id
@@ -2047,7 +2048,7 @@ class QuicConnection:
     def _handle_tls_extensions(self, extensions: list[tls.Extension]) -> None:
         """
         Callback which is invoked by the TLS engine with the extensions it does
-        not handle itself: those of the ClientHello for servers, before
+        not handle itself: those of each ClientHello for servers, before
         answering it, and those of EncryptedExtensions for clients.
 
         This is where the transport parameters are received.
@@ -2060,8 +2061,23 @@ class QuicConnection:
                 reason_phrase="ClientHello has a non-empty legacy_session_id",
             )
 
+        # A ClientHello after a HelloRetryRequest must have the same transport
+        # parameters (RFC 9846 section 4.2.2), which we have already applied.
+        transport_parameters = dict(extensions).get(
+            tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS
+        )
+        if self._remote_transport_parameters is not None:
+            if transport_parameters != self._remote_transport_parameters:
+                raise QuicConnectionError(
+                    error_code=QuicErrorCode.TRANSPORT_PARAMETER_ERROR,
+                    frame_type=self._crypto_frame_type,
+                    reason_phrase="ClientHello has different transport parameters",
+                )
+            return
+
         # Parse the remote transport parameters.
         self._parse_transport_parameters(extensions)
+        self._remote_transport_parameters = transport_parameters
 
         # For servers, determine the Negotiated Version.
         if not self._is_client and not self._version_negotiated_compatible:
