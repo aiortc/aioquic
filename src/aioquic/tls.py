@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import (
     ec,
     ed448,
     ed25519,
+    mlkem,
     padding,
     rsa,
     x448,
@@ -385,6 +386,7 @@ class Group(IntEnum):
     SECP521R1 = 0x0019
     X25519 = 0x001D
     X448 = 0x001E
+    X25519MLKEM768 = 0x11EC
     GREASE = 0xAAAA
 
 
@@ -1172,10 +1174,14 @@ class KeyExchange:
     """
 
     def __init__(self, group: int) -> None:
+        self._mlkem_private_key: mlkem.MLKEM768PrivateKey | None = None
         self._private_key: (
             ec.EllipticCurvePrivateKey | x25519.X25519PrivateKey | x448.X448PrivateKey
         )
-        if group == Group.X25519:
+        if group == Group.X25519MLKEM768:
+            self._mlkem_private_key = mlkem.MLKEM768PrivateKey.generate()
+            self._private_key = x25519.X25519PrivateKey.generate()
+        elif group == Group.X25519:
             self._private_key = x25519.X25519PrivateKey.generate()
         elif group == Group.X448:
             self._private_key = x448.X448PrivateKey.generate()
@@ -1189,6 +1195,11 @@ class KeyExchange:
             )
         else:
             public_bytes = public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
+        if self._mlkem_private_key is not None:
+            # The ML-KEM encapsulation key comes first (RFC 10024 section 4.1).
+            public_bytes = (
+                self._mlkem_private_key.public_key().public_bytes_raw() + public_bytes
+            )
         self.key_share: KeyShareEntry = (group, public_bytes)
 
     def complete(self, peer_key_share: bytes) -> bytes:
@@ -1199,21 +1210,32 @@ class KeyExchange:
         :raises ValueError:
             If the peer's key share is invalid.
         """
+        mlkem_shared_secret = b""
+        if self._mlkem_private_key is not None:
+            # The 1088-byte ML-KEM ciphertext comes first, and its shared secret
+            # too (RFC 10024 sections 4.2 and 4.3).
+            mlkem_shared_secret = self._mlkem_private_key.decapsulate(
+                peer_key_share[:1088]
+            )
+            peer_key_share = peer_key_share[1088:]
+
         private_key = self._private_key
         if isinstance(private_key, x25519.X25519PrivateKey):
-            return private_key.exchange(
+            shared_secret = private_key.exchange(
                 x25519.X25519PublicKey.from_public_bytes(peer_key_share)
             )
         elif isinstance(private_key, x448.X448PrivateKey):
-            return private_key.exchange(
+            shared_secret = private_key.exchange(
                 x448.X448PublicKey.from_public_bytes(peer_key_share)
             )
-        return private_key.exchange(
-            ec.ECDH(),
-            ec.EllipticCurvePublicKey.from_encoded_point(
-                private_key.curve, peer_key_share
-            ),
-        )
+        else:
+            shared_secret = private_key.exchange(
+                ec.ECDH(),
+                ec.EllipticCurvePublicKey.from_encoded_point(
+                    private_key.curve, peer_key_share
+                ),
+            )
+        return mlkem_shared_secret + shared_secret
 
     @classmethod
     def respond(cls, group: int, peer_key_share: bytes) -> tuple[bytes, KeyShareEntry]:
@@ -1225,6 +1247,17 @@ class KeyExchange:
         :raises ValueError:
             If the client's key share is invalid.
         """
+        if group == Group.X25519MLKEM768:
+            # Encapsulate to the client's 1184-byte ML-KEM encapsulation key, and
+            # send the ciphertext before our X25519 share (RFC 10024 section 4).
+            mlkem_shared_secret, ciphertext = mlkem.MLKEM768PublicKey.from_public_bytes(
+                peer_key_share[:1184]
+            ).encapsulate()
+            shared_secret, (_, key_share) = cls.respond(
+                Group.X25519, peer_key_share[1184:]
+            )
+            return mlkem_shared_secret + shared_secret, (group, ciphertext + key_share)
+
         key_exchange = cls(group)
         return key_exchange.complete(peer_key_share), key_exchange.key_share
 
@@ -1511,10 +1544,14 @@ class Context:
             self._signature_algorithms.append(SignatureAlgorithm.ED25519)
         if default_backend().ed448_supported():
             self._signature_algorithms.append(SignatureAlgorithm.ED448)
-        # In order of preference: X25519 is the most common choice, and the
-        # hardest to implement wrongly. X448 comes last as few peers support it.
+        # In order of preference: X25519MLKEM768 also resists quantum computers,
+        # X25519 is the most common choice, and the hardest to implement wrongly.
+        # X448 comes last as few peers support it.
         self._supported_groups: list[int] = []
         if default_backend().x25519_supported():
+            # The client does not offer a post-quantum key share yet.
+            if not is_client and default_backend().mlkem_supported():
+                self._supported_groups.append(Group.X25519MLKEM768)
             self._supported_groups.append(Group.X25519)
         self._supported_groups += [Group.SECP256R1, Group.SECP384R1]
         if default_backend().x448_supported():
