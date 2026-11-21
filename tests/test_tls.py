@@ -1324,6 +1324,50 @@ class ContextTest(TestCase):
 
         self._handshake(client, server)
 
+    def test_handshake_with_received_extensions(self) -> None:
+        """
+        Each side is given the extensions TLS does not handle itself, before
+        ALPN is negotiated.
+        """
+        calls: list[tuple[str, Any]] = []
+        client = self.create_client()
+        client.alpn_cb = lambda alpn: calls.append(("client alpn", alpn))
+        client.received_extensions_cb = lambda extensions: calls.append(
+            ("client extensions", extensions)
+        )
+        server = self.create_server()
+        server.alpn_cb = lambda alpn: calls.append(("server alpn", alpn))
+        server.received_extensions_cb = lambda extensions: calls.append(
+            ("server extensions", extensions)
+        )
+
+        self._handshake(client, server)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "server extensions",
+                    [
+                        (
+                            tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                            CLIENT_QUIC_TRANSPORT_PARAMETERS,
+                        )
+                    ],
+                ),
+                ("server alpn", None),
+                (
+                    "client extensions",
+                    [
+                        (
+                            tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                            SERVER_QUIC_TRANSPORT_PARAMETERS,
+                        )
+                    ],
+                ),
+                ("client alpn", None),
+            ],
+        )
+
     def test_handshake_with_secp256r1_group(self) -> None:
         client = self.create_client()
         client._supported_groups = [tls.Group.SECP256R1]

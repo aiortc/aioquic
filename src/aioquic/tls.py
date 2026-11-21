@@ -1376,6 +1376,7 @@ class SessionTicket:
 
 
 AlpnHandler = Callable[[str], None]
+ExtensionsHandler = Callable[[list[Extension]], None]
 SessionTicketFetcher = Callable[[bytes], SessionTicket | None]
 SessionTicketHandler = Callable[[SessionTicket], None]
 
@@ -1424,6 +1425,7 @@ class Context:
         self.alpn_cb: AlpnHandler | None = None
         self.get_session_ticket_cb: SessionTicketFetcher | None = None
         self.new_session_ticket_cb: SessionTicketHandler | None = None
+        self.received_extensions_cb: ExtensionsHandler | None = None
         self.update_traffic_key_cb: Callable[
             [Direction, Epoch, CipherSuite, bytes], None
         ] = lambda d, e, c, s: None
@@ -1943,6 +1945,10 @@ class Context:
         self.early_data_accepted = encrypted_extensions.early_data
         self.received_extensions = encrypted_extensions.other_extensions
 
+        # Pass on the extensions we do not handle ourselves.
+        if self.received_extensions_cb:
+            self.received_extensions_cb(self.received_extensions)
+
         # notify application
         if self.alpn_cb:
             self.alpn_cb(self.alpn_negotiated)
@@ -2144,6 +2150,15 @@ class Context:
         ):
             raise AlertMissingExtension("ClientHello has no PSK key exchange modes")
 
+        self.client_random = peer_hello.random
+        self.server_random = os.urandom(32)
+        self.legacy_session_id = peer_hello.legacy_session_id
+        self.received_extensions = peer_hello.other_extensions
+
+        # Pass on the extensions we do not handle ourselves, before we answer.
+        if self.received_extensions_cb:
+            self.received_extensions_cb(self.received_extensions)
+
         signature_algorithm = negotiate(
             self._signature_algorithms_for_private_key(),
             peer_hello.signature_algorithms,
@@ -2157,11 +2172,6 @@ class Context:
                 peer_hello.alpn_protocols,
                 AlertNoApplicationProtocol("ClientHello has no common ALPN protocol"),
             )
-
-        self.client_random = peer_hello.random
-        self.server_random = os.urandom(32)
-        self.legacy_session_id = peer_hello.legacy_session_id
-        self.received_extensions = peer_hello.other_extensions
 
         # notify application
         if self.alpn_cb:

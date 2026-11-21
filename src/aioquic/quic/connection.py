@@ -1594,53 +1594,7 @@ class QuicConnection:
         """
         Callback which is invoked by the TLS engine at most once, when the
         ALPN negotiation completes.
-
-        At this point, TLS extensions have been received so we can parse the
-        transport parameters.
         """
-        # QUIC does not use TLS 1.3 middlebox compatibility mode (RFC 9001 section 8.4).
-        if not self._is_client and self.tls.legacy_session_id:
-            raise QuicConnectionError(
-                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
-                frame_type=self._crypto_frame_type,
-                reason_phrase="ClientHello has a non-empty legacy_session_id",
-            )
-
-        # Parse the remote transport parameters.
-        self._parse_transport_parameters(self.tls.received_extensions)
-
-        # For servers, determine the Negotiated Version.
-        if not self._is_client and not self._version_negotiated_compatible:
-            if self._remote_version_information is not None:
-                # Pick the first version we support in the client's available versions,
-                # which is compatible with the current version.
-                for version in self._remote_version_information.available_versions:
-                    if version == self._version:
-                        # Stay with the current version.
-                        break
-                    elif (
-                        version in self._configuration.supported_versions
-                        and is_version_compatible(self._version, version)
-                    ):
-                        # Change version.
-                        self._version = version
-                        self._cryptos[tls.Epoch.INITIAL] = self._cryptos_initial[
-                            version
-                        ]
-
-                        # Update our transport parameters to reflect the chosen version.
-                        self.tls.handshake_extensions = [
-                            (
-                                tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
-                                self._serialize_transport_parameters(),
-                            )
-                        ]
-                        break
-            self._version_negotiated_compatible = True
-            self._logger.info(
-                "Negotiated protocol version %s", pretty_protocol_version(self._version)
-            )
-
         # Notify the application.
         self._events.append(events.ProtocolNegotiated(alpn_protocol=alpn_protocol))
 
@@ -2090,6 +2044,57 @@ class QuicConnection:
             )
         self._session_ticket_handler(session_ticket)
 
+    def _handle_tls_extensions(self, extensions: list[tls.Extension]) -> None:
+        """
+        Callback which is invoked by the TLS engine with the extensions it does
+        not handle itself: those of the ClientHello for servers, before
+        answering it, and those of EncryptedExtensions for clients.
+
+        This is where the transport parameters are received.
+        """
+        # QUIC does not use TLS 1.3 middlebox compatibility mode (RFC 9001 section 8.4).
+        if not self._is_client and self.tls.legacy_session_id:
+            raise QuicConnectionError(
+                error_code=QuicErrorCode.PROTOCOL_VIOLATION,
+                frame_type=self._crypto_frame_type,
+                reason_phrase="ClientHello has a non-empty legacy_session_id",
+            )
+
+        # Parse the remote transport parameters.
+        self._parse_transport_parameters(extensions)
+
+        # For servers, determine the Negotiated Version.
+        if not self._is_client and not self._version_negotiated_compatible:
+            if self._remote_version_information is not None:
+                # Pick the first version we support in the client's available versions,
+                # which is compatible with the current version.
+                for version in self._remote_version_information.available_versions:
+                    if version == self._version:
+                        # Stay with the current version.
+                        break
+                    elif (
+                        version in self._configuration.supported_versions
+                        and is_version_compatible(self._version, version)
+                    ):
+                        # Change version.
+                        self._version = version
+                        self._cryptos[tls.Epoch.INITIAL] = self._cryptos_initial[
+                            version
+                        ]
+
+                        # Update our transport parameters to reflect the chosen version.
+                        self.tls.handshake_extensions = [
+                            (
+                                tls.ExtensionType.QUIC_TRANSPORT_PARAMETERS,
+                                self._serialize_transport_parameters(),
+                            )
+                        ]
+                        break
+            self._version_negotiated_compatible = True
+            self._logger.info(
+                "Negotiated protocol version %s", pretty_protocol_version(self._version)
+            )
+
     def _initialize(self, peer_cid: bytes) -> None:
         # TLS
         self.tls = tls.Context(
@@ -2150,6 +2155,7 @@ class QuicConnection:
             self.tls.get_session_ticket_cb = self._fetch_session_ticket
         if self._session_ticket_handler is not None:
             self.tls.new_session_ticket_cb = self._handle_session_ticket
+        self.tls.received_extensions_cb = self._handle_tls_extensions
         self.tls.update_traffic_key_cb = self._update_traffic_key
 
         # packet spaces
@@ -2336,6 +2342,7 @@ class QuicConnection:
         if event is not None:
             # Pass data to TLS layer, which may cause calls to:
             # - _alpn_handler
+            # - _handle_tls_extensions
             # - _update_traffic_key
             self._crypto_frame_type = frame_type
             self._crypto_packet_version = context.version
