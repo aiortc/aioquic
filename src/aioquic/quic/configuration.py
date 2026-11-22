@@ -41,7 +41,7 @@ class QuicConfiguration:
 
     idle_timeout: float = 60.0
     """
-    The idle timeout in seconds.
+    The idle timeout in seconds, at least 1 millisecond.
 
     The connection is terminated if nothing is received for the given duration.
     A server also terminates a connection whose handshake has not completed

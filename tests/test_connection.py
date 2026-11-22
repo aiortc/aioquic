@@ -1,5 +1,6 @@
 import contextlib
 import io
+import math
 import os
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -3899,6 +3900,34 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 with self.assertRaisesMessage(ConnectionConfigurationError, message):
                     QuicConnection(configuration=configuration, **kwargs)
 
+    def test_init_with_invalid_idle_timeout(self) -> None:
+        # The last value is 2^62 - 1 milliseconds, which rounds up to 2^62 as a float.
+        for idle_timeout in (-1, 0, 0.0009, math.nan, math.inf, UINT_VAR_MAX / 1000):
+            with self.subTest(idle_timeout=idle_timeout):
+                with self.assertRaisesMessage(
+                    ConnectionConfigurationError,
+                    "The idle timeout must be between 0.001 and 4611686018427387 "
+                    "seconds",
+                ):
+                    QuicConnection(
+                        configuration=QuicConfiguration(
+                            is_client=True, idle_timeout=idle_timeout
+                        )
+                    )
+
+    def test_init_with_smallest_and_largest_idle_timeout(self) -> None:
+        for idle_timeout, advertised in (
+            (0.001, 1),
+            (4611686018427387.0, 4611686018427386880),
+        ):
+            with self.subTest(idle_timeout=idle_timeout):
+                with client_and_server(
+                    client_options={"idle_timeout": idle_timeout}
+                ) as (client, server):
+                    self.assertEqual(
+                        server._remote_max_idle_timeout, advertised / 1000.0
+                    )
+
     def test_initial_that_is_too_small(self) -> None:
         """
         Check that a too-small initial datagram from the client is dropped by the
@@ -7106,6 +7135,18 @@ class QuicConnectionTest(QuicConnectionTestCase):
         self.assertAlmostEqual(client._remote_max_idle_timeout, 0.001)
         self.assertAlmostEqual(client._idle_timeout(), 0.6)
 
+        # Remote idle of 0s, meaning no preference, and local idle of 60s.
+        client = create_standalone_client(self)
+        extensions = transport_parameters_extensions(
+            QuicTransportParameters(
+                original_destination_connection_id=client.original_destination_connection_id,
+                max_idle_timeout=0,
+            )
+        )
+        client._parse_transport_parameters(extensions)
+        self.assertIsNone(client._remote_max_idle_timeout)
+        self.assertAlmostEqual(client._idle_timeout(), 60.0)
+
     def test_parse_transport_parameters_malformed(self) -> None:
         client = create_standalone_client(self)
 
@@ -7314,6 +7355,31 @@ class QuicConnectionTest(QuicConnectionTestCase):
             cm.exception.reason_phrase,
             "version_information's chosen_version does not match the version in use",
         )
+
+    def test_parse_transport_parameters_with_idle_timeout_from_session_ticket(
+        self,
+    ) -> None:
+        client = create_standalone_client(self)
+
+        # The session ticket has an idle timeout of 10s.
+        client._parse_transport_parameters(
+            transport_parameters_extensions(
+                QuicTransportParameters(max_idle_timeout=10000)
+            ),
+            from_session_ticket=True,
+        )
+        self.assertAlmostEqual(client._idle_timeout(), 10.0)
+
+        # The handshake has none, so the local idle timeout of 60s applies.
+        client._parse_transport_parameters(
+            transport_parameters_extensions(
+                QuicTransportParameters(
+                    original_destination_connection_id=client.original_destination_connection_id,
+                )
+            )
+        )
+        self.assertIsNone(client._remote_max_idle_timeout)
+        self.assertAlmostEqual(client._idle_timeout(), 60.0)
 
     def test_parse_transport_parameters_with_preferred_address(self) -> None:
         client = create_standalone_client(self)
