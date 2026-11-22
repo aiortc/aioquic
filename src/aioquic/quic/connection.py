@@ -1,5 +1,6 @@
 import ipaddress
 import logging
+import math
 import os
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
@@ -343,6 +344,16 @@ class QuicConnection:
             raise ConnectionConfigurationError(
                 "The smallest allowed maximum datagram size is "
                 f"{SMALLEST_MAX_DATAGRAM_SIZE} bytes"
+            )
+        # The idle timeout is advertised in milliseconds, and an advertised 0
+        # would tell the peer we have no idle timeout (RFC 9000 section 18.2).
+        if not (
+            math.isfinite(configuration.idle_timeout)
+            and 1 <= int(configuration.idle_timeout * 1000) <= UINT_VAR_MAX
+        ):
+            raise ConnectionConfigurationError(
+                "The idle timeout must be between 0.001 and "
+                f"{UINT_VAR_MAX // 1000} seconds"
             )
         if configuration.is_client:
             if original_destination_connection_id is not None:
@@ -3783,10 +3794,14 @@ class QuicConnection:
             self._remote_active_connection_id_limit = (
                 quic_transport_parameters.active_connection_id_limit
             )
-        if quic_transport_parameters.max_idle_timeout is not None:
+        # A peer which advertises 0, or nothing, has no preference (RFC 9000
+        # section 10.1). The handshake's parameters replace those of the ticket.
+        if quic_transport_parameters.max_idle_timeout:
             self._remote_max_idle_timeout = (
                 quic_transport_parameters.max_idle_timeout / 1000.0
             )
+        else:
+            self._remote_max_idle_timeout = None
         self._remote_max_datagram_frame_size = (
             quic_transport_parameters.max_datagram_frame_size
         )
