@@ -2444,7 +2444,10 @@ class H3ConnectionTest(TestCase):
                         data=b"hello", stream_id=stream_id, stream_ended=False
                     ),
                     HeadersReceived(
-                        headers=trailers, stream_id=stream_id, stream_ended=False
+                        headers=trailers,
+                        stream_id=stream_id,
+                        stream_ended=False,
+                        is_trailers=True,
                     ),
                     DataReceived(data=b"", stream_id=stream_id, stream_ended=True),
                 ],
@@ -3350,6 +3353,7 @@ class H3ConnectionTest(TestCase):
                             headers=[(b"x-foo", b"bar")],
                             stream_id=stream_id,
                             stream_ended=True,
+                            is_trailers=True,
                         )
                     ],
                 )
@@ -3904,6 +3908,7 @@ class H3ConnectionTest(TestCase):
                         headers=[(b"x-some-trailer", b"foo")],
                         stream_id=stream_id,
                         stream_ended=True,
+                        is_trailers=True,
                     ),
                 ],
             )
@@ -3950,6 +3955,7 @@ class H3ConnectionTest(TestCase):
                         headers=[(b"x-some-trailer", b"bar")],
                         stream_id=stream_id,
                         stream_ended=True,
+                        is_trailers=True,
                     ),
                 ],
             )

@@ -1319,6 +1319,9 @@ class H3Connection:
                     headers=headers,
                     stream_id=stream.stream_id,
                     stream_ended=stream_ended,
+                    is_trailers=(
+                        stream.headers_recv_state == HeadersState.AFTER_TRAILERS
+                    ),
                 )
             )
         return http_events
