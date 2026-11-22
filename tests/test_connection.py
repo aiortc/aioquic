@@ -167,6 +167,7 @@ def create_standalone_client(self: TestCase, **client_options: Any) -> QuicConne
         )
     )
     client._ack_delay = 0
+    disable_x25519mlkem768(client)
 
     # kick-off handshake
     client.connect(SERVER_ADDR, now=time.time())
@@ -244,6 +245,7 @@ def client_and_server(
     client = QuicConnection(configuration=client_configuration, **client_kwargs)
     client._ack_delay = 0
     disable_packet_pacing(client)
+    disable_x25519mlkem768(client)
     client_patch(client)
 
     server_configuration = QuicConfiguration(
@@ -282,6 +284,25 @@ def disable_packet_pacing(connection: QuicConnection) -> None:
             return None
 
     connection._loss._pacer = DummyPacketPacer()
+
+
+def disable_x25519mlkem768(connection: QuicConnection) -> None:
+    """
+    Patch a connection's TLS initialization to leave out X25519MLKEM768, as
+    without ML-KEM support, so that the client's ClientHello fits in one INITIAL
+    packet whether or not ML-KEM is supported.
+    """
+    real_initialize = connection._initialize
+
+    def patched_initialize(peer_cid: bytes) -> None:
+        real_initialize(peer_cid)
+        connection.tls._supported_groups = [
+            group
+            for group in connection.tls._supported_groups
+            if group != tls.Group.X25519MLKEM768
+        ]
+
+    connection._initialize = patched_initialize  # type: ignore[method-assign]
 
 
 def encode_transport_parameters(parameters: QuicTransportParameters) -> bytes:
@@ -917,14 +938,19 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             now = self.advance_by_tick(now)
             client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
             self.assertEqual(
-                client._loss.congestion_window - client._loss.bytes_in_flight, 684
+                client._loss.congestion_window - client._loss.bytes_in_flight, 201
             )
             items = client.datagrams_to_send(now=now)
-            self.assertEqual(datagram_sizes(items), [1200, 580])
+            self.assertEqual(datagram_sizes(items), [1200, 55])
             self.assertAlmostEqual(client.get_timer(), 0.604)
             self.assertSentPackets(client, [0, 1, 12])
             self.assertEvents(
-                client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
+                client,
+                [
+                    events.ProtocolNegotiated,
+                    events.HandshakeCompleted,
+                    events.ConnectionIdIssued,
+                ],
             )
 
     def test_connect_with_0rtt_without_loss(self) -> None:
@@ -3445,6 +3471,7 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client_configuration.load_verify_locations(cafile=SERVER_CACERTFILE)
 
         client = QuicConnection(configuration=client_configuration)
+        disable_x25519mlkem768(client)
 
         now = 0.0
         client.connect(SERVER_ADDR, now=now)
@@ -7575,8 +7602,8 @@ class QuicConnectionTest(QuicConnectionTestCase):
             # window too strictly as its exact value depends on the size
             # of our ACKs, which depends on the execution time.
             self.assertEqual(client._loss.bytes_in_flight, 0)
-            self.assertGreaterEqual(client._loss.congestion_window, 13472)
-            self.assertLessEqual(client._loss.congestion_window, 13540)
+            self.assertGreaterEqual(client._loss.congestion_window, 13311)
+            self.assertLessEqual(client._loss.congestion_window, 13379)
 
             # Artificially raise the consumed data counter.
             client._local_max_data_consumed = client._local_max_data.value
