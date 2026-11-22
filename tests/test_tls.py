@@ -92,7 +92,7 @@ def create_session_ticket() -> SessionTicket:
     """
     Create an TLS_AES_256_GCM_SHA384 session ticket, valid for an hour.
     """
-    now = datetime.datetime.now(datetime.UTC)
+    now = datetime.datetime.now(datetime.timezone.utc)
     return SessionTicket(
         age_add=0,
         cipher_suite=tls.CipherSuite.TLS_AES_256_GCM_SHA384,
@@ -2158,7 +2158,7 @@ class ContextTest(TestCase):
         Create a client with an TLS_AES_128_GCM_SHA256 session ticket, and a server
         which only supports TLS_CHACHA20_POLY1305_SHA256.
         """
-        now = datetime.datetime.now(datetime.UTC)
+        now = datetime.datetime.now(datetime.timezone.utc)
         ticket = SessionTicket(
             age_add=0,
             cipher_suite=tls.CipherSuite.TLS_AES_128_GCM_SHA256,
