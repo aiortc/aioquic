@@ -52,7 +52,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["dnslib.*", "uvloop.*"]
+module = ["dnslib.*"]
 ignore_missing_imports = true
 
 [tool.ruff.lint]
