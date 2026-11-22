@@ -14,9 +14,9 @@ setuptools.setup(
             "aioquic._buffer",
             extra_compile_args=extra_compile_args,
             sources=["src/aioquic/_buffer.c"],
-            define_macros=[("Py_LIMITED_API", "0x030B0000")],
+            define_macros=[("Py_LIMITED_API", "0x030A0000")],
             py_limited_api=True,
         ),
     ],
-    options={"bdist_wheel": {"py_limited_api": "cp311"}},
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
 )
