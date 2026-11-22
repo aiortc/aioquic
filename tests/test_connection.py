@@ -1084,6 +1084,112 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
                 client_tickets[0].ticket, list(ticket_store.tickets.keys())[0]
             )
 
+    def test_connect_with_delayed_client_initial_and_ping_probe(self) -> None:
+        """
+        Check the handshake completes if the client's PTO probe contains a PING
+        and arrives before the client's delayed INITIAL.
+
+        The first packet sent by a client always contains a CRYPTO frame, and PING
+        frames are allowed in INITIAL packets (RFC 9000 section 17.2.2).
+        """
+        with client_and_server(handshake=False) as (client, server):
+            self.watch_timers(client, server)
+
+            # Client sends INITIAL, which is delayed.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            delayed = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(delayed), [1200])
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 0])
+            self.assertEvents(client, [])
+
+            # Client's PTO fires and it sends a probe. aioquic retransmits its
+            # ClientHello, other clients send a PING: replace the probe with an
+            # INITIAL containing a PING.
+            now = self.advance_to_timer(now, client)
+            client.handle_timer(now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.6)
+            self.assertSentPackets(client, [1, 0, 0])
+            self.assertEvents(client, [])
+            builder = QuicPacketBuilder(
+                host_cid=client.host_cid,
+                is_client=True,
+                max_datagram_size=SMALLEST_MAX_DATAGRAM_SIZE,
+                packet_number=1,
+                peer_cid=client._peer_cid.cid,
+                version=client._version,
+            )
+            crypto = CryptoPair()
+            crypto.setup_initial(
+                client._peer_cid.cid, is_client=True, version=client._version
+            )
+            builder.start_packet(QuicPacketType.INITIAL, crypto)
+            builder.start_frame(QuicFrameType.PING)
+            datagrams, _ = builder.flush()
+            self.assertEqual([len(data) for data in datagrams], [1200])
+
+            # Server receives PING, sends ACK.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(datagrams[0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [49])
+            self.assertEqual(self.acked_ranges(server), [[[1, 1]]])
+            self.assertAlmostEqual(server.get_timer(), 60.25)  # idle timeout
+            self.assertSentPackets(server, [1, 0, 0])
+            self.assertEvents(server, [])
+
+            # Client receives ACK, sends nothing.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [])
+            self.assertAlmostEqual(client.get_timer(), 0.8)
+            self.assertSentPackets(client, [0, 0, 0])
+            self.assertEvents(client, [])
+
+            # Server receives the delayed INITIAL, sends INITIAL + HANDSHAKE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(delayed[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200, 1130])
+            self.assertEqual(self.acked_ranges(server), [[[1, 1]], [[0, 1]]])
+            self.assertAlmostEqual(server.get_timer(), 0.55)
+            self.assertSentPackets(server, [2, 2, 0])
+            self.assertEvents(server, [events.ProtocolNegotiated])
+
+            # Client receives INITIAL + HANDSHAKE, sends FINISHED.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), CLIENT_HANDSHAKE_DATAGRAM_SIZES)
+            self.assertAlmostEqual(client.get_timer(), 0.7)
+            self.assertSentPackets(client, [0, 1, 1])
+            self.assertEvents(
+                client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
+            )
+
+            # Server receives FINISHED, sends HANDSHAKE_DONE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [229])
+            self.assertAlmostEqual(server.get_timer(), 0.725)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, HANDSHAKE_COMPLETED_EVENTS)
+
+            # Client receives HANDSHAKE_DONE, sends ACK.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(client.get_timer(), 60.5)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 1])
+            self.assertEvents(client, [])
+
     def test_connect_with_late_server_handshake(self) -> None:
         """
         Check the client does not speed up handshake completion when a HANDSHAKE
@@ -3643,19 +3749,6 @@ class QuicConnectionTest(QuicConnectionTestCase):
         with self.assertPacketsDropped(server, ["invalid"]):
             for datagram in builder.flush()[0]:
                 server.receive_datagram(datagram, SERVER_ADDR, now=time.time())
-
-    def test_connect_with_no_crypto_frame(self) -> None:
-        def patch(client: QuicConnection) -> None:
-            """
-            Patch client to send PING instead of CRYPTO.
-            """
-            client._push_crypto_data = client._send_probe  # type: ignore[method-assign]
-
-        with client_and_server(client_patch=patch) as (client, server):
-            self.assertEqual(
-                server._close_event.reason_phrase,
-                "Packet contains no CRYPTO frame",
-            )
 
     def test_connect_with_no_transport_parameters(self) -> None:
         def patch(client: QuicConnection) -> None:
