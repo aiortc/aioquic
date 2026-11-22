@@ -29,7 +29,8 @@ What is ``aioquic``?
 --------------------
 
 ``aioquic`` is a library for the QUIC network protocol in Python. It features
-a minimal TLS 1.3 implementation, a QUIC stack and an HTTP/3 stack.
+a minimal TLS 1.3 implementation, a QUIC stack and an HTTP/3 stack, for both
+clients and servers.
 
 ``aioquic`` is used by Python opensource projects such as `dnspython`_,
 `hypercorn`_, `mitmproxy`_ and the `Web Platform Tests`_ cross-browser test
@@ -47,25 +48,41 @@ common codebase for Python libraries in the hope of avoiding duplicated effort.
 Both the QUIC and the HTTP/3 APIs follow the "bring your own I/O" pattern,
 leaving actual I/O operations to the API user. This approach has a number of
 advantages including making the code testable and allowing integration with
-different concurrency models.
+different concurrency models. For applications which use ``asyncio``, a
+convenience API built on top of it is also provided.
 
 A lot of effort has gone into writing an extensive test suite for the
 ``aioquic`` code to ensure best-in-class code quality, and it is regularly
 `tested for interoperability`_ against other `QUIC implementations`_.
 
+``aioquic`` treats its peer as untrusted. Malformed input closes the
+connection with an error code or drops the packet. The memory and CPU spent on
+the peer's data are bounded, from TLS handshake messages to stream reassembly
+and HTTP/3 field sections. Vulnerabilities are reported privately as described
+in the `security policy`_, and their fixes are announced in
+`security advisories`_.
+
 Features
 --------
 
 - minimal TLS 1.3 implementation conforming with `RFC 9846`_
+   * post-quantum key exchange with X25519MLKEM768
+   * session resumption and 0-RTT data
 - QUIC stack conforming with `RFC 9000`_ (QUIC v1) and `RFC 9369`_ (QUIC v2)
+   * TLS integration conforming with `RFC 9001`_
+   * loss detection and congestion control conforming with `RFC 9002`_
+   * Reno and CUBIC (`RFC 9438`_) congestion control
    * IPv4 and IPv6 support
-   * connection migration and NAT rebinding
+   * connection migration, NAT rebinding and server preferred addresses
+   * datagram frames conforming with `RFC 9221`_
    * logging TLS traffic secrets
    * logging QUIC events in QLOG format
    * version negotiation conforming with `RFC 9368`_
-- HTTP/3 stack conforming with `RFC 9114`_
-   * WebSocket bootstrapping conforming with `RFC 9220`_
+   * reliable stream resets (experimental)
+- HTTP/3 stack conforming with `RFC 9114`_ and `RFC 9204`_ (QPACK)
    * datagram support conforming with `RFC 9297`_
+   * WebSocket bootstrapping conforming with `RFC 9220`_
+   * WebTransport (experimental)
 
 Installing
 ----------
@@ -91,7 +108,8 @@ On Debian/Ubuntu run:
 Running the examples
 --------------------
 
-`aioquic` comes with a number of examples illustrating various QUIC usecases.
+``aioquic`` comes with example clients and servers for HTTP/3 and QUIC, which
+illustrate how to use the library.
 
 You can browse these examples here: https://github.com/aiortc/aioquic/tree/main/examples
 
@@ -107,12 +125,18 @@ License
 .. _Web Platform Tests: https://github.com/web-platform-tests/wpt
 .. _tested for interoperability: https://interop.seemann.io/
 .. _QUIC implementations: https://github.com/quicwg/base-drafts/wiki/Implementations
-.. _cryptography: https://cryptography.io/
 .. _BSD license: https://aioquic.readthedocs.io/en/latest/license.html
+.. _security policy: https://github.com/aiortc/aioquic/blob/main/SECURITY.md
+.. _security advisories: https://github.com/aiortc/aioquic/security/advisories
 .. _RFC 9846: https://datatracker.ietf.org/doc/html/rfc9846
 .. _RFC 9000: https://datatracker.ietf.org/doc/html/rfc9000
+.. _RFC 9001: https://datatracker.ietf.org/doc/html/rfc9001
+.. _RFC 9002: https://datatracker.ietf.org/doc/html/rfc9002
 .. _RFC 9114: https://datatracker.ietf.org/doc/html/rfc9114
+.. _RFC 9204: https://datatracker.ietf.org/doc/html/rfc9204
 .. _RFC 9220: https://datatracker.ietf.org/doc/html/rfc9220
+.. _RFC 9221: https://datatracker.ietf.org/doc/html/rfc9221
 .. _RFC 9297: https://datatracker.ietf.org/doc/html/rfc9297
 .. _RFC 9368: https://datatracker.ietf.org/doc/html/rfc9368
 .. _RFC 9369: https://datatracker.ietf.org/doc/html/rfc9369
+.. _RFC 9438: https://datatracker.ietf.org/doc/html/rfc9438
