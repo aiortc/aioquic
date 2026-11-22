@@ -44,6 +44,8 @@ class QuicConfiguration:
     The idle timeout in seconds.
 
     The connection is terminated if nothing is received for the given duration.
+    A server also terminates a connection whose handshake has not completed
+    within 10 seconds.
     """
 
     is_client: bool = True

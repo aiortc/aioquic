@@ -394,6 +394,7 @@ class QuicConnection:
         self._events: deque[events.QuicEvent] = deque()
         self._handshake_complete = False
         self._handshake_confirmed = False
+        self._handshake_deadline: float | None = None
         self._host_cids = [
             QuicConnectionId(
                 cid=os.urandom(configuration.connection_id_length),
@@ -862,6 +863,14 @@ class QuicConnection:
             if deadline is not None and deadline < timer_at:
                 timer_at = deadline
 
+            # Handshake timer.
+            if (
+                self._handshake_deadline is not None
+                and not self._handshake_complete
+                and self._handshake_deadline < timer_at
+            ):
+                timer_at = self._handshake_deadline
+
         return timer_at
 
     def handle_timer(self, now: float) -> None:
@@ -883,6 +892,22 @@ class QuicConnection:
                     error_code=QuicErrorCode.INTERNAL_ERROR,
                     frame_type=QuicFrameType.PADDING,
                     reason_phrase="Idle timeout",
+                )
+            self._close_end()
+            return
+
+        # Handshake timeout.
+        if (
+            self._handshake_deadline is not None
+            and not self._handshake_complete
+            and self._state not in END_STATES
+            and now >= self._handshake_deadline
+        ):
+            if self._close_event is None:
+                self._close_event = events.ConnectionTerminated(
+                    error_code=QuicErrorCode.INTERNAL_ERROR,
+                    frame_type=QuicFrameType.PADDING,
+                    reason_phrase="Handshake timeout",
                 )
             self._close_end()
             return
@@ -979,9 +1004,11 @@ class QuicConnection:
         if not network_path.is_validated:
             network_path.bytes_received += payload_length
 
-        # for servers, arm the idle timeout on the first datagram
+        # For servers, arm the idle timeout on the first datagram and limit the
+        # time the client has to complete the handshake (RFC 9000 section 21.6).
         if self._close_at is None:
             self._close_at = now + self._idle_timeout()
+            self._handshake_deadline = now + 10.0
 
         buf = Buffer(data=data)
         while not buf.eof():
