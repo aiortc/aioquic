@@ -2388,15 +2388,24 @@ class Context:
 
         # Select the key share to use.
         if self._hello_retry_request is None:
-            # Use the client's first key share in a group we support.
+            # If we both support X25519MLKEM768, which also resists quantum
+            # computers, use it even if it takes a HelloRetryRequest.
+            groups: list[int] = self._supported_groups
+            if (
+                Group.X25519MLKEM768 in self._supported_groups
+                and Group.X25519MLKEM768 in peer_hello.supported_groups
+            ):
+                groups = [Group.X25519MLKEM768]
+
+            # Use the client's first key share in one of these groups.
             for peer_group, peer_key_share in peer_hello.key_share:
-                if peer_group in self._supported_groups:
+                if peer_group in groups:
                     break
             else:
                 # Failing that, ask for a key share in the client's first group
-                # which we support (RFC 9846 section 4.2.1).
+                # among them (RFC 9846 section 4.2.1).
                 for group in peer_hello.supported_groups:
-                    if group in self._supported_groups:
+                    if group in groups:
                         self._server_send_hello_retry_request(
                             initial_buf,
                             cipher_suite=cipher_suite,

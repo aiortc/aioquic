@@ -1792,6 +1792,33 @@ class ContextTest(TestCase):
         self.assertEqual(client._dec_key, server._enc_key)
         self.assertEqual(client._enc_key, server._dec_key)
 
+    @skipIf(not default_backend().mlkem_supported(), "ML-KEM is not supported")
+    def test_handshake_with_hello_retry_request_x25519mlkem768_upgrade(
+        self,
+    ) -> None:
+        """
+        A server asks for an X25519MLKEM768 key share with a HelloRetryRequest
+        when the client supports it, even if the client sent another usable key
+        share.
+        """
+        client = self.create_client()
+        client._supported_groups = [tls.Group.X25519, tls.Group.X25519MLKEM768]
+        server = self.create_server()
+
+        # Send client hello, with only the X25519 key share.
+        client_buf = create_buffers()
+        with send_first_key_share_only():
+            client.handle_message(b"", client_buf)
+
+        # Handle client hello, send hello retry request for X25519MLKEM768.
+        server_buf = create_buffers()
+        server.handle_message(merge_buffers(client_buf), server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_CLIENT_HELLO)
+        hello_retry_request = pull_server_hello(
+            Buffer(data=server_buf[tls.Epoch.INITIAL].data)
+        )
+        self.assertEqual(hello_retry_request.selected_group, tls.Group.X25519MLKEM768)
+
     def test_handshake_with_legacy_session_id(self) -> None:
         client = self.create_client()
         client.legacy_session_id = bytes(32)
@@ -1915,6 +1942,52 @@ class ContextTest(TestCase):
             self._handshake(client, server)
         except UnsupportedAlgorithm as exc:
             self.skipTest(str(exc))
+
+    @skipIf(not default_backend().mlkem_supported(), "ML-KEM is not supported")
+    def test_handshake_with_x25519mlkem768_second_key_share(self) -> None:
+        """
+        A server uses the client's X25519MLKEM768 key share, even if it is not
+        the first one.
+        """
+        client = self.create_client()
+        client._supported_groups = [tls.Group.X25519, tls.Group.X25519MLKEM768]
+        server = self.create_server()
+
+        # Send client hello, with X25519 and X25519MLKEM768 key shares.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+
+        # Handle client hello, send server hello for X25519MLKEM768.
+        server_buf = create_buffers()
+        server.handle_message(merge_buffers(client_buf), server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
+        server_hello = pull_server_hello(
+            Buffer(data=server_buf[tls.Epoch.INITIAL].data)
+        )
+        self.assertEqual(server_hello.key_share[0], tls.Group.X25519MLKEM768)
+
+    @skipIf(not default_backend().mlkem_supported(), "ML-KEM is not supported")
+    def test_handshake_with_x25519mlkem768_not_supported_by_server(self) -> None:
+        """
+        A server which does not support X25519MLKEM768 uses the client's next
+        key share.
+        """
+        client = self.create_client()
+        server = self.create_server()
+        server._supported_groups.remove(tls.Group.X25519MLKEM768)
+
+        # Send client hello, with X25519MLKEM768 and X25519 key shares.
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+
+        # Handle client hello, send server hello for X25519.
+        server_buf = create_buffers()
+        server.handle_message(merge_buffers(client_buf), server_buf)
+        self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
+        server_hello = pull_server_hello(
+            Buffer(data=server_buf[tls.Epoch.INITIAL].data)
+        )
+        self.assertEqual(server_hello.key_share[0], tls.Group.X25519)
 
     def test_handshake_with_x448(self) -> None:
         client = self.create_client()
