@@ -1,6 +1,13 @@
 Changelog
 =========
 
+1.9.1
+-----
+
+* Support Python 3.10 again, so that applications which cannot move to
+  Python 3.11 yet get the fixes made since 1.3.0. Support had been dropped in
+  1.4.0.
+
 1.9.0
 -----
 
