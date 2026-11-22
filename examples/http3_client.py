@@ -24,11 +24,6 @@ from aioquic.quic.logger import QuicFileLogger
 from aioquic.quic.packet import QuicProtocolVersion
 from aioquic.tls import CipherSuite, SessionTicket
 
-try:
-    import uvloop
-except ImportError:
-    uvloop = None
-
 logger = logging.getLogger("client")
 
 HttpConnection = H0Connection | H3Connection
@@ -582,8 +577,6 @@ if __name__ == "__main__":
     if args.certificate is not None:
         configuration.load_cert_chain(args.certificate, args.private_key)
 
-    if uvloop is not None:
-        uvloop.install()
     asyncio.run(
         main(
             configuration=configuration,

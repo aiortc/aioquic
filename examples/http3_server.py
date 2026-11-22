@@ -32,11 +32,6 @@ from aioquic.quic.events import ConnectionTerminated, ProtocolNegotiated, QuicEv
 from aioquic.quic.logger import QuicFileLogger
 from aioquic.tls import SessionTicket
 
-try:
-    import uvloop
-except ImportError:
-    uvloop = None
-
 AsgiApplication = Callable
 HttpConnection = H0Connection | H3Connection
 
@@ -694,9 +689,6 @@ if __name__ == "__main__":
 
     # load SSL certificate and key
     configuration.load_cert_chain(args.certificate, args.private_key)
-
-    if uvloop is not None:
-        uvloop.install()
 
     try:
         asyncio.run(
