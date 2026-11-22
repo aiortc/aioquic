@@ -175,7 +175,7 @@ class ContextTest(TestCase):
     def assertClientHello(self, data: bytes) -> None:
         self.assertEqual(data[0], tls.HandshakeType.CLIENT_HELLO)
         self.assertGreaterEqual(len(data), 161)
-        self.assertLessEqual(len(data), 1347)
+        self.assertLessEqual(len(data), 1470)
 
     def create_client(
         self,
@@ -491,10 +491,8 @@ class ContextTest(TestCase):
 
     def test_client_bad_hello_invalid_key_share(self) -> None:
         self.handshake_with_client_input_corruption(
-            # A SECP256R1 public key which is not a valid point encoding.
-            lambda x: modify_server_hello(
-                x, key_share=(tls.Group.SECP256R1, b"\x05" + bytes(64))
-            ),
+            # An X25519 public key which is too short.
+            lambda x: modify_server_hello(x, key_share=(tls.Group.X25519, bytes(31))),
             tls.AlertIllegalParameter("ServerHello has an invalid key share"),
         )
 
@@ -1273,7 +1271,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_FINISHED)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 502)
-        self.assertLessEqual(len(client_input), 3197)
+        self.assertLessEqual(len(client_input), 3229)
 
         reset_buffers(server_buf)
 
@@ -1314,6 +1312,30 @@ class ContextTest(TestCase):
         )
         self.assertEqual(
             server.key_schedule.cipher_suite, tls.CipherSuite.TLS_AES_256_GCM_SHA384
+        )
+
+    def test_client_hello_key_shares(self) -> None:
+        """
+        The client only sends key shares for its first two groups, but lists all
+        of them in supported_groups.
+        """
+        client = self.create_client()
+        client._supported_groups = [
+            tls.Group.X25519,
+            tls.Group.SECP256R1,
+            tls.Group.SECP384R1,
+        ]
+
+        client_buf = create_buffers()
+        client.handle_message(b"", client_buf)
+        hello = pull_client_hello(Buffer(data=merge_buffers(client_buf)))
+        self.assertEqual(
+            [group for group, _ in hello.key_share],
+            [tls.Group.X25519, tls.Group.SECP256R1],
+        )
+        self.assertEqual(
+            hello.supported_groups,
+            [tls.Group.X25519, tls.Group.SECP256R1, tls.Group.SECP384R1],
         )
 
     def test_handshake(self) -> None:
@@ -1391,7 +1413,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 534)
-        self.assertLessEqual(len(client_input), 2263)
+        self.assertLessEqual(len(client_input), 3228)
 
         reset_buffers(server_buf)
 
@@ -1449,7 +1471,7 @@ class ContextTest(TestCase):
         self.assertEqual(server.state, State.SERVER_EXPECT_CERTIFICATE)
         client_input = merge_buffers(server_buf)
         self.assertGreaterEqual(len(client_input), 534)
-        self.assertLessEqual(len(client_input), 2263)
+        self.assertLessEqual(len(client_input), 3228)
 
         reset_buffers(server_buf)
 
@@ -2226,13 +2248,13 @@ class ContextTest(TestCase):
 @skipIf(not default_backend().mlkem_supported(), "ML-KEM is not supported")
 class KeyExchangeTest(TestCase):
     def test_supported_groups_x25519mlkem768(self) -> None:
-        # Servers accept X25519MLKEM768, but clients do not offer it yet.
-        self.assertNotIn(
-            tls.Group.X25519MLKEM768, Context(is_client=True)._supported_groups
-        )
-        self.assertIn(
-            tls.Group.X25519MLKEM768, Context(is_client=False)._supported_groups
-        )
+        # Clients and servers prefer X25519MLKEM768.
+        for is_client in (True, False):
+            with self.subTest(is_client=is_client):
+                self.assertEqual(
+                    Context(is_client=is_client)._supported_groups[0],
+                    tls.Group.X25519MLKEM768,
+                )
 
     def test_x25519mlkem768_complete(self) -> None:
         key_exchange = tls.KeyExchange(tls.Group.X25519MLKEM768)

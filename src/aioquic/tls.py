@@ -1549,8 +1549,7 @@ class Context:
         # X448 comes last as few peers support it.
         self._supported_groups: list[int] = []
         if default_backend().x25519_supported():
-            # The client does not offer a post-quantum key share yet.
-            if not is_client and default_backend().mlkem_supported():
+            if default_backend().mlkem_supported():
                 self._supported_groups.append(Group.X25519MLKEM768)
             self._supported_groups.append(Group.X25519)
         self._supported_groups += [Group.SECP256R1, Group.SECP384R1]
@@ -1805,17 +1804,18 @@ class Context:
             raise AlertDecryptError
 
     def _client_send_hello(self, output_buf: Buffer) -> None:
+        # Only send key shares for our two preferred groups (RFC 9846 section
+        # 4.3.8), as each one costs a key generation and bytes on the wire. A
+        # server which only supports another of our groups asks for it with a
+        # HelloRetryRequest.
         key_share: list[KeyShareEntry] = []
-        supported_groups: list[int] = []
-
-        for group in self._supported_groups:
+        for group in self._supported_groups[:2]:
             if group == Group.GREASE:
                 key_share.append((Group.GREASE, b"\x00"))
             else:
                 key_exchange = KeyExchange(group)
                 self._key_exchanges[group] = key_exchange
                 key_share.append(key_exchange.key_share)
-            supported_groups.append(group)
 
         assert len(key_share), "no key share entries"
 
@@ -1843,7 +1843,7 @@ class Context:
             ),
             server_name=server_name,
             signature_algorithms=self._signature_algorithms,
-            supported_groups=supported_groups,
+            supported_groups=self._supported_groups,
             supported_versions=self._supported_versions,
             other_extensions=self.handshake_extensions,
         )
