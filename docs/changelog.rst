@@ -1,6 +1,128 @@
 Changelog
 =========
 
+1.9.0
+-----
+
+* Require `cryptography`_ 48 or later.
+
+TLS
+~~~
+
+* Add post-quantum key exchange with X25519MLKEM768, which combines ML-KEM-768
+  with X25519. Clients offer it first, and servers use it whenever the client
+  supports it, asking for a key share with a HelloRetryRequest if needed.
+  Clients now send key shares for their first two groups only, and prefer
+  X25519 over the NIST curves.
+* Support HelloRetryRequest on both endpoints: servers send one when the
+  client has no key share in a group they support, and clients answer one
+  instead of aborting the handshake.
+
+QUIC
+~~~~
+
+* Add :meth:`~aioquic.quic.connection.QuicConnection.is_closing` and
+  :meth:`~aioquic.quic.connection.QuicConnection.can_send_stream_data`.
+* Only fire :class:`~aioquic.quic.events.StopSendingReceived` while the
+  application can still send, that is at most once per stream and before it
+  wrote the FIN or reset the stream.
+* Ignore a peer's ``max_idle_timeout`` of 0, which means it has no idle
+  timeout, instead of closing the connection after three probe timeouts.
+  :class:`~aioquic.quic.connection.QuicConnection` now raises
+  :class:`~aioquic.quic.exceptions.ConnectionConfigurationError` for an idle
+  timeout which cannot be advertised.
+* Terminate server connections whose handshake has not completed 10 seconds
+  after the client's first datagram.
+* Lower the CPU cost of out-of-order stream data with many gaps, by limiting
+  the ranges each stream may hold.
+* Close the connection with ``PROTOCOL_VIOLATION`` when the peer acknowledges
+  a packet which was not sent, as :rfc:`9000` recommends, instead of
+  declaring every packet in flight lost.
+* Accept a first client INITIAL without a CRYPTO frame on servers, instead
+  of closing the connection with ``PROTOCOL_VIOLATION``.
+* Find the private key anywhere in the certificate file given to
+  :meth:`~aioquic.quic.configuration.QuicConfiguration.load_cert_chain`, in
+  PKCS#8 or traditional format, and raise :class:`ValueError` straight away
+  when no key is found or it does not match the certificate.
+* Stop logging the trailing zero padding of datagrams as a dropped packet in
+  qlog.
+* Document :func:`~aioquic.quic.connection.stream_is_client_initiated` and
+  :func:`~aioquic.quic.connection.stream_is_unidirectional`.
+
+HTTP/3
+~~~~~~
+
+* Add :meth:`~aioquic.h3.connection.H3Connection.terminate_request`, which
+  terminates the directions of a request stream which are still open and
+  releases its state. Out-of-range error codes raise
+  :class:`~aioquic.h3.exceptions.InvalidErrorCodeError`.
+* Add :meth:`~aioquic.h3.connection.H3Connection.send_goaway`, which lets
+  servers shut down a connection gracefully. Requests on later streams are
+  rejected with ``H3_REQUEST_REJECTED``, so that clients can retry them.
+  Clients now raise
+  :class:`~aioquic.h3.exceptions.InvalidConnectionStateError` from
+  :meth:`~aioquic.h3.connection.H3Connection.send_headers` for a new request
+  once they received a GOAWAY.
+* Report peer stream resets and STOP_SENDING on request streams with
+  :class:`~aioquic.h3.events.ResetReceived` and
+  :class:`~aioquic.h3.events.StopReceived` events.
+* Add :attr:`~aioquic.h3.events.HeadersReceived.is_trailers`, which tells
+  trailers apart from headers.
+* Add a :attr:`~aioquic.h3.connection.H3Connection.quic_connection` property,
+  which returns the underlying QUIC connection.
+* Rework HTTP/3 datagrams (:rfc:`9297`):
+
+  * Add the ``enable_datagrams`` option to
+    :class:`~aioquic.h3.connection.H3Connection`, which enables HTTP/3
+    datagrams without WebTransport. Enabling either now raises
+    :class:`ValueError` when QUIC does not accept DATAGRAM frames.
+  * Add :meth:`~aioquic.h3.connection.H3Connection.get_datagram_capacity`,
+    which returns the largest datagram payload which can be sent for a
+    stream.
+  * Make :meth:`~aioquic.h3.connection.H3Connection.send_datagram` refuse
+    datagrams which the peer cannot accept: when datagrams are not enabled
+    on both endpoints, before the headers were sent, when the stream's send
+    side is not open, or above the capacity, which raises
+    :class:`~aioquic.h3.exceptions.DatagramCapacityError`.
+  * Drop received datagrams for streams which cannot receive them, and close
+    the connection with ``H3_DATAGRAM_ERROR`` when the quarter stream ID is
+    too large.
+  * Log HTTP/3 datagrams in qlog.
+
+* Make :class:`~aioquic.h3.connection.H3Connection` raise
+  :class:`~aioquic.h3.exceptions.InvalidConnectionStateError` from its send
+  methods once the connection is closing, instead of encoding frames which
+  are never sent, and from
+  :meth:`~aioquic.h3.connection.H3Connection.create_webtransport_stream` when
+  WebTransport is not enabled, instead of
+  :class:`~aioquic.h3.exceptions.InvalidStreamTypeError`.
+* Refuse server-initiated bidirectional streams on HTTP/3 clients, unless
+  WebTransport is enabled and the stream starts with ``WEBTRANSPORT_STREAM``,
+  with ``H3_STREAM_CREATION_ERROR``.
+* Lower the memory cost of the `http3_server` example, by releasing each
+  request handler once its application finishes instead of when the
+  connection closes, and stop leaving unhandled task errors when clients go
+  away.
+
+asyncio
+~~~~~~~
+
+* Add a :attr:`~aioquic.asyncio.QuicConnectionProtocol.quic_connection`
+  property, which returns the underlying QUIC connection.
+* Fix the lifecycle of the asyncio streams of
+  :class:`~aioquic.asyncio.QuicConnectionProtocol`:
+
+  * Release a stream's state once both of its parts have ended. Without a
+    stream handler, streams the peer opens are ignored.
+  * Raise :class:`ConnectionResetError` when the peer resets or stops a
+    stream, and :class:`ConnectionError` from streams cut off by a closed
+    connection, instead of an end of file which made them look complete.
+  * Make :meth:`~aioquic.asyncio.QuicConnectionProtocol.create_stream` raise
+    :class:`ConnectionError` once the connection is closing, and never return
+    the same stream twice.
+  * Make ``StreamWriter.wait_closed()`` return, and implement
+    ``StreamWriter.abort()``.
+
 1.8.0
 -----
 
