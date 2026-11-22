@@ -400,11 +400,8 @@ class HttpServerProtocol(QuicConnectionProtocol):
         self._tasks: set[asyncio.Task] = set()
 
     def http_event_received(self, event: H3Event) -> None:
-        # Only request headers carry a :method, unlike trailers, which can still
-        # arrive once the request's handler is gone.
-        if isinstance(event, HeadersReceived) and any(
-            name == b":method" for name, _ in event.headers
-        ):
+        # Trailers can still arrive once the request's handler is gone.
+        if isinstance(event, HeadersReceived) and not event.is_trailers:
             headers = []
             http_version = "0.9" if isinstance(self._http, H0Connection) else "3"
             raw_path = b""

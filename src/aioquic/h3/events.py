@@ -71,6 +71,9 @@ class HeadersReceived(H3Event):
     stream_ended: bool
     "Whether the STREAM frame had the FIN bit set."
 
+    is_trailers: bool = False
+    "Whether the headers are the trailers, which follow the message's body."
+
 
 @dataclass
 class PushPromiseReceived(H3Event):
