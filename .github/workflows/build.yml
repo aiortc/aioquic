@@ -1,0 +1,70 @@
+name: build
+
+on: workflow_call
+
+jobs:
+
+  package-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - name: Build source package
+        run: |
+          pip install -U build
+          python -m build --sdist
+      - name: Upload source package
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-source
+          path: dist/
+
+  package-wheel:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+          # Docker on the Ubuntu 26.04 image denies 32-bit containers network
+          # access: https://github.com/actions/runner-images/issues/14790
+          - os: ubuntu-24.04
+            arch: i686
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: windows-latest
+            arch: AMD64
+          - os: windows-latest
+            arch: x86
+          - os: windows-11-arm
+            arch: ARM64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Build wheels
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_ENVIRONMENT: AIOQUIC_SKIP_TESTS=ipv6,loss
+          # The limited API is not available on free-threaded builds.
+          CIBW_SKIP: 'cp3??t-*'
+          CIBW_TEST_COMMAND: python -m unittest discover -t {project} -s {project}/tests
+          # There are no binary wheels for cryptography on 32-bit platforms,
+          # Intel macOS or Windows ARM64.
+          CIBW_TEST_SKIP: "*-{manylinux_i686,musllinux_i686,win32,macosx_x86_64,win_arm64}"
+        run: |
+          pip install cibuildwheel
+          cibuildwheel --output-dir dist
+      - name: Upload wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-wheel-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/
