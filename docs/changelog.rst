@@ -1,6 +1,11 @@
 Changelog
 =========
 
+1.9.2
+-----
+
+* Publish releases using PyPI trusted publishing, with attestations.
+
 1.9.1
 -----
 
