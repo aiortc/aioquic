@@ -27,6 +27,7 @@ from aioquic.quic.connection import (
     QuicNetworkPath,
     QuicReceiveContext,
     dump_cid,
+    get_transport_parameters,
     stream_is_client_initiated,
     stream_is_unidirectional,
 )
@@ -51,6 +52,7 @@ from aioquic.quic.packet import (
     encode_quic_retry,
     encode_quic_version_negotiation,
     get_spin_bit,
+    pretty_protocol_version,
     pull_quic_header,
     pull_quic_transport_parameters,
     push_quic_transport_parameters,
@@ -3967,6 +3969,100 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 ],
             )
 
+    def test_connect_with_session_ticket_from_other_version(self) -> None:
+        """
+        A client does not use a session ticket from a connection using another
+        QUIC version, and performs a full handshake (RFC 9369 section 5).
+        """
+        for ticket_version, connection_version in [
+            (QuicProtocolVersion.VERSION_1, QuicProtocolVersion.VERSION_2),
+            (QuicProtocolVersion.VERSION_2, QuicProtocolVersion.VERSION_1),
+        ]:
+            with self.subTest(ticket_version=ticket_version):
+                client_ticket, ticket_store = self.create_session_ticket(
+                    client_options={"supported_versions": [ticket_version]}
+                )
+                with client_and_server(
+                    client_options={
+                        "session_ticket": client_ticket,
+                        "supported_versions": [connection_version],
+                    },
+                    handshake=False,
+                    server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+                ) as (client, server):
+                    with self.assertLogs("quic", level="INFO") as cm:
+                        client.connect(SERVER_ADDR, now=time.time())
+                    self.assertIn(
+                        "Ignoring the session ticket as it was issued for protocol "
+                        f"version {pretty_protocol_version(ticket_version)}",
+                        "\n".join(cm.output),
+                    )
+                    roundtrip_until_done(client, server)
+
+                    # The server sends its certificate, so the session is not
+                    # resumed, and the ticket was never offered.
+                    self.check_handshake(client=client, server=server)
+                    self.assertEqual(client._version, connection_version)
+                    self.assertEqual(len(ticket_store.tickets), 1)
+
+    def test_connect_with_session_ticket_without_early_data(self) -> None:
+        """
+        A session ticket which does not allow 0-RTT data resumes the session.
+        """
+        client_ticket, ticket_store = self.create_session_ticket()
+        for label, ticket in ticket_store.tickets.items():
+            ticket_store.tickets[label] = replace(ticket, max_early_data_size=None)
+
+        with client_and_server(
+            client_options={
+                "session_ticket": replace(client_ticket, max_early_data_size=None)
+            },
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+        ) as (client, server):
+            self.assertTrue(client.tls.session_resumed)
+            self.assertFalse(client.tls.early_data_accepted)
+
+    def test_connect_with_session_ticket_without_version_information(self) -> None:
+        """
+        A client treats a session ticket whose server sent no version information
+        as one from a QUIC version 1 connection, as servers which support version
+        2 must send it (RFC 9369 section 4).
+        """
+        for connection_version, session_resumed in [
+            (QuicProtocolVersion.VERSION_1, True),
+            (QuicProtocolVersion.VERSION_2, False),
+        ]:
+            with self.subTest(connection_version=connection_version):
+                client_ticket, ticket_store = self.create_session_ticket()
+                parameters = replace(
+                    get_transport_parameters(client_ticket.other_extensions),
+                    version_information=None,
+                )
+                with client_and_server(
+                    client_options={
+                        "session_ticket": replace(
+                            client_ticket,
+                            other_extensions=transport_parameters_extensions(
+                                parameters
+                            ),
+                        ),
+                        "supported_versions": [connection_version],
+                    },
+                    server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+                ) as (client, server):
+                    completed = [
+                        event
+                        for event in iter(client.next_event, None)
+                        if isinstance(event, events.HandshakeCompleted)
+                    ]
+                    self.assertEqual(len(completed), 1)
+                    self.assertEqual(completed[0].session_resumed, session_resumed)
+
+                    # The server only looks up the ticket if the client offers it.
+                    self.assertEqual(
+                        len(ticket_store.tickets), 0 if session_resumed else 1
+                    )
+
     def test_connect_with_cert_chain(self) -> None:
         with client_and_server(server_certfile=SERVER_CERTFILE_WITH_CHAIN) as (
             client,
@@ -4509,6 +4605,60 @@ class QuicConnectionTest(QuicConnectionTestCase):
             self.check_handshake(client=client, server=server)
             self.assertEqual(client._version, QuicProtocolVersion.VERSION_1)
             self.assertEqual(server._version, QuicProtocolVersion.VERSION_1)
+
+    def test_connect_with_compatible_version_negotiation_and_session_ticket(
+        self,
+    ) -> None:
+        """
+        The client originally connects using one version, with a session ticket
+        from a connection using that version and 0-RTT data, but prefers the other
+        version.
+
+        The server sets the Negotiated Version to the other version, so it rejects
+        the ticket (RFC 9369 section 5). The session is not resumed, and the 0-RTT
+        data is sent again in 1-RTT packets.
+        """
+        for original_version, negotiated_version in [
+            (QuicProtocolVersion.VERSION_1, QuicProtocolVersion.VERSION_2),
+            (QuicProtocolVersion.VERSION_2, QuicProtocolVersion.VERSION_1),
+        ]:
+            with self.subTest(original_version=original_version):
+                client_ticket, ticket_store = self.create_session_ticket(
+                    client_options={"supported_versions": [original_version]}
+                )
+                with client_and_server(
+                    client_options={
+                        "original_version": original_version,
+                        "session_ticket": client_ticket,
+                        "supported_versions": [negotiated_version, original_version],
+                    },
+                    handshake=False,
+                    server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+                ) as (client, server):
+                    client.connect(SERVER_ADDR, now=time.time())
+                    stream_id = client.get_next_available_stream_id()
+                    client.send_stream_data(stream_id, b"hello")
+                    self.assertTrue(client._cryptos[tls.Epoch.ZERO_RTT].send.is_valid())
+
+                    with self.assertLogs("quic", level="INFO") as cm:
+                        roundtrip_until_done(client, server)
+                    self.assertIn(
+                        "Ignoring the session ticket as it was issued for protocol "
+                        f"version {pretty_protocol_version(original_version)}",
+                        "\n".join(cm.output),
+                    )
+
+                    self.assertEqual(client._version, negotiated_version)
+                    self.assertEqual(server._version, negotiated_version)
+                    self.assertFalse(client.tls.session_resumed)
+                    self.assertEqual(
+                        [
+                            event.data
+                            for event in iter(server.next_event, None)
+                            if isinstance(event, events.StreamDataReceived)
+                        ],
+                        [b"hello"],
+                    )
 
     def test_connect_with_quantum_readiness(self) -> None:
         with client_and_server(client_options={"quantum_readiness_test": True}) as (

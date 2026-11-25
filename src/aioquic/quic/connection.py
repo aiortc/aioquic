@@ -1796,7 +1796,14 @@ class QuicConnection:
 
     def _fetch_session_ticket(self, label: bytes) -> tls.SessionTicket | None:
         ticket = self._session_ticket_fetcher(label)
-        if ticket is None or ticket.max_early_data_size is None:
+
+        # Reject a ticket from another QUIC version outright, falling back to a full
+        # handshake rather than only rejecting 0-RTT data (RFC 9369 section 5).
+        if ticket is None or self._is_session_ticket_from_other_version(ticket):
+            return None
+
+        # A ticket which does not allow 0-RTT data needs no further checks.
+        if ticket.max_early_data_size is None:
             return ticket
 
         # Reject 0-RTT data unless the limits and extensions the client remembers
@@ -2177,6 +2184,7 @@ class QuicConnection:
             and session_ticket is not None
             and session_ticket.is_valid
             and session_ticket.server_name == self._configuration.server_name
+            and not self._is_session_ticket_from_other_version(session_ticket)
         ):
             self.tls.session_ticket = self._configuration.session_ticket
 
@@ -2259,6 +2267,32 @@ class QuicConnection:
             tls.Epoch.ONE_RTT: QuicPacketSpace(is_application_data=True),
         }
         self._loss.spaces = list(self._spaces.values())
+
+    def _is_session_ticket_from_other_version(self, ticket: tls.SessionTicket) -> bool:
+        """
+        Return whether `ticket` was issued on a connection using another QUIC
+        version, as such a ticket must not be used (RFC 9369 section 5), and log
+        it if so.
+
+        The ticket holds the server's transport parameters. A server which does not
+        send version information does not support QUIC version 2 (RFC 9369 section
+        4), so that connection used QUIC version 1. If the parameters cannot be
+        read, the version is unknown and the ticket is not rejected.
+        """
+        try:
+            parameters = get_transport_parameters(ticket.other_extensions)
+        except (KeyError, ValueError):
+            return False
+        ticket_version: int = QuicProtocolVersion.VERSION_1
+        if parameters.version_information is not None:
+            ticket_version = parameters.version_information.chosen_version
+        if ticket_version == self._version:
+            return False
+        self._logger.info(
+            "Ignoring the session ticket as it was issued for protocol version %s",
+            pretty_protocol_version(ticket_version),
+        )
+        return True
 
     def _handle_ack_frame(
         self, context: QuicReceiveContext, frame_type: int, buf: Buffer
