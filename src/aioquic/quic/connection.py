@@ -3467,7 +3467,7 @@ class QuicConnection:
                 crypto.setup_initial(
                     cid=header.source_cid, is_client=True, version=version
                 )
-            self._loss.on_retry_received(now=now)
+            self._loss.on_first_flight_rejected(now=now)
         else:
             # Unexpected or invalid retry packet.
             if self._quic_logger is not None:
@@ -3555,6 +3555,7 @@ class QuicConnection:
                 )
                 self._close_end()
                 return
+            self._loss.on_first_flight_rejected(now=now)
             self._packet_number = 0
             self._version = chosen_version
             self._version_negotiated_incompatible = True

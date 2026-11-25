@@ -1045,6 +1045,99 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             self.assertSentPackets(client, [0, 0, 1])
             self.assertEvents(client, [])
 
+    def test_connect_with_0rtt_and_version_negotiation(self) -> None:
+        """
+        Check the client answers a Version Negotiation packet by sending its 0-RTT
+        data again in 1-RTT packets, as a session ticket from QUIC version 1 cannot
+        be used in version 2 (RFC 9368 section 2.1, RFC 9369 section 5).
+        """
+        client_ticket, ticket_store = self.create_session_ticket()
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            handshake=False,
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+            server_options={"supported_versions": [QuicProtocolVersion.VERSION_2]},
+        ) as (client, server):
+            self.watch_timers(client, server)
+
+            # Client sends INITIAL + 0-RTT data in version 1.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            stream_id = client.get_next_available_stream_id()
+            client.send_stream_data(stream_id, b"hello", end_stream=True)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 1])
+            self.assertEqual(client._loss.bytes_in_flight, 519)
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL + 0-RTT data, sends a Version Negotiation
+            # packet.
+            now = self.advance_by_tick(now)
+            version_negotiation = encode_quic_version_negotiation(
+                source_cid=client._peer_cid.cid,
+                destination_cid=client.host_cid,
+                supported_versions=[QuicProtocolVersion.VERSION_2],
+            )
+
+            # Client receives the Version Negotiation packet, sends INITIAL in
+            # version 2 without the session ticket.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(version_negotiation, SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.3)
+            self.assertSentPackets(client, [1, 0, 0])
+            self.assertEqual(client._loss.bytes_in_flight, 330)
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL, sends INITIAL + HANDSHAKE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200, 1125])
+            self.assertAlmostEqual(server.get_timer(), 0.35)
+            self.assertSentPackets(server, [1, 2, 0])
+            self.assertEvents(server, [events.ProtocolNegotiated])
+
+            # Client receives INITIAL + HANDSHAKE, sends FINISHED + 1-RTT data.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.5)
+            self.assertSentPackets(client, [0, 1, 1])
+            self.assertEvents(
+                client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
+            )
+            self.assertEqual(client._version, QuicProtocolVersion.VERSION_2)
+
+            # Server receives FINISHED + 1-RTT data, sends HANDSHAKE_DONE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [229])
+            self.assertAlmostEqual(server.get_timer(), 0.525)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(
+                server,
+                [events.HandshakeCompleted, events.StreamDataReceived]
+                + HANDSHAKE_COMPLETED_EVENTS[1:],
+            )
+
+            # Client receives HANDSHAKE_DONE, sends ACK.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(client.get_timer(), 60.3)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 1])
+            self.assertEqual(client._loss.bytes_in_flight, 0)
+            self.assertEvents(client, [])
+
     def test_connect_with_0rtt_without_loss(self) -> None:
         """
         Check the server acknowledges 0-RTT data in 1-RTT packets before the
@@ -2532,6 +2625,88 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             self.assertEqual(datagram_sizes(items), [32])
             self.assertAlmostEqual(client.get_timer(), 60.3)  # idle timeout
             self.assertSentPackets(client, [0, 0, 1])
+            self.assertEvents(client, [])
+
+    def test_connect_with_version_negotiation(self) -> None:
+        """
+        Check the client answers a Version Negotiation packet with a new first
+        flight, which replaces the previous one in bytes in flight (RFC 9368
+        section 2.1).
+        """
+        with client_and_server(
+            handshake=False,
+            server_options={"supported_versions": [QuicProtocolVersion.VERSION_2]},
+        ) as (client, server):
+            self.watch_timers(client, server)
+
+            # Client sends INITIAL in version 1.
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertEqual(client.get_timer(), 0.2)
+            self.assertSentPackets(client, [1, 0, 0])
+            self.assertEqual(client._loss.bytes_in_flight, 330)
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL, sends a Version Negotiation packet.
+            now = self.advance_by_tick(now)
+            version_negotiation = encode_quic_version_negotiation(
+                source_cid=client._peer_cid.cid,
+                destination_cid=client.host_cid,
+                supported_versions=[QuicProtocolVersion.VERSION_2],
+            )
+
+            # Client receives the Version Negotiation packet, sends INITIAL in
+            # version 2.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(version_negotiation, SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200])
+            self.assertAlmostEqual(client.get_timer(), 0.3)
+            self.assertSentPackets(client, [1, 0, 0])
+            self.assertEqual(client._loss.bytes_in_flight, 330)
+            self.assertEvents(client, [])
+
+            # Server receives INITIAL, sends INITIAL + HANDSHAKE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [1200, 1125])
+            self.assertAlmostEqual(server.get_timer(), 0.35)
+            self.assertSentPackets(server, [1, 2, 0])
+            self.assertEvents(server, [events.ProtocolNegotiated])
+
+            # Client receives INITIAL + HANDSHAKE, sends FINISHED.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            client.receive_datagram(items[1][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), CLIENT_HANDSHAKE_DATAGRAM_SIZES)
+            self.assertAlmostEqual(client.get_timer(), 0.5)
+            self.assertSentPackets(client, [0, 1, 1])
+            self.assertEvents(
+                client, [events.ProtocolNegotiated] + HANDSHAKE_COMPLETED_EVENTS
+            )
+            self.assertEqual(client._version, QuicProtocolVersion.VERSION_2)
+
+            # Server receives FINISHED, sends HANDSHAKE_DONE.
+            now = self.advance_by_tick(now)
+            server.receive_datagram(items[0][0], CLIENT_ADDR, now=now)
+            items = server.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [229])
+            self.assertAlmostEqual(server.get_timer(), 0.525)
+            self.assertSentPackets(server, [0, 0, 1])
+            self.assertEvents(server, HANDSHAKE_COMPLETED_EVENTS)
+
+            # Client receives HANDSHAKE_DONE, sends ACK.
+            now = self.advance_by_tick(now)
+            client.receive_datagram(items[0][0], SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+            self.assertEqual(datagram_sizes(items), [32])
+            self.assertAlmostEqual(client.get_timer(), 60.3)  # idle timeout
+            self.assertSentPackets(client, [0, 0, 1])
+            self.assertEqual(client._loss.bytes_in_flight, 0)
             self.assertEvents(client, [])
 
     def test_connect_without_loss(self) -> None:
