@@ -3387,6 +3387,9 @@ class QuicConnection:
         is the same as the Destination Connection ID of our Initial packet, if its
         Retry Token is empty, or if its integrity tag cannot be verified.
 
+        The packet is also discarded if its version is not the one of our Initial
+        packet (RFC 9369 section 4.1).
+
         See:
         https://datatracker.ietf.org/doc/html/rfc9000#section-17.2.5
         """
@@ -3394,6 +3397,7 @@ class QuicConnection:
             self._is_client
             and self._state == QuicConnectionState.FIRSTFLIGHT
             and not self._retry_count
+            and header.version == self._version
             and header.source_cid != self._peer_cid.cid
             and header.token
             and header.integrity_tag
@@ -3422,7 +3426,14 @@ class QuicConnection:
             self._retry_count += 1
             self._retry_source_connection_id = header.source_cid
             self._logger.info("Retrying with token (%d bytes)", len(header.token))
-            self._connect(now=now)
+
+            # Resend the same ClientHello, with Initial keys derived from the new
+            # Destination Connection ID (RFC 9000 section 17.2.5.3).
+            for version, crypto in self._cryptos_initial.items():
+                crypto.setup_initial(
+                    cid=header.source_cid, is_client=True, version=version
+                )
+            self._loss.on_retry_received(now=now)
         else:
             # Unexpected or invalid retry packet.
             if self._quic_logger is not None:
@@ -3453,6 +3464,8 @@ class QuicConnection:
             self._is_client
             and self._state == QuicConnectionState.FIRSTFLIGHT
             and not self._version_negotiated_incompatible
+            # A processed Retry counts as a processed packet (RFC 9000 section 6.2).
+            and not self._retry_count
         ):
             if self._quic_logger is not None:
                 self._quic_logger.log_event(
