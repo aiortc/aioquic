@@ -371,6 +371,24 @@ class QuicPacketRecovery:
             if self._quic_logger is not None:
                 self._log_metrics_updated()
 
+    def on_retry_received(self, *, now: float) -> None:
+        """
+        Schedule the data of all sent packets for retransmission and reset the
+        loss recovery state (RFC 9002 section 6.3).
+
+        A Retry means the packets were neither processed nor lost, so this is not
+        a congestion event. The congestion window needs no reset, as it cannot
+        change before an ACK is received.
+        """
+        for space in self.spaces:
+            self._on_packets_lost(
+                congestion_event=False,
+                now=now,
+                packets=tuple(space.sent_packets.values()),
+                space=space,
+            )
+        self._pto_count = 0
+
     def reschedule_data(self, *, now: float, speed_up_handshake: bool = False) -> None:
         """
         Schedule some data for retransmission and request a probe.
