@@ -3,6 +3,7 @@ import io
 import math
 import os
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import replace
 from typing import Any
@@ -4981,6 +4982,68 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 [True],
             )
 
+    def test_connect_with_0rtt_and_raised_max_streams(self) -> None:
+        """
+        A stream which a client opened beyond the session ticket's stream limit is
+        sent once it has 1-RTT keys, with the server's raised limits.
+        """
+        client_ticket, ticket_store = self.create_session_ticket(
+            server_options={"max_stream_data": 1024}
+        )
+
+        def raise_max_streams_bidi(server: QuicConnection) -> None:
+            server._local_max_streams_bidi.sent = 129
+            server._local_max_streams_bidi.value = 129
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+            server_options={"max_stream_data": 65536},
+            server_patch=raise_max_streams_bidi,
+            handshake=False,
+        ) as (client, server):
+            # The client opens one stream more than the session ticket allows.
+            client.connect(SERVER_ADDR, now=time.time())
+            for i in range(128):
+                client.send_stream_data(i * 4, b"x")
+            client.send_stream_data(128 * 4, bytes(4096), end_stream=True)
+            self.assertTrue(client._streams[128 * 4].is_blocked)
+            roundtrip_until_done(client, server)
+
+            received: Counter[int] = Counter()
+            for event in iter(server.next_event, None):
+                if isinstance(event, events.StreamDataReceived):
+                    received[event.stream_id] += len(event.data)
+            self.assertEqual(received[128 * 4], 4096)
+
+    def test_connect_with_0rtt_and_raised_stream_data_limits(self) -> None:
+        """
+        Streams which a client opened for 0-RTT data can send up to the server's
+        raised limits once it has 1-RTT keys (RFC 9000 section 7.4.1).
+        """
+        client_ticket, ticket_store = self.create_session_ticket(
+            server_options={"max_stream_data": 1024}
+        )
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+            server_options={"max_stream_data": 65536},
+            handshake=False,
+        ) as (client, server):
+            # The client sends more than the session ticket allows, on a
+            # bidirectional and on a unidirectional stream.
+            client.connect(SERVER_ADDR, now=time.time())
+            for stream_id in [0, 2]:
+                client.send_stream_data(stream_id, bytes(4096), end_stream=True)
+            roundtrip_until_done(client, server)
+
+            received: Counter[int] = Counter()
+            for event in iter(server.next_event, None):
+                if isinstance(event, events.StreamDataReceived):
+                    received[event.stream_id] += len(event.data)
+            self.assertEqual(received, {0: 4096, 2: 4096})
+
     def test_connect_with_0rtt_bad_max_early_data(self) -> None:
         client_ticket = None
         ticket_store = SessionTicketStore()
@@ -9514,6 +9577,77 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 StreamStateError, "Cannot stop receiving on an unknown stream"
             ):
                 client.stop_stream(0, QuicErrorCode.NO_ERROR)
+
+    def test_send_stream_data_before_connect_with_0rtt(self) -> None:
+        """
+        A stream opened before connecting with a session ticket is sent as 0-RTT
+        data, once the ticket's transport parameters allow it.
+        """
+        client_ticket, ticket_store = self.create_session_ticket()
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            handshake=False,
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+        ) as (client, server):
+            now = 0.0
+            client.send_stream_data(0, b"hello", end_stream=True)
+            client.connect(SERVER_ADDR, now=now)
+
+            # The server receives the stream with the client's first flight.
+            for data, _ in client.datagrams_to_send(now=now):
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+            self.assertEqual(
+                [
+                    event
+                    for event in iter(server.next_event, None)
+                    if isinstance(event, events.StreamDataReceived)
+                ],
+                [
+                    events.StreamDataReceived(
+                        data=b"hello", end_stream=True, stream_id=0
+                    )
+                ],
+            )
+
+    def test_send_stream_data_before_transport_parameters(self) -> None:
+        """
+        A stream opened before the peer's transport parameters arrive is sent as
+        soon as they allow it, in the server's first flight.
+
+        The asyncio server creates its protocol, which may open streams, before
+        the connection receives the client's first Initial packet.
+        """
+        with client_and_server(handshake=False) as (client, server):
+            now = 0.0
+            client.connect(SERVER_ADDR, now=now)
+            items = client.datagrams_to_send(now=now)
+
+            # The server opens a stream before the client's transport parameters
+            # arrive, and another one after.
+            server.send_stream_data(3, b"before")
+            for data, _ in items:
+                server.receive_datagram(data, CLIENT_ADDR, now=now)
+            server.send_stream_data(7, b"after")
+
+            # The client receives both streams with the server's first flight.
+            for data, _ in server.datagrams_to_send(now=now):
+                client.receive_datagram(data, SERVER_ADDR, now=now)
+            self.assertEqual(
+                [
+                    event
+                    for event in iter(client.next_event, None)
+                    if isinstance(event, events.StreamDataReceived)
+                ],
+                [
+                    events.StreamDataReceived(
+                        data=b"before", end_stream=False, stream_id=3
+                    ),
+                    events.StreamDataReceived(
+                        data=b"after", end_stream=False, stream_id=7
+                    ),
+                ],
+            )
 
     def test_send_stream_data_finished_stream(self) -> None:
         with client_and_server() as (client, server):

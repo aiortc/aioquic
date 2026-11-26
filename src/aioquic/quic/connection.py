@@ -2483,8 +2483,6 @@ class QuicConnection:
                         session_resumed=self.tls.session_resumed,
                     )
                 )
-                self._unblock_streams(is_unidirectional=False)
-                self._unblock_streams(is_unidirectional=True)
                 self._logger.info(
                     "ALPN negotiated protocol %s", self.tls.alpn_negotiated
                 )
@@ -3905,6 +3903,26 @@ class QuicConnection:
             value = getattr(quic_transport_parameters, "initial_" + param)
             if value is not None:
                 setattr(self, "_remote_" + param, value)
+
+        # Streams opened before the peer's limits were known can now be sent.
+        self._unblock_streams(is_unidirectional=False)
+        self._unblock_streams(is_unidirectional=True)
+
+        # Streams a client could already send on, under the session ticket's
+        # limits, get the server's new limits if higher (RFC 9000 section 7.4.1).
+        # Blocked streams get them from _unblock_streams().
+        if self._is_client and not from_session_ticket:
+            for stream in self._streams.values():
+                if (
+                    stream_is_client_initiated(stream.stream_id)
+                    and not stream.is_blocked
+                ):
+                    if stream_is_unidirectional(stream.stream_id):
+                        limit = self._remote_max_stream_data_uni
+                    else:
+                        limit = self._remote_max_stream_data_bidi_remote
+                    if limit > stream.max_stream_data_remote:
+                        stream.max_stream_data_remote = limit
 
     def _send_probing_frames(
         self, network_path: QuicNetworkPath, now: float
