@@ -1482,8 +1482,12 @@ class ContextTest(TestCase):
         client.handle_message(client_input, client_buf)
         self.assertEqual(client.state, State.CLIENT_POST_HANDSHAKE)
         server_input = merge_buffers(client_buf)
-        self.assertGreaterEqual(len(server_input), 1042)
-        self.assertLessEqual(len(server_input), 1043)
+        # The certificate's length varies with its random serial number. The rest
+        # of these messages has a fixed length.
+        certificate_length = len(
+            client.certificate.public_bytes(serialization.Encoding.DER)
+        )
+        self.assertEqual(len(server_input), certificate_length + 329)
         reset_buffers(client_buf)
 
         # Handle certificate, certificate verify, finished.
