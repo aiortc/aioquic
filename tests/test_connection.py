@@ -4934,6 +4934,53 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 [b"hello"],
             )
 
+    def test_connect_with_0rtt_and_raised_limits(self) -> None:
+        """
+        A client keeps the session ticket's limits for its 0-RTT packets, and only
+        uses the server's raised limits once it has 1-RTT keys (RFC 9000 section
+        7.4.1).
+        """
+        client_ticket, ticket_store = self.create_session_ticket(
+            server_options={"max_data": 65536}
+        )
+
+        with client_and_server(
+            client_options={"session_ticket": client_ticket},
+            server_kwargs={"session_ticket_fetcher": ticket_store.pop},
+            server_options={"max_data": 131072},
+            handshake=False,
+        ) as (client, server):
+            # Record the client's limit when it gets its 1-RTT receive key, after
+            # it has handled EncryptedExtensions.
+            limits: list[int] = []
+            update_traffic_key = client._update_traffic_key
+
+            def record_limit(
+                direction: tls.Direction,
+                epoch: tls.Epoch,
+                cipher_suite: tls.CipherSuite,
+                secret: bytes,
+            ) -> None:
+                if direction == tls.Direction.DECRYPT and epoch == tls.Epoch.ONE_RTT:
+                    limits.append(client._remote_max_data)
+                update_traffic_key(direction, epoch, cipher_suite, secret)
+
+            with patch.object(client, "_update_traffic_key", side_effect=record_limit):
+                client.connect(SERVER_ADDR, now=time.time())
+                client.send_stream_data(0, b"hello")
+                self.assertEqual(roundtrip(client, server), (1, 1))
+
+            self.assertEqual(limits, [65536])
+            self.assertEqual(client._remote_max_data, 131072)
+            self.assertEqual(
+                [
+                    event.early_data_accepted
+                    for event in iter(client.next_event, None)
+                    if isinstance(event, events.HandshakeCompleted)
+                ],
+                [True],
+            )
+
     def test_connect_with_0rtt_bad_max_early_data(self) -> None:
         client_ticket = None
         ticket_store = SessionTicketStore()
@@ -7758,7 +7805,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 max_idle_timeout=10000,
             )
         )
-        client._parse_transport_parameters(extensions)
+        client._apply_transport_parameters(
+            client._parse_transport_parameters(extensions)
+        )
         self.assertAlmostEqual(client._remote_max_idle_timeout, 10.0)
         self.assertAlmostEqual(client._idle_timeout(), 10.0)
 
@@ -7770,7 +7819,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 max_idle_timeout=120000,
             )
         )
-        client._parse_transport_parameters(extensions)
+        client._apply_transport_parameters(
+            client._parse_transport_parameters(extensions)
+        )
         self.assertAlmostEqual(client._remote_max_idle_timeout, 120.0)
         self.assertAlmostEqual(client._idle_timeout(), 60.0)
 
@@ -7786,7 +7837,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 max_idle_timeout=1,
             )
         )
-        client._parse_transport_parameters(extensions)
+        client._apply_transport_parameters(
+            client._parse_transport_parameters(extensions)
+        )
         self.assertAlmostEqual(client._remote_max_idle_timeout, 0.001)
         self.assertAlmostEqual(client._idle_timeout(), 0.6)
 
@@ -7798,7 +7851,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 max_idle_timeout=0,
             )
         )
-        client._parse_transport_parameters(extensions)
+        client._apply_transport_parameters(
+            client._parse_transport_parameters(extensions)
+        )
         self.assertIsNone(client._remote_max_idle_timeout)
         self.assertAlmostEqual(client._idle_timeout(), 60.0)
 
@@ -8017,19 +8072,24 @@ class QuicConnectionTest(QuicConnectionTestCase):
         client = create_standalone_client(self)
 
         # The session ticket has an idle timeout of 10s.
-        client._parse_transport_parameters(
-            transport_parameters_extensions(
-                QuicTransportParameters(max_idle_timeout=10000)
+        client._apply_transport_parameters(
+            client._parse_transport_parameters(
+                transport_parameters_extensions(
+                    QuicTransportParameters(max_idle_timeout=10000)
+                ),
+                from_session_ticket=True,
             ),
             from_session_ticket=True,
         )
         self.assertAlmostEqual(client._idle_timeout(), 10.0)
 
         # The handshake has none, so the local idle timeout of 60s applies.
-        client._parse_transport_parameters(
-            transport_parameters_extensions(
-                QuicTransportParameters(
-                    original_destination_connection_id=client.original_destination_connection_id,
+        client._apply_transport_parameters(
+            client._parse_transport_parameters(
+                transport_parameters_extensions(
+                    QuicTransportParameters(
+                        original_destination_connection_id=client.original_destination_connection_id,
+                    )
                 )
             )
         )
@@ -8053,7 +8113,9 @@ class QuicConnectionTest(QuicConnectionTestCase):
                 preferred_address=preferred_address,
             )
         )
-        client._parse_transport_parameters(extensions)
+        client._apply_transport_parameters(
+            client._parse_transport_parameters(extensions)
+        )
         self.assertEqual(client._remote_preferred_address, preferred_address)
         self.assertEqual(sequence_numbers(client._peer_cid_available), [1])
         self.assertEqual(client._peer_cid_available[0].cid, b"\x01" * 8)
@@ -8094,7 +8156,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
         extensions = transport_parameters_extensions(
             QuicTransportParameters(preferred_address=SERVER_PREFERRED_ADDRESS)
         )
-        client._parse_transport_parameters(extensions, from_session_ticket=True)
+        client._apply_transport_parameters(
+            client._parse_transport_parameters(extensions, from_session_ticket=True),
+            from_session_ticket=True,
+        )
         self.assertIsNone(client._remote_preferred_address)
         self.assertEqual(client._peer_cid_available, [])
 
@@ -8106,7 +8171,10 @@ class QuicConnectionTest(QuicConnectionTestCase):
         extensions = transport_parameters_extensions(
             QuicTransportParameters(reset_stream_at=True)
         )
-        client._parse_transport_parameters(extensions, from_session_ticket=True)
+        client._apply_transport_parameters(
+            client._parse_transport_parameters(extensions, from_session_ticket=True),
+            from_session_ticket=True,
+        )
         self.assertTrue(client._remote_reset_stream_at)
 
     def test_parse_transport_parameters_with_server_only_parameter(self) -> None:

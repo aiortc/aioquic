@@ -452,6 +452,7 @@ class QuicConnection:
         self._peer_cid_sequence_numbers: set[int] = set([0])
         self._peer_retire_prior_to = 0
         self._peer_token = configuration.token
+        self._pending_server_transport_parameters: QuicTransportParameters | None = None
         self._quic_logger: QuicLoggerTrace | None = None
         self._remote_ack_delay_exponent = 3
         self._remote_active_connection_id_limit = 2
@@ -2117,8 +2118,15 @@ class QuicConnection:
                 )
             return
 
-        # Parse the remote transport parameters.
-        self._parse_transport_parameters(extensions)
+        # Parse the remote transport parameters. A server applies the client's at
+        # once. A client applies the server's once it installs 1-RTT keys, as its
+        # 0-RTT packets must keep using the remembered ones (RFC 9000 section
+        # 7.4.1).
+        quic_transport_parameters = self._parse_transport_parameters(extensions)
+        if self._is_client:
+            self._pending_server_transport_parameters = quic_transport_parameters
+        else:
+            self._apply_transport_parameters(quic_transport_parameters)
         self._remote_transport_parameters = transport_parameters
 
         # For servers, determine the Negotiated Version.
@@ -2194,8 +2202,11 @@ class QuicConnection:
                 usable = session_ticket.max_early_data_size == MAX_EARLY_DATA
                 if usable:
                     try:
-                        self._parse_transport_parameters(
+                        quic_transport_parameters = self._parse_transport_parameters(
                             session_ticket.other_extensions, from_session_ticket=True
+                        )
+                        self._apply_transport_parameters(
+                            quic_transport_parameters, from_session_ticket=True
                         )
                     except QuicConnectionError:
                         usable = False
@@ -3625,15 +3636,15 @@ class QuicConnection:
 
     def _parse_transport_parameters(
         self, extensions: Iterable[tls.Extension], from_session_ticket: bool = False
-    ) -> None:
+    ) -> QuicTransportParameters:
         """
-        Parse and apply remote transport parameters from TLS extensions.
+        Decode and validate remote transport parameters from TLS extensions,
+        without storing them.
 
         `from_session_ticket` is `True` when restoring saved transport parameters,
         and `False` when handling received transport parameters.
 
-        All parameters are validated before any is stored, so none is stored
-        when QuicConnectionError is raised.
+        :raises QuicConnectionError: If they are missing, malformed or invalid.
         """
 
         try:
@@ -3801,7 +3812,21 @@ class QuicConnection:
                         ),
                     )
 
-        # Store remote parameters.
+        return quic_transport_parameters
+
+    def _apply_transport_parameters(
+        self,
+        quic_transport_parameters: QuicTransportParameters,
+        *,
+        from_session_ticket: bool = False,
+    ) -> None:
+        """
+        Store remote transport parameters, which _parse_transport_parameters()
+        has validated.
+
+        `from_session_ticket` is `True` when restoring saved transport parameters,
+        and `False` when handling received transport parameters.
+        """
         if not from_session_ticket:
             if quic_transport_parameters.ack_delay_exponent is not None:
                 self._remote_ack_delay_exponent = (
@@ -4088,6 +4113,18 @@ class QuicConnection:
                 and self._cryptos[tls.Epoch.ZERO_RTT].send.is_valid()
             ):
                 self._cryptos[tls.Epoch.ZERO_RTT].send.teardown()
+
+            # The client's 0-RTT packets are over, so the server's transport
+            # parameters apply (RFC 9000 section 7.4.1).
+            if (
+                self._is_client
+                and epoch == tls.Epoch.ONE_RTT
+                and self._pending_server_transport_parameters is not None
+            ):
+                self._apply_transport_parameters(
+                    self._pending_server_transport_parameters
+                )
+                self._pending_server_transport_parameters = None
         else:
             crypto.recv.setup(
                 cipher_suite=cipher_suite, secret=secret, version=self._version
