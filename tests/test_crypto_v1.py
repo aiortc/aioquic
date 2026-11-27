@@ -245,6 +245,16 @@ class CryptoTest(TestCase):
         self.assertEqual(plain_payload, LONG_SERVER_PLAIN_PAYLOAD)
         self.assertEqual(packet_number, LONG_SERVER_PACKET_NUMBER)
 
+    def test_decrypt_long_server_corrupted(self) -> None:
+        pair = self.create_crypto(is_client=True)
+
+        # The last byte is part of the authentication tag.
+        packet = bytearray(LONG_SERVER_ENCRYPTED_PACKET)
+        packet[-1] ^= 1
+
+        with self.assertRaisesMessage(CryptoError, "Payload decryption failed"):
+            pair.decrypt_packet(bytes(packet), 18, 0)
+
     def test_decrypt_no_key(self) -> None:
         pair = CryptoPair()
         with self.assertRaises(CryptoError):

@@ -44,7 +44,7 @@ class AEAD:
                 associated_data,
             )
         except InvalidTag as exc:
-            raise CryptoError(str(exc))
+            raise CryptoError("Payload decryption failed") from exc
 
     def encrypt(self, data: bytes, associated_data: bytes, packet_number: int) -> bytes:
         return self._aead.encrypt(
