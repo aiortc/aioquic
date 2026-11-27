@@ -475,6 +475,29 @@ class QuicPacketRecoveryTest(TestCase):
         self.assertEqual(self.recovery.bytes_in_flight, 1280)
         self.assertEqual(self.recovery.congestion_window, congestion_window)
 
+    def test_on_loss_detection_timeout_with_one_rtt_crypto(self) -> None:
+        self.recovery.handshake_confirmed = True
+        deliveries = send_watched_packets(self.recovery, self.ONE_RTT_SPACE, {0: 1.0})
+        self.recovery.on_packet_sent(
+            packet=QuicSentPacket(
+                epoch=tls.Epoch.ONE_RTT,
+                in_flight=True,
+                is_ack_eliciting=True,
+                is_crypto_packet=True,
+                packet_number=1,
+                packet_type=QuicPacketType.ONE_RTT,
+                sent_bytes=1280,
+                sent_time=1.1,
+            ),
+            space=self.ONE_RTT_SPACE,
+        )
+
+        # CRYPTO data in 1-RTT packets takes no precedence, the oldest packet's
+        # data is retransmitted.
+        self.recovery.on_loss_detection_timeout(now=2.0)
+        self.assertEqual(deliveries, [(QuicDeliveryState.LOST, 0)])
+        self.assertEqual(list(self.ONE_RTT_SPACE.sent_packets), [1])
+
     def test_on_packet_lost_crypto(self) -> None:
         packet = QuicSentPacket(
             epoch=tls.Epoch.INITIAL,
