@@ -395,20 +395,23 @@ class QuicPacketRecovery:
         """
         Schedule some data for retransmission and request a probe.
 
-        Outstanding CRYPTO data is retransmitted if there is any. Otherwise, so
-        that a probe carries data rather than a bare PING (RFC 9002 section
-        6.2.4), the oldest ack-eliciting packet is retransmitted, unless
-        `speed_up_handshake` is set, as speeding up handshake completion only
-        involves CRYPTO data (RFC 9002 section 6.2.3).
+        Outstanding handshake CRYPTO data, in INITIAL and HANDSHAKE packets, is
+        retransmitted if there is any. Otherwise, so that a probe carries data
+        rather than a bare PING (RFC 9002 section 6.2.4), the oldest ack-eliciting
+        packet is retransmitted, unless `speed_up_handshake` is set, as speeding
+        up handshake completion only involves CRYPTO data (RFC 9002 section
+        6.2.3).
 
         The packets are declared lost, although RFC 9002 section 6.2 says a PTO
         must not mark packets as lost, because delivery handlers expect a packet
         to be either acknowledged or lost, never both. Retransmitting early does
         not imply a loss though, so this is not a congestion event.
         """
-        # Retransmit any outstanding CRYPTO data.
+        # Retransmit any outstanding handshake CRYPTO data.
         crypto_scheduled = False
         for space in self.spaces:
+            if space.is_application_data:
+                continue
             packets = tuple(
                 filter(lambda i: i.is_crypto_packet, space.sent_packets.values())
             )
