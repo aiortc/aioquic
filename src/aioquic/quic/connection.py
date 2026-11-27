@@ -265,6 +265,12 @@ class QuicConnectionId:
     cid: bytes
     sequence_number: int
     stateless_reset_token: bytes = b""
+    # Whether this connection ID was ever given to the peer (RFC 9000 section
+    # 5.1.1). It is never cleared, so ConnectionIdIssued is only reported once.
+    was_issued: bool = False
+    # Whether a NEW_CONNECTION_ID frame for this connection ID is in flight or
+    # acknowledged. It is cleared when that frame is lost, so the frame is sent
+    # again.
     was_sent: bool = False
 
 
@@ -411,6 +417,7 @@ class QuicConnection:
                 cid=os.urandom(configuration.connection_id_length),
                 sequence_number=0,
                 stateless_reset_token=os.urandom(16) if not self._is_client else None,
+                was_issued=True,
                 was_sent=True,
             )
         ]
@@ -4619,7 +4626,11 @@ class QuicConnection:
         buf.push_bytes(connection_id.stateless_reset_token)
 
         connection_id.was_sent = True
-        self._events.append(events.ConnectionIdIssued(connection_id=connection_id.cid))
+        if not connection_id.was_issued:
+            connection_id.was_issued = True
+            self._events.append(
+                events.ConnectionIdIssued(connection_id=connection_id.cid)
+            )
 
         # log frame
         if self._quic_logger is not None:

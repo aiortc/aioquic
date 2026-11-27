@@ -2207,8 +2207,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             self.assertEqual(datagram_sizes(items), [225])
             self.assertAlmostEqual(server.get_timer(), 0.975)
             self.assertSentPackets(server, [0, 0, 1])
-            # FIXME: the server re-emits the ConnectionIdIssued events.
-            self.assertEvents(server, HANDSHAKE_COMPLETED_EVENTS[1:])
+            self.assertEvents(server, [])
             self.assertEqual(server._loss.congestion_window, congestion_window)
 
             # Client receives HANDSHAKE_DONE, confirms the handshake and sends ACK.
@@ -2575,8 +2574,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             self.assertEqual(datagram_sizes(items), [318])
             self.assertAlmostEqual(server.get_timer(), 0.975)
             self.assertSentPackets(server, [0, 0, 2])
-            # FIXME: the server re-emits the ConnectionIdIssued events.
-            self.assertEvents(server, HANDSHAKE_COMPLETED_EVENTS[1:])
+            self.assertEvents(server, [])
 
             # Client receives HANDSHAKE_DONE and NewSessionTicket, confirms the
             # handshake and sends ACK, which is lost.
@@ -2591,8 +2589,7 @@ class QuicConnectionTimelineTest(QuicConnectionTestCase):
             now = self.advance_to_timer(now, client)
             client.handle_timer(now=now)
             self.assertEqual(datagram_sizes(client.datagrams_to_send(now=now)), [224])
-            # FIXME: the client re-emits the ConnectionIdIssued events.
-            self.assertEvents(client, HANDSHAKE_COMPLETED_EVENTS[1:])
+            self.assertEvents(client, [])
 
             # Server's PTO fires, it retransmits the response, which is now the
             # oldest packet in flight, rather than NewSessionTicket again.
